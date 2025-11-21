@@ -1,0 +1,90 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isSystemAdmin() {
+      return isAuthenticated() &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.globalRole == 'SYSTEM_ADMIN';
+    }
+
+    function isOrgMember(orgId) {
+      return isAuthenticated() && (
+        isSystemAdmin() ||
+        firestore.exists(/databases/(default)/documents/organizationMembers/$(orgId)_$(request.auth.uid))
+      );
+    }
+
+    function isProjectMember(orgId, projectId) {
+      return isAuthenticated() && (
+        isSystemAdmin() ||
+        isOrgMember(orgId) ||
+        firestore.exists(/databases/(default)/documents/projectMembers/$(projectId)_$(request.auth.uid))
+      );
+    }
+
+    // File size limits
+    function isValidSize() {
+      return request.resource.size < 10 * 1024 * 1024; // 10MB max
+    }
+
+    function isValidImageSize() {
+      return request.resource.size < 5 * 1024 * 1024; // 5MB max for images
+    }
+
+    function isImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    function isDocument() {
+      return request.resource.contentType.matches('(application/pdf|text/.*|application/msword|application/vnd.openxmlformats-officedocument.*)');
+    }
+
+    // Organization files
+    match /organizations/{orgId}/{allPaths=**} {
+      allow read: if isOrgMember(orgId);
+      allow write: if isOrgMember(orgId) && isValidSize();
+      allow delete: if isOrgMember(orgId);
+    }
+
+    // Project files
+    match /projects/{orgId}/{projectId}/{allPaths=**} {
+      allow read: if isProjectMember(orgId, projectId);
+      allow write: if isProjectMember(orgId, projectId) && isValidSize();
+      allow delete: if isProjectMember(orgId, projectId);
+    }
+
+    // User avatars
+    match /avatars/{userId} {
+      allow read: if true; // Public read
+      allow write: if isAuthenticated() &&
+                     request.auth.uid == userId &&
+                     isImage() &&
+                     isValidImageSize();
+      allow delete: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Organization logos
+    match /logos/{orgId} {
+      allow read: if true; // Public read
+      allow write: if isOrgMember(orgId) && isImage() && isValidImageSize();
+      allow delete: if isOrgMember(orgId);
+    }
+
+    // Generated content exports
+    match /exports/{orgId}/{projectId}/{exportId} {
+      allow read: if isProjectMember(orgId, projectId);
+      allow write: if isProjectMember(orgId, projectId) && isDocument();
+      allow delete: if isProjectMember(orgId, projectId);
+    }
+
+    // Default deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

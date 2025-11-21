@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "Bash(npm run dev:*)",
+      "Bash(timeout:*)",
+      "Bash(npm install)",
+      "Bash(ping:*)",
+      "Bash(firebase login)",
+      "Bash(firebase login:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
