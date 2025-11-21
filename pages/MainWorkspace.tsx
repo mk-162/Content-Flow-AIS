@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   FolderTree,
   FileText,
@@ -7,6 +7,8 @@ import {
   ChevronRight,
   Folder,
   Building2,
+  Settings,
+  Terminal, // Added Terminal icon import
 } from 'lucide-react';
 import { CategoryWorkspace } from '../components/CategoryWorkspace';
 import { PostsWorkspace } from '../components/PostsWorkspace';
@@ -37,6 +39,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { generateCategoryTitles, generatePostOutline, GeneratedTitleData } from '../services/geminiService';
+import { ProjectSettings } from '../components/ProjectSettings'; // Added ProjectSettings import
 
 interface ExtendedGenerationTask extends GenerationTask {
   requestedCount?: number;
@@ -45,11 +48,14 @@ interface ExtendedGenerationTask extends GenerationTask {
 
 export const MainWorkspace: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   const { currentOrg } = useOrganization();
   const { currentProject } = useProject();
 
-  const [currentScreen, setCurrentScreen] = useState<Screen>(Screen.CATEGORIES);
+  const [currentScreen, setCurrentScreen] = useState<Screen>(
+    (location.state as any)?.initialScreen || Screen.CATEGORIES
+  );
   const [categories, setCategories] = useState<Category[]>([]);
   const [posts, setPosts] = useState<Post[]>([]);
   const [tasks, setTasks] = useState<ExtendedGenerationTask[]>([]);
@@ -193,7 +199,9 @@ export const MainWorkspace: React.FC = () => {
               category.name,
               descriptionContext,
               count,
-              currentOrg.id
+              currentOrg.id,
+              currentProject.id,
+              user.id
             );
 
             console.log(`[Queue] Generated ${generatedData.length} titles, saving to Firestore...`);
@@ -233,7 +241,11 @@ export const MainWorkspace: React.FC = () => {
               nextTask.categoryName,
               post.teaser,
               post.tags,
-              currentOrg.id
+              currentOrg.id,
+              currentProject.id,
+              user.id,
+              post.contentType,
+              post.tone
             );
             await updateDoc(taskRef, { progress: 80 });
 
@@ -491,122 +503,146 @@ export const MainWorkspace: React.FC = () => {
   const reviewCount = posts.filter((p) => p.status === PostStatus.NEEDS_REVIEW).length;
 
   return (
-    <div className="flex flex-col h-screen w-full bg-[#020617] text-slate-200 font-sans selection:bg-cyan-500 selection:text-black">
-      {/* Top Navigation */}
-      <TopNav />
-
-      <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        <aside
-          className={`
-            ${isSidebarCollapsed ? 'w-[80px]' : 'w-[260px]'}
-            bg-[#020617] border-r border-slate-800 flex flex-col justify-between shrink-0 z-20 transition-all duration-300 ease-in-out
+    <div className="flex h-screen bg-[#0f172a] text-slate-200 font-sans selection:bg-cyan-500/30">
+      {/* SIDEBAR */}
+      <aside
+        className={`
+            ${isSidebarCollapsed ? 'w-16' : 'w-64'}
+            bg-slate-950 border-r border-slate-800 flex flex-col justify-between shrink-0 z-50 transition-all duration-300 ease-in-out
           `}
-        >
-          <div className="flex flex-col py-6">
+      >
+        <div className="flex flex-col py-6">
+          <div
+            className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'justify-start px-8'
+              } mb-10 transition-all`}
+          >
+            {currentProject && (
+              <>
+                <div className="w-10 h-10 bg-cyan-500/20 flex items-center justify-center shrink-0">
+                  <Folder className="text-cyan-400 w-6 h-6" />
+                </div>
+                {!isSidebarCollapsed && (
+                  <span className="ml-4 font-bold text-white text-lg tracking-tight whitespace-nowrap overflow-hidden">
+                    {currentProject.name}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+
+          <nav className="w-full">
+            <NavButton
+              active={currentScreen === Screen.CATEGORIES}
+              onClick={() => setCurrentScreen(Screen.CATEGORIES)}
+              icon={<FolderTree />}
+              label="Categories"
+              collapsed={isSidebarCollapsed}
+            />
+            <NavButton
+              active={currentScreen === Screen.POSTS}
+              onClick={() => setCurrentScreen(Screen.POSTS)}
+              icon={<FileText />}
+              label="Posts"
+              badge={
+                activeTaskCount > 0
+                  ? activeTaskCount
+                  : reviewCount > 0
+                    ? reviewCount
+                    : undefined
+              }
+              badgeColor={activeTaskCount > 0 ? 'bg-cyan-500' : 'bg-emerald-500'}
+              collapsed={isSidebarCollapsed}
+            />
+            <NavButton
+              onClick={() => setCurrentScreen(Screen.SETTINGS)}
+              icon={<Settings />}
+              label="Project Settings"
+              collapsed={isSidebarCollapsed}
+            />
+            <NavButton
+              active={false} // Always navigates away
+              onClick={() => navigate('/settings/organization')}
+              icon={<Building2 />}
+              label="Org Settings"
+              collapsed={isSidebarCollapsed}
+            />
+            <NavButton
+              active={false} // Always navigates away
+              onClick={() => navigate('/admin/prompts')}
+              icon={<Terminal />} // Using Terminal icon for Admin
+              label="Admin Prompts"
+              collapsed={isSidebarCollapsed}
+            />
+          </nav>
+        </div>
+
+        <div className="flex flex-col">
+          {/* Collapse Toggle */}
+          <button
+            onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+            className="h-10 flex items-center justify-center text-slate-500 hover:text-white hover:bg-slate-800 transition-colors"
+            title={isSidebarCollapsed ? 'Expand' : 'Collapse'}
+          >
+            {isSidebarCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
+          </button>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 flex flex-col h-full overflow-hidden bg-[#0f172a] relative">
+        {/* Notifications */}
+        <div className="absolute top-0 right-0 z-50 p-6 flex flex-col items-end gap-2 pointer-events-none">
+          {notifications.map((n) => (
             <div
-              className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'justify-start px-8'
-                } mb-10 transition-all`}
-            >
-              {currentProject && (
-                <>
-                  <div className="w-10 h-10 bg-cyan-500/20 flex items-center justify-center shrink-0">
-                    <Folder className="text-cyan-400 w-6 h-6" />
-                  </div>
-                  {!isSidebarCollapsed && (
-                    <span className="ml-4 font-bold text-white text-lg tracking-tight whitespace-nowrap overflow-hidden">
-                      {currentProject.name}
-                    </span>
-                  )}
-                </>
-              )}
-            </div>
-
-            <nav className="w-full">
-              <NavButton
-                active={currentScreen === Screen.CATEGORIES}
-                onClick={() => setCurrentScreen(Screen.CATEGORIES)}
-                icon={<FolderTree />}
-                label="Categories"
-                collapsed={isSidebarCollapsed}
-              />
-              <NavButton
-                active={currentScreen === Screen.POSTS}
-                onClick={() => setCurrentScreen(Screen.POSTS)}
-                icon={<FileText />}
-                label="Posts"
-                badge={
-                  activeTaskCount > 0
-                    ? activeTaskCount
-                    : reviewCount > 0
-                      ? reviewCount
-                      : undefined
+              key={n.id}
+              className={`
+                    pointer-events-auto flex items-center p-4 border-l-4 shadow-2xl min-w-[300px] animate-in slide-in-from-right-10
+                    ${n.type === 'success'
+                  ? 'bg-[#020617] border-emerald-500 text-emerald-500'
+                  : 'bg-[#020617] border-cyan-500 text-cyan-500'
                 }
-                badgeColor={activeTaskCount > 0 ? 'bg-cyan-500' : 'bg-emerald-500'}
-                collapsed={isSidebarCollapsed}
-              />
-            </nav>
-          </div>
-
-          <div className="flex flex-col">
-            {/* Collapse Toggle */}
-            <button
-              onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-              className="h-10 flex items-center justify-center text-slate-500 hover:text-white hover:bg-slate-800 transition-colors"
-              title={isSidebarCollapsed ? 'Expand' : 'Collapse'}
-            >
-              {isSidebarCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
-            </button>
-          </div>
-        </aside>
-
-        {/* Main Content */}
-        <main className="flex-1 flex flex-col h-full overflow-hidden bg-[#0f172a] relative">
-          {/* Notifications */}
-          <div className="absolute top-0 right-0 z-50 p-6 flex flex-col items-end gap-2 pointer-events-none">
-            {notifications.map((n) => (
-              <div
-                key={n.id}
-                className={`
-                  pointer-events-auto flex items-center p-4 border-l-4 shadow-2xl min-w-[300px] animate-in slide-in-from-right-10
-                  ${n.type === 'success'
-                    ? 'bg-[#020617] border-emerald-500 text-emerald-500'
-                    : 'bg-[#020617] border-cyan-500 text-cyan-500'
-                  }
                 `}
-              >
-                <span className="font-mono font-bold text-sm">{n.msg}</span>
-              </div>
-            ))}
-          </div>
+            >
+              <span className="font-mono font-bold text-sm">{n.msg}</span>
+            </div>
+          ))}
+        </div>
 
-          {currentScreen === Screen.CATEGORIES && (
-            <CategoryWorkspace
-              categories={categories}
-              posts={posts}
-              tasks={tasks}
-              onAddCategory={addCategory}
-              onUpdateCategory={updateCategory}
-              onQueueTitles={queueTitleGeneration}
-              onQueueContent={queueContentGeneration}
-              onUpdatePost={updatePostFields}
-              onDeletePost={deletePost}
-            />
-          )}
+        {currentScreen === Screen.CATEGORIES && (
+          <CategoryWorkspace
+            categories={categories}
+            posts={posts}
+            tasks={tasks}
+            onAddCategory={addCategory}
+            onUpdateCategory={updateCategory}
+            onQueueTitles={queueTitleGeneration}
+            onQueueContent={queueContentGeneration}
+            onUpdatePost={updatePostFields}
+            onDeletePost={deletePost}
+          />
+        )}
 
-          {currentScreen === Screen.POSTS && (
-            <PostsWorkspace
-              posts={posts}
-              categories={categories}
-              tasks={tasks}
-              onUpdateStatus={updatePostStatus}
-              onUpdatePost={updatePostFields}
-              onDeletePost={deletePost}
-              onQueueContent={queueContentGeneration}
-            />
-          )}
-        </main>
-      </div>
+        {currentScreen === Screen.POSTS && (
+          <PostsWorkspace
+            posts={posts}
+            categories={categories}
+            tasks={tasks}
+            onUpdateStatus={updatePostStatus}
+            onUpdatePost={updatePostFields}
+            onDeletePost={deletePost}
+            onQueueContent={queueContentGeneration}
+          />
+        )}
+
+        {currentScreen === Screen.SETTINGS && currentProject && (
+          <ProjectSettings
+            project={currentProject}
+            onUpdate={() => {
+              notify('Project settings updated', 'success');
+            }}
+          />
+        )}
+      </main>
     </div>
   );
 };

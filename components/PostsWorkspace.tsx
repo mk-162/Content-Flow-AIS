@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Post, Category, PostStatus, GenerationTask, TaskStatus } from '../types';
+import { Post, Category, PostStatus, GenerationTask, TaskStatus, ContentType, Tone } from '../types';
 import {
     Search, Filter, User, CheckCircle, XCircle, Edit3, UploadCloud, Trash2,
     Loader2, ArrowRight, RefreshCw, Clock, Archive, X, GripVertical,
@@ -26,7 +26,7 @@ const STATUS_FILTERS = [
     { label: 'All', value: 'ALL' },
     { label: 'In Queue', value: PostStatus.GENERATING },
     { label: 'Review', value: PostStatus.NEEDS_REVIEW },
-    { label: 'Published', value: PostStatus.PUBLISHED },
+    { label: 'Approved', value: PostStatus.APPROVED },
 ];
 
 export const PostsWorkspace: React.FC<Props> = ({
@@ -78,7 +78,7 @@ export const PostsWorkspace: React.FC<Props> = ({
             const score = (s: PostStatus) => {
                 if (s === PostStatus.NEEDS_REVIEW) return 3;
                 if (s === PostStatus.GENERATING) return 2;
-                if (s === PostStatus.PUBLISHED) return 1;
+                if (s === PostStatus.APPROVED) return 1;
                 return 0;
             };
             return score(b.status) - score(a.status);
@@ -94,10 +94,54 @@ export const PostsWorkspace: React.FC<Props> = ({
         }
     }, [filteredPosts, selectedPostId]);
 
+    // Calculate Recommended Publish Date
+    const recommendedPublishDate = useMemo(() => {
+        if (!selectedPost) return new Date();
+
+        // Default velocity to 10 if not set
+        const velocity = 10; // In a real app, this would come from project.settings.publishVelocity
+
+        // Get all currently published posts
+        const publishedPosts = posts.filter(p => p.status === PostStatus.APPROVED && p.approvedAt);
+
+        // Group by date
+        const postsByDate: Record<string, number> = {};
+        publishedPosts.forEach(p => {
+            const dateStr = p.approvedAt!.toDate().toLocaleDateString();
+            postsByDate[dateStr] = (postsByDate[dateStr] || 0) + 1;
+        });
+
+        // Find next available slot starting from today
+        let checkDate = new Date();
+        checkDate.setHours(0, 0, 0, 0);
+
+        while (true) {
+            const dateStr = checkDate.toLocaleDateString();
+            const count = postsByDate[dateStr] || 0;
+
+            if (count < velocity) {
+                return checkDate;
+            }
+
+            // Move to next day
+            checkDate.setDate(checkDate.getDate() + 1);
+        }
+    }, [posts, selectedPost]);
+
     const handleApprove = (postId: string) => {
         setApprovingPostId(postId);
         setTimeout(() => {
-            onUpdateStatus(postId, PostStatus.PUBLISHED);
+            // Use the calculated recommended date
+            const publishDate = recommendedPublishDate;
+            // If the date is today, use current time, otherwise use start of day
+            const isToday = publishDate.toDateString() === new Date().toDateString();
+            const finalDate = isToday ? new Date() : publishDate;
+
+            onUpdatePost(postId, {
+                status: PostStatus.APPROVED,
+                approvedAt: Timestamp.fromDate(finalDate)
+            });
+
             setApprovingPostId(null);
 
             // Auto-advance
@@ -108,8 +152,15 @@ export const PostsWorkspace: React.FC<Props> = ({
     };
 
     const getCategoryBreadcrumb = (catId: string) => {
-        const cat = categories.find(c => c.id === catId);
-        return cat ? cat.name : 'Uncategorized';
+        const trail: string[] = [];
+        let current = categories.find(c => c.id === catId);
+
+        while (current) {
+            trail.unshift(current.name);
+            current = current.parentId ? categories.find(c => c.id === current!.parentId) : undefined;
+        }
+
+        return trail.length > 0 ? trail.join(' / ') : 'Uncategorized';
     };
 
     return (
@@ -171,7 +222,7 @@ export const PostsWorkspace: React.FC<Props> = ({
                                     <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider truncate max-w-[120px]">
                                         {getCategoryBreadcrumb(post.categoryId)}
                                     </span>
-                                    <span className={`text-[10px] font-bold uppercase ${post.status === PostStatus.PUBLISHED ? 'text-emerald-500' :
+                                    <span className={`text-[10px] font-bold uppercase ${post.status === PostStatus.APPROVED ? 'text-emerald-500' :
                                         post.status === PostStatus.REJECTED ? 'text-red-500' :
                                             post.status === PostStatus.GENERATING ? 'text-cyan-500' : 'text-amber-500'
                                         }`}>
@@ -220,10 +271,7 @@ export const PostsWorkspace: React.FC<Props> = ({
                                 >
                                     {/* Internal Header */}
                                     <div className="p-8 pb-4 relative">
-                                        <div className="flex justify-between items-start">
-                                            <div className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-4">
-                                                {getCategoryBreadcrumb(selectedPost.categoryId)}
-                                            </div>
+                                        <div className="flex justify-end items-start mb-4">
                                             <button
                                                 onClick={() => setEditMode(!editMode)}
                                                 className={`p-2 rounded-lg transition-colors ${editMode ? 'bg-cyan-500/10 text-cyan-400' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}
@@ -232,10 +280,13 @@ export const PostsWorkspace: React.FC<Props> = ({
                                                 {editMode ? <CheckCircle size={20} /> : <Edit3 size={20} />}
                                             </button>
                                         </div>
-                                        <h1 className="text-4xl font-bold text-slate-50 font-serif leading-tight mb-6">
+                                        <h1 className="text-2xl font-bold text-slate-200 leading-snug mb-2">
                                             {selectedPost.title}
                                         </h1>
-                                        <div className="flex items-center gap-3 border-b border-slate-800 pb-8">
+                                        <div className="text-xs text-slate-500 mb-4">
+                                            {getCategoryBreadcrumb(selectedPost.categoryId)}
+                                        </div>
+                                        <div className="flex items-center gap-3 border-b border-slate-800 pb-6">
                                             <div className="w-10 h-10 bg-indigo-500/20 flex items-center justify-center text-indigo-300 font-bold">
                                                 {(selectedPost.editor || 'SJ').substring(0, 2).toUpperCase()}
                                             </div>
@@ -308,7 +359,7 @@ export const PostsWorkspace: React.FC<Props> = ({
                         <div className="flex items-center justify-between">
                             <span className={`
                                 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider
-                                ${selectedPost.status === PostStatus.PUBLISHED ? 'bg-emerald-500/10 text-emerald-500' :
+                                ${selectedPost.status === PostStatus.APPROVED ? 'bg-emerald-500/10 text-emerald-500' :
                                     selectedPost.status === PostStatus.NEEDS_REVIEW ? 'bg-amber-500/10 text-amber-500' :
                                         'bg-slate-800 text-slate-400'}
                             `}>
@@ -330,7 +381,7 @@ export const PostsWorkspace: React.FC<Props> = ({
                             className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50"
                         >
                             {approvingPostId === selectedPost.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
-                            Approve & Publish
+                            Approve
                         </button>
                     </div>
                 )}
@@ -372,13 +423,16 @@ export const PostsWorkspace: React.FC<Props> = ({
                                 </div>
 
                                 <div className="space-y-1">
-                                    <label className="text-xs text-slate-400 font-medium">Submitted Date</label>
+                                    <label className="text-xs text-slate-400 font-medium flex justify-between">
+                                        <span>Recommended Publish Date</span>
+                                        <span className="text-[10px] text-slate-600">Velocity: 10/day</span>
+                                    </label>
                                     <div className="relative">
                                         <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
                                         <input
                                             readOnly
-                                            value={selectedPost.submittedAt ? selectedPost.submittedAt.toDate().toLocaleDateString() : new Date().toLocaleDateString()}
-                                            className="w-full bg-slate-950 border border-slate-700 py-2 pl-9 pr-3 text-sm text-slate-500 cursor-not-allowed"
+                                            value={recommendedPublishDate.toLocaleDateString()}
+                                            className="w-full bg-slate-950 border border-slate-700 py-2 pl-9 pr-3 text-sm text-emerald-500 font-bold cursor-not-allowed"
                                         />
                                     </div>
                                 </div>
@@ -399,6 +453,38 @@ export const PostsWorkspace: React.FC<Props> = ({
                                     </div>
                                 </div>
 
+                                <div className="space-y-1">
+                                    <label className="text-xs text-slate-400 font-medium">Content Type</label>
+                                    <div className="relative">
+                                        <select
+                                            value={selectedPost.contentType || ContentType.ARTICLE}
+                                            onChange={(e) => onUpdatePost(selectedPost.id, { contentType: e.target.value as ContentType })}
+                                            className="w-full bg-slate-950 border border-slate-700 py-2 pl-3 pr-8 text-sm text-slate-200 focus:border-indigo-500 outline-none appearance-none"
+                                        >
+                                            {Object.values(ContentType).map(type => (
+                                                <option key={type} value={type}>{type}</option>
+                                            ))}
+                                        </select>
+                                        <ChevronDownIcon className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" size={14} />
+                                    </div>
+                                </div>
+
+                                <div className="space-y-1">
+                                    <label className="text-xs text-slate-400 font-medium">Tone</label>
+                                    <div className="relative">
+                                        <select
+                                            value={selectedPost.tone || Tone.PROFESSIONAL}
+                                            onChange={(e) => onUpdatePost(selectedPost.id, { tone: e.target.value as Tone })}
+                                            className="w-full bg-slate-950 border border-slate-700 py-2 pl-3 pr-8 text-sm text-slate-200 focus:border-indigo-500 outline-none appearance-none"
+                                        >
+                                            {Object.values(Tone).map(tone => (
+                                                <option key={tone} value={tone}>{tone}</option>
+                                            ))}
+                                        </select>
+                                        <ChevronDownIcon className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" size={14} />
+                                    </div>
+                                </div>
+
                                 <button
                                     onClick={() => onQueueContent(selectedPost)}
                                     className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-indigo-900/20 transition-all"
@@ -410,20 +496,6 @@ export const PostsWorkspace: React.FC<Props> = ({
                             {/* SEO Metadata */}
                             <section className="space-y-4 pt-4 border-t border-slate-800">
                                 <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">SEO Metadata</h3>
-
-                                <div className="space-y-1">
-                                    <div className="flex justify-between">
-                                        <label className="text-xs text-slate-400 font-medium">Meta Title</label>
-                                        <span className={`text-[10px] ${(selectedPost.title?.length || 0) > 60 ? 'text-red-400' : 'text-slate-600'}`}>
-                                            {selectedPost.title?.length || 0}/60
-                                        </span>
-                                    </div>
-                                    <input
-                                        value={selectedPost.title}
-                                        onChange={(e) => onUpdatePost(selectedPost.id, { title: e.target.value })}
-                                        className="w-full bg-slate-950 border border-slate-700 py-2 px-3 text-sm text-slate-200 focus:border-indigo-500 outline-none"
-                                    />
-                                </div>
 
                                 <div className="space-y-1">
                                     <div className="flex justify-between">
@@ -460,8 +532,8 @@ export const PostsWorkspace: React.FC<Props> = ({
                         <div className="relative pl-4 border-l border-slate-800 space-y-8 my-2">
                             {(() => {
                                 const history = [];
-                                if (selectedPost.publishedAt) {
-                                    history.push({ action: 'Published', user: 'System', time: selectedPost.publishedAt.toDate().toLocaleString(), active: selectedPost.status === PostStatus.PUBLISHED });
+                                if (selectedPost.approvedAt) {
+                                    history.push({ action: 'Published', user: 'System', time: selectedPost.approvedAt.toDate().toLocaleString(), active: selectedPost.status === PostStatus.APPROVED });
                                 }
                                 if (selectedPost.submittedAt) {
                                     history.push({ action: 'Submitted for Review', user: selectedPost.editor || 'Editor', time: selectedPost.submittedAt.toDate().toLocaleString(), active: selectedPost.status === PostStatus.NEEDS_REVIEW });
@@ -490,8 +562,8 @@ export const PostsWorkspace: React.FC<Props> = ({
                         </div>
                     )}
                 </div>
-            </div>
-        </div>
+            </div >
+        </div >
     );
 };
 

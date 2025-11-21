@@ -163,6 +163,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children }) =>
       // Add creator as project admin
       const membershipId = `${projectId}_${user.id}`;
       const membership: Omit<ProjectMember, 'id'> = {
+        organizationId: currentOrg.id,
         projectId,
         userId: user.id,
         role: ProjectMemberRole.ADMIN,
@@ -172,11 +173,16 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children }) =>
 
       await setDoc(doc(db, 'projectMembers', membershipId), membership);
 
-      // Refresh projects
-      await fetchProjects();
+      // Set as current project immediately (before state update)
+      const createdProject: Project = {
+        id: projectId,
+        ...newProject,
+      };
+      setCurrentProjectState(createdProject);
+      localStorage.setItem(`currentProjectId_${currentOrg.id}`, projectId);
 
-      // Set as current project
-      setCurrentProject(projectId);
+      // Refresh projects list in background
+      fetchProjects();
 
       return projectId;
     } catch (error: any) {

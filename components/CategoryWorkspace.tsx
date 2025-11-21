@@ -52,8 +52,8 @@ const CategoryTree: React.FC<{
         const isExpanded = expandedIds.has(cat.id);
         const hasChildren = children.length > 0;
 
-        // Count posts for this category
-        const postCount = posts.filter(p => p.categoryId === cat.id).length;
+        // Count pending posts (Titles) for this category
+        const postCount = posts.filter(p => p.categoryId === cat.id && p.status === PostStatus.PENDING).length;
 
         const isRoot = depth === 0;
         const indentClass = depth === 0 ? '' : depth === 1 ? 'pl-8' : 'pl-16';
@@ -176,6 +176,7 @@ const CategoryCreator: React.FC<{
     onAddBatch: (cats: { name: string, description: string }[]) => void
 }> = ({ parentId, onClose, onAddBatch }) => {
     const [categoryName, setCategoryName] = useState("");
+    const [categoryDescription, setCategoryDescription] = useState("");
     const [suggestions, setSuggestions] = useState<CategorySuggestion[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
@@ -183,7 +184,9 @@ const CategoryCreator: React.FC<{
 
     const handleAdd = () => {
         if (categoryName.trim()) {
-            onAddBatch([{ name: categoryName.trim(), description: '' }]);
+            onAddBatch([{ name: categoryName.trim(), description: categoryDescription.trim() }]);
+            setCategoryName('');
+            setCategoryDescription('');
         }
     };
 
@@ -225,8 +228,29 @@ const CategoryCreator: React.FC<{
                                 placeholder="e.g. Social Media Marketing"
                                 className="w-full bg-slate-900 border border-slate-700 text-white px-4 py-3 outline-none focus:border-cyan-500 text-sm"
                                 autoFocus
-                                onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
                             />
+                        </div>
+
+                        {/* Category Description Field */}
+                        <div>
+                            <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">
+                                Description (Optional)
+                            </label>
+                            <textarea
+                                value={categoryDescription}
+                                onChange={(e) => setCategoryDescription(e.target.value)}
+                                placeholder="Provide context about this category to help generate better content..."
+                                className="w-full bg-slate-900 border border-slate-700 text-white px-4 py-3 outline-none focus:border-cyan-500 text-sm resize-none"
+                                rows={3}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                                        handleAdd();
+                                    }
+                                }}
+                            />
+                            <p className="text-xs text-slate-500 mt-1">
+                                This helps AI generate more relevant titles and content for this category
+                            </p>
                         </div>
 
                         {/* Action Buttons */}
@@ -446,10 +470,18 @@ export const CategoryWorkspace: React.FC<Props> = ({
     }, []);
 
     const filteredPosts = posts.filter(p =>
-        (selectedCategoryId ? p.categoryId === selectedCategoryId : true)
+        (selectedCategoryId ? p.categoryId === selectedCategoryId : true) &&
+        p.status === PostStatus.PENDING
     );
 
     const selectedCategory = categories.find(c => c.id === selectedCategoryId);
+
+    // Check if there's a title generation task running for selected category
+    const isGeneratingTitles = selectedCategoryId && tasks.some(t =>
+        t.categoryId === selectedCategoryId &&
+        t.type === TaskType.GENERATE_TITLES &&
+        (t.status === TaskStatus.QUEUED || t.status === TaskStatus.PROCESSING)
+    );
 
     // Get breadcrumb trail for selected category
     const getCategoryBreadcrumb = (catId: string | null): string[] => {
@@ -620,29 +652,37 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                     const isDeleting = deletingPostId === post.id;
                                     const isAnimating = isMoving || isDeleting;
 
+                                    if (isAnimating) {
+                                        return (
+                                            <tr
+                                                key={post.id}
+                                                className={`transition-all duration-500 ease-in-out ${isMoving ? '-translate-x-full opacity-0' : 'translate-x-full opacity-0'}`}
+                                            >
+                                                <td colSpan={3} className="p-0 border-b border-slate-800">
+                                                    <div className={`h-32 flex items-center justify-center gap-3 font-bold text-lg ${isMoving ? 'bg-cyan-950/30 text-cyan-400' : 'bg-red-950/30 text-red-400'}`}>
+                                                        {isMoving ? (
+                                                            <>
+                                                                <ArrowRight className="animate-pulse" size={24} />
+                                                                <span>Now in Posts</span>
+                                                                <FileText size={20} />
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <Trash2 className="animate-pulse" size={24} />
+                                                                <span>Deleted</span>
+                                                            </>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+                                    }
+
                                     return (
                                         <tr
                                             key={post.id}
-                                            className={`hover:bg-slate-800/50 transition-colors group relative overflow-hidden ${isMoving ? 'opacity-30 -translate-x-full' : ''} ${isDeleting ? 'opacity-30 translate-x-full' : ''}`}
-                                            style={{ transition: 'all 0.5s ease-in-out' }}
+                                            className="hover:bg-slate-800/50 transition-colors group relative"
                                         >
-                                            {isMoving && (
-                                                <td colSpan={3} className="absolute inset-0 flex items-center justify-center bg-cyan-950/30 backdrop-blur-sm z-50">
-                                                    <div className="flex items-center gap-3 text-cyan-400 font-bold text-lg">
-                                                        <ArrowRight className="animate-pulse" size={24} />
-                                                        <span>Now in Posts</span>
-                                                        <FileText size={20} />
-                                                    </div>
-                                                </td>
-                                            )}
-                                            {isDeleting && (
-                                                <td colSpan={3} className="absolute inset-0 flex items-center justify-center bg-red-950/50 backdrop-blur-sm z-50">
-                                                    <div className="flex items-center gap-3 text-red-400 font-bold text-lg">
-                                                        <Trash2 className="animate-pulse" size={24} />
-                                                        <span>Deleted</span>
-                                                    </div>
-                                                </td>
-                                            )}
                                             <td className="p-4 text-center align-top pt-6">
                                                 <input
                                                     type="checkbox"
@@ -694,22 +734,16 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                             </td>
                                             <td className="p-4 align-top pt-6 text-right">
                                                 <div className="flex items-center justify-end gap-3">
-                                                    {post.status === PostStatus.PENDING ? (
-                                                        <button
-                                                            onClick={() => handleGenerateWithAnimation(post)}
-                                                            disabled={isAnimating}
-                                                            className="px-3 py-1 text-[10px] font-bold uppercase tracking-widest border border-cyan-800 text-cyan-400 hover:bg-cyan-950 hover:border-cyan-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                                        >
-                                                            Generate
-                                                        </button>
-                                                    ) : (
-                                                        <StatusBadge status={post.status} />
-                                                    )}
+                                                    <button
+                                                        onClick={() => handleGenerateWithAnimation(post)}
+                                                        className="px-3 py-1 text-[10px] font-bold uppercase tracking-widest border border-cyan-800 text-cyan-400 hover:bg-cyan-950 hover:border-cyan-500 transition-colors"
+                                                    >
+                                                        Generate
+                                                    </button>
                                                     <button
                                                         onClick={() => handleDeleteWithAnimation(post.id)}
-                                                        className="text-slate-600 hover:text-red-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                                        className="text-slate-600 hover:text-red-500 transition-colors"
                                                         title="Delete"
-                                                        disabled={isAnimating}
                                                     >
                                                         <Trash2 size={16} />
                                                     </button>
@@ -718,10 +752,22 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                         </tr>
                                     );
                                 })}
-                                {filteredPosts.length === 0 && (
+                                {filteredPosts.length === 0 && !isGeneratingTitles && (
                                     <tr>
                                         <td colSpan={3} className="p-12 text-center text-slate-600 font-mono">
                                             NO_TITLES_FOUND
+                                        </td>
+                                    </tr>
+                                )}
+                                {filteredPosts.length === 0 && isGeneratingTitles && (
+                                    <tr>
+                                        <td colSpan={3} className="p-12 text-center">
+                                            <div className="flex flex-col items-center gap-4">
+                                                <Loader2 className="animate-spin text-cyan-400" size={32} />
+                                                <span className="text-slate-400 font-mono text-sm uppercase tracking-wider">
+                                                    Generating Titles...
+                                                </span>
+                                            </div>
                                         </td>
                                     </tr>
                                 )}

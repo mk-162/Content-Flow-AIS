@@ -2,78 +2,339 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper functions
+    // ============================================
+    // HELPER FUNCTIONS
+    // ============================================
+
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    // Users collection
-    match /users/{userId} {
-      allow read: if isAuthenticated() && request.auth.uid == userId;
-      allow create: if isAuthenticated() && request.auth.uid == userId;
-      allow update: if isAuthenticated() && request.auth.uid == userId;
-      allow delete: if false;
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
-    // Organizations collection
+    function isSystemAdmin() {
+      return isAuthenticated() && getUserData().globalRole == 'SYSTEM_ADMIN';
+    }
+
+    // Check if user is a member of an organization
+    function isOrgMember(orgId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/organizationMembers/$(orgId + '_' + request.auth.uid));
+    }
+
+    // Get org member role
+    function getOrgMemberRole(orgId) {
+      return get(/databases/$(database)/documents/organizationMembers/$(orgId + '_' + request.auth.uid)).data.role;
+    }
+
+    // Check if user is org owner or admin
+    function isOrgAdmin(orgId) {
+      let role = getOrgMemberRole(orgId);
+      return isOrgMember(orgId) && (role == 'OWNER' || role == 'ADMIN');
+    }
+
+    // Check if user is a project member
+    function isProjectMember(projectId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/projectMembers/$(projectId + '_' + request.auth.uid));
+    }
+
+    // Get project member role
+    function getProjectMemberRole(projectId) {
+      return get(/databases/$(database)/documents/projectMembers/$(projectId + '_' + request.auth.uid)).data.role;
+    }
+
+    // Check if user can write to project
+    function canWriteToProject(projectId) {
+      let role = getProjectMemberRole(projectId);
+      return isProjectMember(projectId) && (role == 'ADMIN' || role == 'CONTENT_CREATOR');
+    }
+
+    // ============================================
+    // USERS COLLECTION
+    // ============================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated() &&
+        (request.auth.uid == userId || isSystemAdmin());
+
+      allow create: if isAuthenticated() &&
+        request.auth.uid == userId &&
+        request.resource.data.keys().hasAll(['email', 'displayName', 'globalRole', 'createdAt', 'updatedAt']) &&
+        request.resource.data.globalRole == 'USER'; // Users can only create with USER role
+
+      allow update: if isAuthenticated() &&
+        (request.auth.uid == userId || isSystemAdmin()) &&
+        (request.auth.uid != userId || request.resource.data.globalRole == resource.data.globalRole); // Users can't change their own role
+
+      allow delete: if false; // Users cannot be deleted via client
+    }
+
+    // ============================================
+    // ORGANIZATIONS COLLECTION
+    // ============================================
+
     match /organizations/{orgId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isAuthenticated();
+      allow read: if isAuthenticated() && (isOrgMember(orgId) || isSystemAdmin());
 
-      // Projects subcollection
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasAll(['name', 'ownerId', 'subscriptionTier', 'createdAt', 'updatedAt']) &&
+        request.resource.data.ownerId == request.auth.uid;
+
+      allow update: if isAuthenticated() && (isOrgAdmin(orgId) || isSystemAdmin()) &&
+        request.resource.data.ownerId == resource.data.ownerId; // Can't change owner via update
+
+      allow delete: if isAuthenticated() &&
+        (resource.data.ownerId == request.auth.uid || isSystemAdmin());
+
+      // ============================================
+      // PROJECTS SUBCOLLECTION
+      // ============================================
+
       match /projects/{projectId} {
-        allow read: if isAuthenticated();
-        allow create: if isAuthenticated();
-        allow update: if isAuthenticated();
-        allow delete: if isAuthenticated();
+        allow read: if isAuthenticated() &&
+          (isOrgMember(orgId) || isProjectMember(projectId) || isSystemAdmin());
 
-        // Categories subcollection
+        allow create: if isAuthenticated() &&
+          isOrgMember(orgId) &&
+          request.resource.data.keys().hasAll(['organizationId', 'name', 'createdBy', 'createdAt', 'updatedAt']) &&
+          request.resource.data.organizationId == orgId &&
+          request.resource.data.createdBy == request.auth.uid;
+
+        allow update: if isAuthenticated() &&
+          (isOrgAdmin(orgId) || canWriteToProject(projectId) || isSystemAdmin()) &&
+          request.resource.data.organizationId == resource.data.organizationId;
+
+        allow delete: if isAuthenticated() &&
+          (isOrgAdmin(orgId) || isSystemAdmin());
+
+        // ============================================
+        // CATEGORIES SUBCOLLECTION
+        // ============================================
+
         match /categories/{categoryId} {
-          allow read: if isAuthenticated();
-          allow write: if isAuthenticated();
+          allow read: if isAuthenticated() &&
+            (isOrgMember(orgId) || isProjectMember(projectId) || isSystemAdmin());
+
+          allow create: if isAuthenticated() &&
+            (isOrgMember(orgId) || canWriteToProject(projectId)) &&
+            request.resource.data.keys().hasAll(['projectId', 'organizationId', 'name', 'createdAt', 'updatedAt']) &&
+            request.resource.data.projectId == projectId &&
+            request.resource.data.organizationId == orgId;
+
+          allow update: if isAuthenticated() &&
+            (isOrgMember(orgId) || canWriteToProject(projectId) || isSystemAdmin()) &&
+            request.resource.data.projectId == resource.data.projectId &&
+            request.resource.data.organizationId == resource.data.organizationId;
+
+          allow delete: if isAuthenticated() &&
+            (isOrgMember(orgId) || canWriteToProject(projectId) || isSystemAdmin());
         }
 
-        // Posts subcollection
+        // ============================================
+        // POSTS SUBCOLLECTION
+        // ============================================
+
         match /posts/{postId} {
-          allow read: if isAuthenticated();
-          allow write: if isAuthenticated();
+          allow read: if isAuthenticated() &&
+            (isOrgMember(orgId) || isProjectMember(projectId) || isSystemAdmin());
+
+          allow create: if isAuthenticated() &&
+            (isOrgMember(orgId) || canWriteToProject(projectId)) &&
+            request.resource.data.keys().hasAll(['projectId', 'organizationId', 'categoryId', 'title', 'status', 'createdBy', 'createdAt', 'updatedAt']) &&
+            request.resource.data.projectId == projectId &&
+            request.resource.data.organizationId == orgId &&
+            request.resource.data.createdBy == request.auth.uid;
+
+          allow update: if isAuthenticated() &&
+            (isOrgMember(orgId) || canWriteToProject(projectId) || isSystemAdmin()) &&
+            request.resource.data.projectId == resource.data.projectId &&
+            request.resource.data.organizationId == resource.data.organizationId;
+
+          allow delete: if isAuthenticated() &&
+            (isOrgMember(orgId) || canWriteToProject(projectId) || isSystemAdmin());
         }
       }
     }
 
-    // Organization members
+    // ============================================
+    // ORGANIZATION MEMBERS
+    // ============================================
+
     match /organizationMembers/{membershipId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isAuthenticated();
+      // Users can read their own memberships
+      // Note: For queries, this allows filtering by userId == request.auth.uid
+      allow read: if isAuthenticated();  // Simplified: any authenticated user can read memberships they query for
+
+      // Allow creating memberships if:
+      // 1. You're adding yourself as OWNER (for new org creation)
+      // 2. OR you're already an org admin
+      // 3. OR you're a system admin
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasAll(['organizationId', 'userId', 'role', 'invitedBy', 'invitedAt', 'joinedAt']) &&
+        (
+          // Self-adding as OWNER (for new org creation)
+          (request.resource.data.userId == request.auth.uid &&
+           request.resource.data.role == 'OWNER' &&
+           request.resource.data.invitedBy == request.auth.uid) ||
+          // OR already an org admin
+          isOrgAdmin(request.resource.data.organizationId) ||
+          // OR system admin
+          isSystemAdmin()
+        );
+
+      // Only org admins can update roles
+      allow update: if isAuthenticated() &&
+        (isOrgAdmin(resource.data.organizationId) || isSystemAdmin()) &&
+        request.resource.data.organizationId == resource.data.organizationId &&
+        request.resource.data.userId == resource.data.userId;
+
+      // Org admins can remove members, or users can remove themselves
+      allow delete: if isAuthenticated() &&
+        (isOrgAdmin(resource.data.organizationId) ||
+         request.auth.uid == resource.data.userId ||
+         isSystemAdmin());
     }
 
-    // Project members
+    // ============================================
+    // PROJECT MEMBERS
+    // ============================================
+
     match /projectMembers/{membershipId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isAuthenticated();
+      // Project members and org members can read
+      allow read: if isAuthenticated() &&
+        (isProjectMember(resource.data.projectId) ||
+         isOrgMember(resource.data.organizationId) ||
+         isSystemAdmin());
+
+      // Org admins or project admins can add members
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasAll(['organizationId', 'projectId', 'userId', 'role', 'addedBy', 'addedAt']) &&
+        (isOrgAdmin(request.resource.data.organizationId) ||
+         getProjectMemberRole(request.resource.data.projectId) == 'ADMIN' ||
+         isSystemAdmin()) &&
+        request.resource.data.addedBy == request.auth.uid;
+
+      // Only project admins can update roles
+      allow update: if isAuthenticated() &&
+        (getProjectMemberRole(resource.data.projectId) == 'ADMIN' ||
+         isOrgAdmin(resource.data.organizationId) ||
+         isSystemAdmin()) &&
+        request.resource.data.projectId == resource.data.projectId &&
+        request.resource.data.userId == resource.data.userId;
+
+      // Project admins, org admins, or users themselves can remove
+      allow delete: if isAuthenticated() &&
+        (getProjectMemberRole(resource.data.projectId) == 'ADMIN' ||
+         isOrgAdmin(resource.data.organizationId) ||
+         request.auth.uid == resource.data.userId ||
+         isSystemAdmin());
     }
 
-    // Generation queue
+    // ============================================
+    // GENERATION QUEUE
+    // ============================================
+
     match /generationQueue/{taskId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isAuthenticated();
+      // Users can read tasks for their organization
+      allow read: if isAuthenticated() &&
+        (isOrgMember(resource.data.organizationId) || isSystemAdmin());
+
+      // Users can create tasks for projects they have access to
+      allow create: if isAuthenticated() &&
+        (isOrgMember(request.resource.data.organizationId) ||
+         canWriteToProject(request.resource.data.projectId)) &&
+        request.resource.data.keys().hasAll(['type', 'organizationId', 'projectId', 'categoryId', 'status', 'progress', 'createdBy', 'startedAt']) &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.status == 'queued' &&
+        request.resource.data.progress == 0;
+
+      // Queue processor (Cloud Function with admin SDK) or system admins can update
+      allow update: if isAuthenticated() &&
+        (isOrgMember(resource.data.organizationId) || isSystemAdmin());
+
+      // Only system admins can delete queue tasks
+      allow delete: if isSystemAdmin();
     }
 
-    // Usage records
-    match /usage/{document=**} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+    // ============================================
+    // USAGE RECORDS
+    // ============================================
+
+    match /usage/{usageId} {
+      // Org members can read their org's usage
+      allow read: if isAuthenticated() &&
+        (isOrgMember(resource.data.organizationId) || isSystemAdmin());
+
+      // Only system can write usage records (via Cloud Functions or client-side tracking)
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasAll(['organizationId', 'userId', 'timestamp', 'apiCalls', 'tokensUsed', 'cost', 'model']);
+
+      allow update: if false; // Usage records are immutable
+      allow delete: if isSystemAdmin(); // Only system admin can delete usage records
     }
 
-    // Default deny all other paths
+    // ============================================
+    // INVITATIONS
+    // ============================================
+
+    match /invitations/{invitationId} {
+      // Org admins can read invitations for their org
+      allow read: if isAuthenticated() &&
+        (isOrgAdmin(resource.data.organizationId) ||
+         request.auth.token.email == resource.data.email ||
+         isSystemAdmin());
+
+      // Org admins can create invitations
+      allow create: if isAuthenticated() &&
+        isOrgAdmin(request.resource.data.organizationId) &&
+        request.resource.data.invitedBy == request.auth.uid;
+
+      // Invited user or org admin can update status
+      allow update: if isAuthenticated() &&
+        (isOrgAdmin(resource.data.organizationId) ||
+         request.auth.token.email == resource.data.email ||
+         isSystemAdmin());
+
+      allow delete: if isAuthenticated() &&
+        (isOrgAdmin(resource.data.organizationId) || isSystemAdmin());
+    }
+
+    // ============================================
+    // AUDIT LOGS
+    // ============================================
+
+    match /auditLogs/{logId} {
+      // Org admins and system admins can read audit logs
+      allow read: if isAuthenticated() &&
+        (isOrgAdmin(resource.data.organizationId) || isSystemAdmin());
+
+      // Only authenticated users can create audit logs (immutable after creation)
+      allow create: if isAuthenticated() &&
+        request.resource.data.userId == request.auth.uid;
+
+      allow update: if false; // Audit logs are immutable
+      allow delete: if false; // Audit logs cannot be deleted
+    }
+
+    // ============================================
+    // ADMIN CONFIG (System Prompts, etc.)
+    // ============================================
+
+    match /adminConfig/{document=**} {
+      // All authenticated users can read admin config
+      allow read: if isAuthenticated();
+
+      // Only system admins can write admin config
+      allow write: if isSystemAdmin();
+    }
+
+    // ============================================
+    // DEFAULT DENY ALL OTHER PATHS
+    // ============================================
+
     match /{document=**} {
       allow read, write: if false;
     }

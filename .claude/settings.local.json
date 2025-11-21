@@ -7,7 +7,12 @@
       "Bash(npm install)",
       "Bash(ping:*)",
       "Bash(firebase login)",
-      "Bash(firebase login:*)"
+      "Bash(firebase login:*)",
+      "Bash(firebase deploy:*)",
+      "Bash(firebase init:*)",
+      "Bash(npm run build:*)",
+      "Bash(firebase functions:config:set:*)",
+      "Bash(node scripts/set-admin-role.js:*)"
     ],
     "deny": [],
     "ask": []

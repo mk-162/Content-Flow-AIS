@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Check User Role</title>
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getAuth, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+        import { getFirestore, doc, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+
+        // You'll need to paste your Firebase config here
+        const firebaseConfig = {
+            // Add your config from lib/firebase.ts
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_AUTH_DOMAIN",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_STORAGE_BUCKET",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                const userDocRef = doc(db, 'users', user.uid);
+                const userDoc = await getDoc(userDocRef);
+
+                if (userDoc.exists()) {
+                    const userData = userDoc.data();
+                    document.getElementById('output').innerHTML = `
+                        <h2>Current User Info:</h2>
+                        <p><strong>UID:</strong> ${user.uid}</p>
+                        <p><strong>Email:</strong> ${user.email}</p>
+                        <p><strong>Global Role:</strong> <span style="color: ${userData.globalRole === 'SYSTEM_ADMIN' ? 'green' : 'red'}">${userData.globalRole}</span></p>
+
+                        ${userData.globalRole !== 'SYSTEM_ADMIN' ? `
+                            <button onclick="updateToAdmin()">Update to SYSTEM_ADMIN</button>
+                        ` : '<p style="color: green;">✓ You have SYSTEM_ADMIN access!</p>'}
+                    `;
+
+                    window.updateToAdmin = async () => {
+                        try {
+                            await setDoc(userDocRef, { globalRole: 'SYSTEM_ADMIN' }, { merge: true });
+                            alert('Role updated! Please refresh the page.');
+                            location.reload();
+                        } catch (error) {
+                            alert('Error updating role: ' + error.message);
+                        }
+                    };
+                } else {
+                    document.getElementById('output').innerHTML = '<p style="color: red;">User document not found in Firestore!</p>';
+                }
+            } else {
+                document.getElementById('output').innerHTML = '<p>Not logged in. Please log in first.</p>';
+            }
+        });
+    </script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #0f172a;
+            color: #e2e8f0;
+        }
+        button {
+            background: #8b5cf6;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-top: 20px;
+        }
+        button:hover {
+            background: #7c3aed;
+        }
+    </style>
+</head>
+<body>
+    <h1>User Role Diagnostic</h1>
+    <div id="output">Loading...</div>
+</body>
+</html>

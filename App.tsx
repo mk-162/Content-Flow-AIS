@@ -4,20 +4,32 @@ import { AuthProvider } from './contexts/AuthContext';
 import { OrganizationProvider } from './contexts/OrganizationContext';
 import { ProjectProvider } from './contexts/ProjectContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { LoginPage } from './pages/LoginPage';
 import { SignUpPage } from './pages/SignUpPage';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
 import { ProjectDashboard } from './pages/ProjectDashboard';
 import { MainWorkspace } from './pages/MainWorkspace';
+import { OrganizationSettings } from './pages/OrganizationSettings';
+import { AdminPrompts } from './pages/AdminPrompts';
 import { GlobalRole } from './types';
 
 const App: React.FC = () => {
   return (
-    <Router>
-      <AuthProvider>
-        <OrganizationProvider>
-          <ProjectProvider>
-            <Routes>
+    <ErrorBoundary
+      onError={(error, errorInfo) => {
+        // Log to console in development
+        console.error('Global Error:', error, errorInfo);
+
+        // TODO: In production, send to error tracking service
+        // Example: Sentry, LogRocket, etc.
+      }}
+    >
+      <Router>
+        <AuthProvider>
+          <OrganizationProvider>
+            <ProjectProvider>
+              <Routes>
               {/* Public Routes */}
               <Route path="/login" element={<LoginPage />} />
               <Route path="/signup" element={<SignUpPage />} />
@@ -40,6 +52,22 @@ const App: React.FC = () => {
                   </ProtectedRoute>
                 }
               />
+              <Route
+                path="/settings/organization"
+                element={
+                  <ProtectedRoute>
+                    <OrganizationSettings />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/admin/prompts"
+                element={
+                  <ProtectedRoute>
+                    <AdminPrompts />
+                  </ProtectedRoute>
+                }
+              />
 
               {/* System Admin Routes (Future) */}
               {/* <Route
@@ -58,6 +86,7 @@ const App: React.FC = () => {
         </OrganizationProvider>
       </AuthProvider>
     </Router>
+    </ErrorBoundary>
   );
 };
 

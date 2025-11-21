@@ -5,6 +5,7 @@ export enum Screen {
   CATEGORIES = 'categories',
   POSTS = 'posts',
   PROJECTS = 'projects',
+  SETTINGS = 'settings',
   ADMIN = 'admin'
 }
 
@@ -37,10 +38,6 @@ export interface OrganizationSettings {
   allowUserInvites: boolean;
   maxProjects: number;
   maxUsersPerProject: number;
-  customBranding?: {
-    logoURL?: string;
-    primaryColor?: string;
-  };
 }
 
 export interface SystemPrompt {
@@ -54,6 +51,37 @@ export interface SystemPrompt {
   updatedAt: Timestamp;
 }
 
+export enum PromptType {
+  TITLE_GENERATION = 'Title Generation',
+  CATEGORY_SUGGESTIONS = 'Category Suggestions',
+  CATEGORY_BREAKDOWN = 'Category Breakdown',
+  BRAND_RESEARCH = 'Brand Research'
+}
+
+export enum ContentType {
+  ARTICLE = 'Article',
+  SOCIAL_MEDIA = 'Social Media',
+  EMAIL = 'Email',
+  CASE_STUDY = 'Case Study'
+}
+
+export enum Tone {
+  PROFESSIONAL = 'Professional',
+  WITTY = 'Witty',
+  URGENT = 'Urgent',
+  EMPATHETIC = 'Empathetic',
+  AUTHORITATIVE = 'Authoritative'
+}
+
+export interface AdminConfig {
+  prompts: Record<ContentType, string> & Record<PromptType, string> & {
+    summaryPrompt: string;
+    [key: string]: string;
+  };
+  modelVersion: string;
+  updatedAt: Timestamp;
+}
+
 export interface Organization {
   id: string;
   name: string;
@@ -63,6 +91,16 @@ export interface Organization {
   systemPrompts: Record<string, SystemPrompt>;
   createdAt: Timestamp;
   updatedAt: Timestamp;
+  // Brand Settings
+  website?: string;
+  customBranding?: {
+    logoURL?: string;
+    primaryColor?: string;
+    secondaryColor?: string;
+    font?: string;
+  };
+  brandMessage?: string;
+  brandCompliance?: string;
 }
 
 // Organization & Project Membership
@@ -91,6 +129,7 @@ export enum ProjectMemberRole {
 
 export interface ProjectMember {
   id: string; // Format: {projectId}_{userId}
+  organizationId: string;
   projectId: string;
   userId: string;
   role: ProjectMemberRole;
@@ -107,9 +146,13 @@ export interface Project {
   createdBy: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
+  isArchived?: boolean;
   settings?: {
     defaultPromptId?: string;
     autoPublish?: boolean;
+    publishVelocity?: number;
+    positioningStatement?: string;
+    rules?: string;
   };
 }
 
@@ -131,7 +174,7 @@ export enum PostStatus {
   PENDING = 'pending',
   GENERATING = 'generating',
   NEEDS_REVIEW = 'needs_review',
-  PUBLISHED = 'published',
+  APPROVED = 'approved',
   REJECTED = 'rejected'
 }
 
@@ -149,11 +192,13 @@ export interface Post {
   updatedAt: Timestamp;
   generatedAt?: Timestamp;
   submittedAt?: Timestamp;
-  publishedAt?: Timestamp;
+  approvedAt?: Timestamp;
   tags?: string[];
   metaKeywords?: string;
   metaDescription?: string;
   editor?: string;
+  contentType?: ContentType;
+  tone?: Tone;
   metadata?: {
     wordCount?: number;
     readingTime?: number;

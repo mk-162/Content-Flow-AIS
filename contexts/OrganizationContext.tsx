@@ -173,11 +173,16 @@ export const OrganizationProvider: React.FC<OrganizationProviderProps> = ({ chil
 
       await setDoc(doc(db, 'organizationMembers', membershipId), membership);
 
-      // Refresh organizations
-      await fetchOrganizations();
+      // Set as current organization immediately (before state update)
+      const createdOrg: Organization = {
+        id: orgId,
+        ...newOrg,
+      };
+      setCurrentOrgState(createdOrg);
+      localStorage.setItem('currentOrganizationId', orgId);
 
-      // Set as current organization
-      setCurrentOrg(orgId);
+      // Refresh organizations list in background
+      fetchOrganizations();
 
       return orgId;
     } catch (error: any) {

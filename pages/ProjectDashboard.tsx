@@ -26,7 +26,7 @@ interface ProjectStats {
 
 export const ProjectDashboard: React.FC = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
   const { currentOrg, createOrganization } = useOrganization();
   const { projects, createProject, setCurrentProject } = useProject();
 
@@ -36,6 +36,12 @@ export const ProjectDashboard: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
   const [projectStats, setProjectStats] = useState<Record<string, ProjectStats>>({});
+
+  // Organization creation state
+  const [showOrgCreateModal, setShowOrgCreateModal] = useState(false);
+  const [newOrgName, setNewOrgName] = useState('');
+  const [orgCreating, setOrgCreating] = useState(false);
+  const [orgError, setOrgError] = useState('');
 
   // Fetch stats for each project
   useEffect(() => {
@@ -103,6 +109,28 @@ export const ProjectDashboard: React.FC = () => {
     }
   };
 
+  const handleCreateOrganization = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setOrgError('');
+
+    if (!newOrgName.trim()) {
+      setOrgError('Organization name is required');
+      return;
+    }
+
+    try {
+      setOrgCreating(true);
+      await createOrganization(newOrgName.trim());
+      setNewOrgName('');
+      setShowOrgCreateModal(false);
+      // Organization context will automatically update and reload the page
+    } catch (err: any) {
+      setOrgError(err.message || 'Failed to create organization');
+    } finally {
+      setOrgCreating(false);
+    }
+  };
+
   const handleSelectProject = (projectId: string) => {
     setCurrentProject(projectId);
     navigate('/');
@@ -118,27 +146,112 @@ export const ProjectDashboard: React.FC = () => {
 
   if (!currentOrg) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
-        <div className="text-center max-w-md">
-          <Folder className="w-16 h-16 text-slate-600 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-slate-200 mb-2">Welcome to ContentFlow AI!</h2>
-          <p className="text-slate-400 mb-6">
-            Get started by creating your first organization
-          </p>
-          <button
-            onClick={async () => {
-              const orgName = prompt('Enter your organization name:');
-              if (orgName && orgName.trim()) {
-                await createOrganization(orgName.trim());
-              }
-            }}
-            className="inline-flex items-center gap-2 bg-cyan-500 hover:bg-cyan-600
-                     text-white font-medium py-3 px-6 rounded-lg transition-colors"
-          >
-            <Plus className="w-5 h-5" />
-            Create Your First Organization
-          </button>
+      <div className="min-h-screen bg-slate-900 flex flex-col">
+        {/* Top bar with sign out */}
+        <div className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm">
+          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <FileText className="w-6 h-6 text-cyan-400" />
+              <span className="text-slate-200 font-semibold">ContentFlow AI</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-slate-400 text-sm">{user?.email}</span>
+              <button
+                onClick={async () => {
+                  await signOut();
+                  navigate('/login');
+                }}
+                className="text-slate-400 hover:text-slate-300 text-sm transition-colors"
+              >
+                Sign out
+              </button>
+            </div>
+          </div>
         </div>
+
+        {/* Main content */}
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center max-w-md">
+            <Folder className="w-16 h-16 text-slate-600 mx-auto mb-4" />
+            <h2 className="text-2xl font-bold text-slate-200 mb-2">Welcome to ContentFlow AI!</h2>
+            <p className="text-slate-400 mb-6">
+              Get started by creating your first organization
+            </p>
+            <button
+              onClick={() => setShowOrgCreateModal(true)}
+              className="inline-flex items-center gap-2 bg-cyan-500 hover:bg-cyan-600
+                       text-white font-medium py-3 px-6 rounded-lg transition-colors"
+            >
+              <Plus className="w-5 h-5" />
+              Create Your First Organization
+            </button>
+          </div>
+        </div>
+
+        {/* Create Organization Modal */}
+        {showOrgCreateModal && (
+          <>
+            <div
+              className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40"
+              onClick={() => !orgCreating && setShowOrgCreateModal(false)}
+            />
+            <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="bg-slate-800 rounded-lg border border-slate-700 w-full max-w-lg p-6"
+              >
+                <h2 className="text-2xl font-bold text-slate-200 mb-4">Create Organization</h2>
+
+                <form onSubmit={handleCreateOrganization} className="space-y-4">
+                  <div>
+                    <label htmlFor="orgName" className="block text-sm font-medium text-slate-300 mb-2">
+                      Organization Name
+                    </label>
+                    <input
+                      id="orgName"
+                      type="text"
+                      value={newOrgName}
+                      onChange={(e) => setNewOrgName(e.target.value)}
+                      placeholder="My Company"
+                      className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg
+                               text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500
+                               focus:ring-2 focus:ring-cyan-500/20 transition-colors"
+                      disabled={orgCreating}
+                      autoFocus
+                    />
+                  </div>
+
+                  {orgError && <p className="text-red-400 text-sm">{orgError}</p>}
+
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      type="submit"
+                      disabled={orgCreating}
+                      className="flex-1 bg-cyan-500 hover:bg-cyan-600 text-white font-medium py-2.5 px-4
+                               rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {orgCreating ? 'Creating...' : 'Create Organization'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowOrgCreateModal(false);
+                        setNewOrgName('');
+                        setOrgError('');
+                      }}
+                      disabled={orgCreating}
+                      className="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium py-2.5 px-4
+                               rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              </motion.div>
+            </div>
+          </>
+        )}
       </div>
     );
   }
@@ -208,7 +321,8 @@ export const ProjectDashboard: React.FC = () => {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          alert('Project settings menu coming soon! You will be able to:\n• Edit project details\n• Manage members\n• Archive project\n• Delete project');
+                          setCurrentProject(project.id);
+                          navigate('/', { state: { initialScreen: 'settings' } });
                         }}
                         className="text-slate-400 hover:text-slate-300 opacity-0 group-hover:opacity-100
                                  transition-opacity"
