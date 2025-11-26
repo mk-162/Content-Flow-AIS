@@ -22,22 +22,33 @@ This is the core insight we're selling. As AI assistants become the primary way 
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │  ┌──────────┐    ┌──────────────┐    ┌─────────────┐    ┌───────────┐  │
-│  │  1. URL  │───▶│ 2. Analysis  │───▶│ 3. Profile  │───▶│ 4. Create │  │
-│  │  Input   │    │   Loading    │    │   Review    │    │  Account  │  │
+│  │  1. URL  │───▶│ 2. Analysis  │───▶│ 3. Profile  │───▶│ 4. Demo   │  │
+│  │  Input   │    │   Loading    │    │   Review    │    │  Output   │  │
 │  └──────────┘    └──────────────┘    └─────────────┘    └───────────┘  │
 │                                                                         │
 │  ┌──────────┐    ┌──────────────┐    ┌─────────────┐    ┌───────────┐  │
-│  │ 5. Pick  │───▶│ 6. Category  │───▶│ 7. Subcat   │───▶│ 8. Main   │  │
-│  │ Project  │    │  Generation  │    │ Generation  │    │ Workspace │  │
+│  │ 5. Pick  │───▶│ 6. Category  │───▶│ 7. CREATE   │───▶│ 8. Subcat │  │
+│  │ Project  │    │  Generation  │    │   ACCOUNT   │    │ Generation│  │
 │  └──────────┘    └──────────────┘    └─────────────┘    └───────────┘  │
+│                           ⬆                                             │
+│               SUNK COST MAXIMUM ────┘                                   │
 │                                                                         │
-│                              ▼                                          │
-│                     ┌───────────────┐                                   │
-│                     │  FREE LIMIT   │──────▶ Subscription Paywall       │
-│                     │  (5 articles) │                                   │
-│                     └───────────────┘                                   │
+│                     ┌───────────────┐    ┌───────────┐                  │
+│                     │  9. Main      │───▶│FREE LIMIT │──▶ Paywall       │
+│                     │   Workspace   │    │(5 articles)│                  │
+│                     └───────────────┘    └───────────┘                  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Why Account Creation After Categories?
+
+**Sunk Cost Psychology at Maximum:**
+- ✅ They've seen their business profile (5 mins invested)
+- ✅ They've reviewed and edited their profile (trust built)
+- ✅ They've seen a demo article in their voice (quality proven)
+- ✅ They've chosen a project (decision made)
+- ✅ They've generated and curated 5 categories (REAL WORK DONE)
+- 🔒 NOW we ask for account → They don't want to lose all this work!
 
 ---
 
@@ -182,26 +193,92 @@ const educationalFacts = [
 
 ### Technical Backend Process
 
-While the animation runs, the backend executes:
+While the animation runs, the backend executes a comprehensive website analysis:
 
+#### A. Page Fetching (0-2s)
 ```typescript
-interface WebsiteAnalysis {
-  // Page scanning
-  crawlHomepage(): Promise<PageContent>;
-  extractMetadata(): Promise<Metadata>;
+interface PageFetcher {
+  // Fetch key pages
+  fetchHomepage(): Promise<PageContent>;
+  fetchAboutPage(): Promise<PageContent>;
+  fetchCategoryPages(): Promise<PageContent[]>;
+  fetchBlogResources(): Promise<PageContent[]>;
+  fetchHighLinkPages(): Promise<PageContent[]>;  // Pages with >X internal links
+}
+```
 
-  // Content analysis
-  analyzeWritingStyle(): Promise<WritingStyle>;
-  detectContentTypes(): Promise<ContentType[]>;
-  identifyProducts(): Promise<Product[]>;
+#### B. Text Extraction (2-5s)
+```typescript
+interface TextExtractor {
+  // Visible content
+  extractHeadings(): string[];           // H1, H2, H3
+  extractBodyText(): string[];           // Paragraphs
+  extractCTAs(): string[];               // Buttons, links
+  extractHeroStatements(): string[];     // Above-fold messaging
+  extractProductDescriptions(): string[];
+}
+```
 
-  // Audience profiling
-  inferTargetAudience(): Promise<AudienceProfile>;
-  detectIndustry(): Promise<Industry>;
+#### C. Meta & Brand Signals (5-8s)
+```typescript
+interface MetaExtractor {
+  // SEO & structured data
+  extractTitleTags(): string[];
+  extractMetaDescriptions(): string[];
+  extractSchemaOrg(): SchemaData;
+  extractNavigationLabels(): string[];
+  extractBreadcrumbs(): string[];
+  extractProductCategories(): string[];
+  extractPricingSignals(): PricingData;
+  extractTestimonials(): string[];
+}
+```
 
-  // Opportunity scoring
-  calculateContentGaps(): Promise<ContentGap[]>;
-  scoreOpportunity(): Promise<OpportunityScore>;
+#### D. Brand Voice Analysis (8-12s)
+```typescript
+interface VoiceAnalyzer {
+  // LLM-powered analysis
+  detectTone(): 'formal' | 'conversational' | 'expert' | 'playful';
+  analyzeSentenceStructure(): SentencePattern;
+  measureVocabularyRichness(): number;
+  extractIndustryTerminology(): string[];
+  identifyValuePropositions(): string[];
+  detectPositioning(): 'premium' | 'value' | 'expert' | 'friendly' | 'enterprise';
+}
+```
+
+#### E. Audience Detection (12-15s)
+```typescript
+interface AudienceDetector {
+  // Infer target audience from copy
+  analyzeLanguageStyle(): LanguageProfile;
+  detectProblemFraming(): string[];
+  inferDemographics(): Demographics;
+  extractUseCases(): string[];
+  detectB2BvsB2C(): 'B2B' | 'B2C' | 'both';
+  analyzeProfessionalTone(): number;  // 0-100
+}
+```
+
+#### F. Product/Service Categorization (15-20s)
+```typescript
+interface ProductAnalyzer {
+  parseProductGrids(): Product[];
+  detectRepeatedPatterns(): Pattern[];
+  identifySKUs(): string[];
+  detectServiceBundles(): Service[];
+  identifyCoreVerticals(): string[];
+}
+```
+
+#### G. Competitor Detection (20-25s) ⭐ NEW
+```typescript
+interface CompetitorDetector {
+  // Auto-identify competitive landscape
+  findDirectCompetitors(): Competitor[];
+  findIndirectCompetitors(): Competitor[];
+  findContentCompetitors(): Competitor[];  // Who ranks for their keywords
+  compareContentDepth(): ComparisonReport;
 }
 ```
 
@@ -232,45 +309,61 @@ Build trust by showing users we **understand their business**. Give them control
 │   │  that could be driving traffic from AI assistants.             │  │
 │   └─────────────────────────────────────────────────────────────────┘  │
 │                                                                        │
+│   ┌─────────────────────────────────────────────────────────────────┐  │
+│   │  BRAND STRENGTH AUDIT                              ⭐ NEW       │  │
+│   │                                                                 │  │
+│   │  Content Depth:      ████████░░  80%  "Good coverage"          │  │
+│   │  SEO Readiness:      ██████░░░░  60%  "Room for improvement"   │  │
+│   │  Voice Consistency:  █████████░  90%  "Very consistent"        │  │
+│   │  Messaging Clarity:  ███████░░░  70%  "Could be sharper"       │  │
+│   │                                                                 │  │
+│   │  💡 Top recommendation: Expand content in 'Recovery' category  │  │
+│   └─────────────────────────────────────────────────────────────────┘  │
+│                                                                        │
 │  ══════════════════════════════════════════════════════════════════   │
 │                                                                        │
 │   📊 BUSINESS PROFILE                                    [Edit All ✏️] │
 │                                                                        │
 │   ┌─────────────────────────────────────────────────────────────────┐  │
 │   │                                                                 │  │
-│   │  INDUSTRY                                              [Edit]   │  │
+│   │  INDUSTRY                                    [Edit] [🔄 Regen]  │  │
 │   │  E-commerce / Sporting Goods / Cycling Equipment                │  │
+│   │  📍 Detected from: Homepage, About page                         │  │
 │   │                                                                 │  │
 │   │  ─────────────────────────────────────────────────────────────  │  │
 │   │                                                                 │  │
-│   │  TARGET AUDIENCE                                       [Edit]   │  │
+│   │  TARGET AUDIENCE                              [Edit] [🔄 Regen]  │  │
 │   │  • Primary: Cycling enthusiasts aged 25-45                      │  │
 │   │  • Secondary: Competitive amateur cyclists                      │  │
 │   │  • Geographic: UK & Europe focused                              │  │
 │   │  • Income: Middle to high disposable income                     │  │
+│   │  📍 Detected from: About page, Product descriptions             │  │
 │   │                                                                 │  │
 │   │  ─────────────────────────────────────────────────────────────  │  │
 │   │                                                                 │  │
-│   │  PRODUCTS/SERVICES DETECTED                            [Edit]   │  │
+│   │  PRODUCTS/SERVICES DETECTED                  [Edit] [🔄 Regen]  │  │
 │   │  • Road bikes and frames                                        │  │
 │   │  • Cycling apparel and accessories                              │  │
 │   │  • Bike components and parts                                    │  │
 │   │  • Nutrition and hydration products                             │  │
+│   │  📍 Detected from: Navigation, Product pages                    │  │
 │   │                                                                 │  │
 │   │  ─────────────────────────────────────────────────────────────  │  │
 │   │                                                                 │  │
-│   │  BRAND VOICE                                           [Edit]   │  │
+│   │  BRAND VOICE                                 [Edit] [🔄 Regen]  │  │
 │   │  Tone: Professional yet approachable                            │  │
 │   │  Style: Technical expertise with enthusiasm                     │  │
 │   │  Personality: Passionate, knowledgeable, community-focused      │  │
+│   │  📍 Detected from: Blog posts, About page copy                  │  │
 │   │                                                                 │  │
 │   │  ─────────────────────────────────────────────────────────────  │  │
 │   │                                                                 │  │
-│   │  CONTENT STYLE                                         [Edit]   │  │
+│   │  CONTENT STYLE                               [Edit] [🔄 Regen]  │  │
 │   │  • Long-form educational articles                               │  │
 │   │  • Product comparison guides                                    │  │
 │   │  • How-to tutorials with technical detail                       │  │
 │   │  • Community stories and testimonials                           │  │
+│   │  📍 Detected from: Blog, Resources section                      │  │
 │   │                                                                 │  │
 │   └─────────────────────────────────────────────────────────────────┘  │
 │                                                                        │
@@ -395,7 +488,67 @@ When user clicks [Edit]:
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Improvements to Consider
+### Smart Tweaks Panel ⭐ NEW
+
+Below each profile card, show contextual quick actions:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  💡 SMART TWEAKS                                                        │
+│                                                                         │
+│  [Make tone more professional]  [Broaden target audience]               │
+│  [Add B2B angle]  [Focus on premium positioning]                        │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+Clicking a tweak automatically regenerates that section with the adjustment applied.
+
+### "Who Do You Want to Sound Like?" ⭐ NEW
+
+Powerful emotional engagement question after brand voice detection:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│  🎯 Refine your voice: Who do you want to sound more like?             │
+│                                                                         │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐       │
+│  │  Apple  │  │ HubSpot │  │Innocent │  │  Nike   │  │Patagonia│       │
+│  │ Premium │  │ Helpful │  │  Witty  │  │Inspiring│  │ Purpose │       │
+│  │ Minimal │  │Technical│  │  Fun    │  │  Bold   │  │ Driven  │       │
+│  └─────────┘  └─────────┘  └─────────┘  └─────────┘  └─────────┘       │
+│                                                                         │
+│  Or type a brand: [                                          ]         │
+│                                                                         │
+│  This helps us calibrate your content generation style.                 │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Voice Preview Sample ⭐ NEW
+
+Show how their brand voice would sound in actual content:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  📝 VOICE PREVIEW                                                       │
+│                                                                         │
+│  "Here's how your brand voice would sound in an article:"              │
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │  Whether you're pushing through a century ride or recovering    │   │
+│  │  from an intense training session, proper nutrition isn't just  │   │
+│  │  helpful—it's essential. We've tested dozens of recovery        │   │
+│  │  drinks to find what actually works for serious cyclists...     │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  ✓ Sounds right    ✗ Adjust voice                                      │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Additional Improvements
 
 1. **Confidence Indicators**: Show AI confidence level for each section
    - High confidence (90%+): Green checkmark
@@ -404,23 +557,102 @@ When user clicks [Edit]:
 
 2. **Comparison View**: "How does this compare to your competitors?"
 
-3. **Quick Fixes**: AI-suggested improvements for each section
+3. **Source Evidence Tooltips**: Every detected value shows where it was found
+   - Hover for full context: "Detected from your About page: 'We serve passionate cyclists...'"
 
-4. **Voice Preview**: "Here's how your brand voice would sound in content:"
-   - Show a sample paragraph written in detected voice
+4. **Multi-Page Scanner Toggle** ⭐ NEW
+   - Default: Homepage + key pages
+   - Optional: "Add more URLs for deeper accuracy"
+   - Let users paste additional URLs to scan
 
 ---
 
-## Step 4: Account Creation
+## Step 3.5: Instant Demo Output ⭐ NEW (THE WOW MOMENT)
 
 ### Purpose
-Convert anonymous users to registered accounts at the **moment of maximum engagement** — right after they've seen the value.
+**Lock in the magic** by immediately generating something tangible. This is the psychological point of no return.
 
-### Timing Rationale
-Account creation comes AFTER profile review because:
-1. User has invested time and seen personalized results
-2. Sunk cost psychology — they don't want to lose their analysis
-3. Value has been demonstrated, not just promised
+### Trigger
+After clicking "Looks Good! Continue →" on profile review, BEFORE account creation.
+
+### Design
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                                                                        │
+│                    ✨ Here's a taste of what we can do...              │
+│                                                                        │
+│   Based on your profile, we've generated your first content piece:     │
+│                                                                        │
+│   ┌─────────────────────────────────────────────────────────────────┐  │
+│   │                                                                 │  │
+│   │  📄 ARTICLE PREVIEW                                             │  │
+│   │                                                                 │  │
+│   │  "The Complete Guide to Recovery Nutrition for Cyclists"        │  │
+│   │                                                                 │  │
+│   │  ─────────────────────────────────────────────────────────────  │  │
+│   │                                                                 │  │
+│   │  Whether you're pushing through a century ride or recovering    │  │
+│   │  from an intense training block, what you eat in the 30         │  │
+│   │  minutes after cycling matters more than almost any other       │  │
+│   │  nutritional decision you'll make.                              │  │
+│   │                                                                 │  │
+│   │  In this guide, we'll cover:                                    │  │
+│   │  • The science behind the "glycogen window"                     │  │
+│   │  • Optimal protein-to-carb ratios for cyclists                  │  │
+│   │  • Our top 5 recovery meal recipes                              │  │
+│   │  • When supplements actually help (and when they don't)         │  │
+│   │                                                                 │  │
+│   │  [Continue reading... 🔒 Create free account to unlock]         │  │
+│   │                                                                 │  │
+│   └─────────────────────────────────────────────────────────────────┘  │
+│                                                                        │
+│   This is just ONE of the 156 content opportunities we identified.    │
+│                                                                        │
+│   ─────────────────────────────────────────────────────────────────    │
+│                                                                        │
+│   Or choose a different first article:                                 │
+│                                                                        │
+│   [Pre-Workout Fueling]  [Hydration Guide]  [Race Day Nutrition]       │
+│                                                                        │
+│               [Create Free Account to Unlock Full Article →]           │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### Why This Works
+
+1. **Tangible Value**: They can SEE the quality of output
+2. **Personalized**: Uses their detected brand voice
+3. **Teaser Effect**: Shows first paragraph but locks the rest
+4. **FOMO**: "This is ONE of 156 opportunities"
+5. **Choice**: Let them pick a different topic if the default doesn't resonate
+
+### Alternative Demo Outputs (User Choice)
+
+Offer multiple "first taste" options:
+
+| Option | Best For | Output |
+|--------|----------|--------|
+| **Article Preview** | Content-focused users | First 200 words + outline |
+| **Social Post Pack** | Social-heavy brands | 5 LinkedIn posts |
+| **Content Calendar** | Planners | 30-day visual calendar |
+| **Homepage Rewrite** | Marketing teams | Hero section alternative |
+
+---
+
+## Step 7: Account Creation (After Categories)
+
+### Purpose
+Convert anonymous users to registered accounts at the **moment of maximum sunk cost** — after they've curated their category structure.
+
+### Timing Rationale (MOVED TO AFTER CATEGORIES)
+Account creation now comes AFTER category generation because:
+1. User has invested significant time curating their categories (10-15 mins)
+2. They've done REAL WORK — choosing, deleting, adding categories
+3. They've already made strategic decisions about their content
+4. Sunk cost psychology is at MAXIMUM — they absolutely don't want to start over
+5. Value has been proven multiple times (profile, demo article, categories)
 
 ### Design Specification
 
@@ -431,13 +663,20 @@ Account creation comes AFTER profile review because:
 │                                                                        │
 │  ══════════════════════════════════════════════════════════════════   │
 │                                                                        │
-│         🎉 Great! Let's save your profile                              │
+│         💾 Save your progress                                          │
 │                                                                        │
-│         Create a free account to:                                      │
-│         ✓ Save your business profile                                   │
+│   ┌─────────────────────────────────────────────────────────────────┐  │
+│   │  ✓ Business profile created                                     │  │
+│   │  ✓ Nutrition & Performance project                              │  │
+│   │  ✓ 5 categories configured                                      │  │
+│   │  ✓ 156 content opportunities identified                         │  │
+│   └─────────────────────────────────────────────────────────────────┘  │
+│                                                                        │
+│         Create a free account to keep your work:                       │
+│         ✓ Save everything you've built                                 │
 │         ✓ Generate 5 AI-powered articles free                          │
+│         ✓ Generate subcategories for your categories                   │
 │         ✓ Access your content opportunity roadmap                      │
-│         ✓ Export and publish content                                   │
 │                                                                        │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
 │   │                                                                 │  │
@@ -515,7 +754,7 @@ async function convertAnonymousToUser(
 
 ---
 
-## Step 5: Project Selection/Creation
+## Step 5: Project Selection/Creation (Pre-Account)
 
 ### The Project Concept
 
@@ -591,7 +830,7 @@ This is the strategic decision point. Projects represent distinct content vertic
 
 ---
 
-## Step 6: Category Generation
+## Step 6: Category Generation (Pre-Account - SUNK COST BUILDER)
 
 ### Value Proposition Explainer
 
@@ -723,7 +962,7 @@ interface CategorySuggestion {
 
 ---
 
-## Step 7: Subcategory Generation
+## Step 8: Subcategory Generation (Post-Account)
 
 ### Design: Progressive Tree Building
 
@@ -803,7 +1042,7 @@ When "Generate 5" is clicked:
 
 ---
 
-## Step 8: Workspace Landing (With Tooltips)
+## Step 9: Workspace Landing (With Tooltips)
 
 ### Purpose
 Transition from onboarding to product usage with **guided discovery**.
@@ -879,6 +1118,28 @@ const tooltipTour = [
 │                                                                        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Forward Momentum Options ⭐ NEW
+
+Show clear next actions to maintain engagement:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                                                                        │
+│   🚀 What would you like to do first?                                  │
+│                                                                        │
+│   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │
+│   │ Generate    │  │ Scan My     │  │ Build My    │  │ Import      │  │
+│   │ First       │  │ Competitors │  │ Content     │  │ Existing    │  │
+│   │ Article     │  │             │  │ Plan        │  │ Blog Posts  │  │
+│   │             │  │             │  │             │  │             │  │
+│   │ [⭐ Quick]  │  │ [Unlock]    │  │ [Build]     │  │ [Import]    │  │
+│   └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘  │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+This accelerates time-to-value by showing clear paths forward.
 
 ---
 
@@ -1166,6 +1427,33 @@ const onboardingEvents = {
 
 ---
 
-*Document Version: 1.0*
+## Summary of Key Differentiators
+
+What makes this onboarding workflow fantastic:
+
+| Differentiator | Why It Works |
+|----------------|--------------|
+| **Instant gratification** | Value delivered in 60 seconds, before signup |
+| **Psychological momentum** | Platform "understands them" → massive activation boost |
+| **Editable but not overwhelming** | Draft profile, not empty forms |
+| **Evidence-based extraction** | Source tooltips build trust |
+| **Smart refinement UX** | Inline edits + regenerate keeps users in flow |
+| **Sunk cost timing** | Account creation after maximum work investment |
+| **Demo output wow moment** | Tangible content before commitment |
+| **Forward momentum options** | Clear next steps post-onboarding |
+| **Future automation baked in** | Profile becomes foundation for all content |
+
+---
+
+## Document History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | Nov 2024 | Initial comprehensive planning document |
+| 1.1 | Nov 2024 | Merged best practices: source evidence, regenerate buttons, smart tweaks, "sound like" feature, instant demo output, brand strength score, detailed crawler spec, forward momentum. Moved account creation to after category generation for maximum sunk cost psychology. |
+
+---
+
+*Document Version: 1.1*
 *Last Updated: November 2024*
 *Author: ContentFlow AI Team*
