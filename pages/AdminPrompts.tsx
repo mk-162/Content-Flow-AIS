@@ -4,6 +4,7 @@ import { ArrowLeft, Save, Terminal, Cpu, AlertTriangle, FileText, Share2, Mail, 
 import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
 import { AdminConfig, ContentType, PromptType } from '../types';
+import { clearCaches } from '../services/geminiService';
 
 // DEFAULT PROMPTS - Content Generation
 const DEFAULT_CONTENT_PROMPTS: Record<ContentType, string> = {
@@ -97,17 +98,27 @@ Requirements:
 const DEFAULT_SYSTEM_PROMPTS: Record<PromptType, string> = {
     [PromptType.TITLE_GENERATION]: `You are an expert Content Strategist.
 
+{{#if projectContext}}
+{{projectContext}}
+{{/if}}
+{{#if businessContext}}
+{{businessContext}}
+{{/if}}
+
 Generate {{count}} high-quality, SEO-optimized blog post ideas for the category: "{{categoryName}}"
 
-Context: {{categoryDescription}}
+Category Description: {{categoryDescription}}
+
+CRITICAL: All ideas MUST be directly relevant to the project and business context above. Do NOT generate generic content or content about unrelated topics.
 
 For each idea, provide:
-1. **Title**: Compelling, click-worthy, 50-60 characters
+1. **Title**: Compelling, click-worthy, 50-60 characters, specific to this business
 2. **Teaser**: 1-2 sentence description of what the post should cover (this guides the writer)
-3. **Keywords**: 3-5 target SEO keywords
+3. **Keywords**: 3-5 target SEO keywords relevant to this specific business/industry
 
 Ensure titles are:
-- Actionable and specific
+- Directly relevant to the project/business context
+- Actionable and specific to this industry
 - Include power words
 - Address user pain points or curiosity
 - Optimized for search intent
@@ -166,7 +177,24 @@ Note: If you cannot access the website directly, provide guidance on what to loo
 const DEFAULT_SUMMARY_PROMPT = `Summarize the following content in 2-3 sentences, capturing the main value proposition and key takeaways.
 Content: {{content}}`;
 
-type TabType = 'content' | 'system';
+// DEFAULT PROMPTS - Image Generation
+const DEFAULT_IMAGE_GENERATION_PROMPT = `Create a professional, high-quality image for a blog post.
+
+{{#if brandStyle}}
+Brand Style: {{brandStyle}}
+{{/if}}
+
+Scene: {{prompt}}
+
+Requirements:
+- Clean, modern aesthetic
+- Professional lighting
+- High resolution quality
+- Suitable for web/blog use
+- No text overlays unless specifically requested
+- Photorealistic or appropriate style as indicated`;
+
+type TabType = 'content' | 'system' | 'image';
 
 export const AdminPrompts: React.FC = () => {
     const navigate = useNavigate();
@@ -208,6 +236,7 @@ export const AdminPrompts: React.FC = () => {
                     });
 
                     if (!data.prompts.summaryPrompt) data.prompts.summaryPrompt = DEFAULT_SUMMARY_PROMPT;
+                    if (!data.prompts.imageGenerationPrompt) data.prompts.imageGenerationPrompt = DEFAULT_IMAGE_GENERATION_PROMPT;
                     setConfig(data);
                 } else {
                     // Initialize with defaults if not exists
@@ -215,9 +244,10 @@ export const AdminPrompts: React.FC = () => {
                         prompts: {
                             ...DEFAULT_CONTENT_PROMPTS,
                             ...DEFAULT_SYSTEM_PROMPTS,
-                            summaryPrompt: DEFAULT_SUMMARY_PROMPT
+                            summaryPrompt: DEFAULT_SUMMARY_PROMPT,
+                            imageGenerationPrompt: DEFAULT_IMAGE_GENERATION_PROMPT
                         },
-                        modelVersion: 'gemini-2.5-flash',
+                        modelVersion: 'gemini-2.0-flash',
                         updatedAt: Timestamp.now()
                     };
                     setConfig(defaultConfig);
@@ -258,6 +288,11 @@ export const AdminPrompts: React.FC = () => {
                 ...config,
                 updatedAt: Timestamp.now()
             });
+
+            // Clear caches so new prompts take effect immediately
+            clearCaches();
+            console.log('[AdminPrompts] Caches cleared after save');
+
             setSuccessMsg('Prompts saved successfully!');
             setTimeout(() => setSuccessMsg(''), 3000);
         } catch (error) {
@@ -293,100 +328,109 @@ export const AdminPrompts: React.FC = () => {
             <div className="max-w-5xl mx-auto p-8 pb-16">
                 <button
                     onClick={() => navigate('/')}
-                    className="flex items-center text-slate-400 hover:text-cyan-400 mb-8 transition-colors"
+                    className="flex items-center text-slate-500 hover:text-cyan-400 mb-8 transition-colors text-sm uppercase tracking-wider font-medium"
                 >
-                    <ArrowLeft size={20} className="mr-2" />
+                    <ArrowLeft size={16} className="mr-2" />
                     Back to Dashboard
                 </button>
 
                 <div className="flex items-center justify-between mb-8">
                     <div>
-                        <h1 className="text-3xl font-bold text-white mb-2 flex items-center">
-                            <Terminal size={32} className="mr-3 text-purple-500" />
+                        <h1 className="text-2xl font-bold text-white mb-1 flex items-center">
+                            <Terminal size={24} className="mr-3 text-purple-500" />
                             Admin Prompt Management
                         </h1>
-                        <p className="text-slate-400">Configure all AI prompts used throughout the system.</p>
+                        <p className="text-slate-500 text-sm">Configure all AI prompts used throughout the system.</p>
                     </div>
                     <button
                         onClick={handleSave}
                         disabled={saving}
-                        className="flex items-center px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold transition-colors disabled:opacity-50"
+                        className="flex items-center px-5 py-2.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold uppercase tracking-wider transition-colors disabled:opacity-50"
                     >
-                        <Save size={20} className="mr-2" />
+                        <Save size={16} className="mr-2" />
                         {saving ? 'Saving...' : 'Save All Prompts'}
                     </button>
                 </div>
 
                 {successMsg && (
-                    <div className="mb-6 p-4 bg-emerald-500/10 border border-emerald-500/50 text-emerald-400 rounded-lg">
+                    <div className="mb-6 p-4 bg-emerald-500/10 border-l-4 border-emerald-500 text-emerald-400 text-sm">
                         {successMsg}
                     </div>
                 )}
 
-                <div className="grid gap-8">
+                <div className="grid gap-6">
                     {/* Model Info */}
-                    <section className="bg-[#1e293b] p-6 rounded-xl border border-slate-800 flex items-center justify-between">
+                    <section className="bg-slate-900 p-6 border border-slate-800 flex items-center justify-between">
                         <div className="flex items-center">
-                            <Cpu size={24} className="mr-3 text-cyan-400" />
+                            <Cpu size={20} className="mr-3 text-cyan-400" />
                             <div>
-                                <h3 className="text-lg font-bold text-white">Active AI Model</h3>
-                                <p className="text-slate-400 text-sm">The model currently used for generation tasks.</p>
+                                <h3 className="text-sm font-bold text-white">Active AI Model</h3>
+                                <p className="text-slate-500 text-xs">The model currently used for generation tasks.</p>
                             </div>
                         </div>
                         <select
                             value={config?.modelVersion}
                             onChange={(e) => setConfig({ ...config!, modelVersion: e.target.value })}
-                            className="px-4 py-2 bg-slate-900 rounded border border-slate-700 font-mono text-cyan-400 cursor-pointer hover:border-cyan-500 focus:border-cyan-500 outline-none"
+                            className="px-4 py-2.5 bg-slate-950 border border-slate-700 font-mono text-sm text-cyan-400 cursor-pointer hover:border-cyan-500 focus:border-cyan-500 outline-none"
                         >
-                            <option value="gemini-2.5-flash">gemini-2.5-flash (Recommended)</option>
+                            <option value="gemini-2.0-flash">gemini-2.0-flash (Recommended)</option>
                             <option value="gemini-2.0-flash">gemini-2.0-flash</option>
-                            <option value="gemini-1.5-flash">gemini-1.5-flash (Legacy)</option>
+                            <option value="gemini-2.0-flash">gemini-2.0-flash (Legacy)</option>
                         </select>
                     </section>
 
                     {/* Prompts */}
-                    <section className="bg-[#1e293b] p-6 rounded-xl border border-slate-800">
-                        <div className="flex items-center mb-6">
-                            <AlertTriangle size={20} className="mr-2 text-amber-400" />
-                            <p className="text-amber-400 text-sm">
+                    <section className="bg-slate-900 p-6 border border-slate-800">
+                        <div className="flex items-center mb-6 p-3 bg-amber-500/5 border-l-4 border-amber-500">
+                            <AlertTriangle size={16} className="mr-2 text-amber-400 shrink-0" />
+                            <p className="text-amber-400 text-xs">
                                 Warning: Changing these prompts will affect all future AI generation.
                                 Ensure you keep the placeholder variables (e.g. {'{{topic}}'}) intact.
                             </p>
                         </div>
 
                         {/* Main Tabs: Content vs System */}
-                        <div className="flex space-x-2 mb-6 border-b-2 border-slate-700">
+                        <div className="flex space-x-1 mb-6 border-b border-slate-700">
                             <button
                                 onClick={() => setActiveMainTab('content')}
-                                className={`px-6 py-3 font-bold uppercase text-sm tracking-wider transition-colors ${activeMainTab === 'content'
-                                    ? 'text-cyan-400 border-b-2 border-cyan-400 -mb-0.5'
-                                    : 'text-slate-400 hover:text-white'
+                                className={`px-5 py-2.5 font-bold uppercase text-xs tracking-wider transition-colors ${activeMainTab === 'content'
+                                    ? 'text-cyan-400 border-b-2 border-cyan-400 -mb-px bg-slate-800/50'
+                                    : 'text-slate-500 hover:text-white'
                                     }`}
                             >
                                 Content Generation
                             </button>
                             <button
                                 onClick={() => setActiveMainTab('system')}
-                                className={`px-6 py-3 font-bold uppercase text-sm tracking-wider transition-colors ${activeMainTab === 'system'
-                                    ? 'text-purple-400 border-b-2 border-purple-400 -mb-0.5'
-                                    : 'text-slate-400 hover:text-white'
+                                className={`px-5 py-2.5 font-bold uppercase text-xs tracking-wider transition-colors ${activeMainTab === 'system'
+                                    ? 'text-purple-400 border-b-2 border-purple-400 -mb-px bg-slate-800/50'
+                                    : 'text-slate-500 hover:text-white'
                                     }`}
                             >
                                 System Prompts
+                            </button>
+                            <button
+                                onClick={() => setActiveMainTab('image')}
+                                className={`px-5 py-2.5 font-bold uppercase text-xs tracking-wider transition-colors ${activeMainTab === 'image'
+                                    ? 'text-emerald-400 border-b-2 border-emerald-400 -mb-px bg-slate-800/50'
+                                    : 'text-slate-500 hover:text-white'
+                                    }`}
+                            >
+                                Image Generation
                             </button>
                         </div>
 
                         {/* Content Generation Prompts */}
                         {activeMainTab === 'content' && (
                             <>
-                                <div className="flex space-x-2 mb-6 border-b border-slate-700">
+                                <div className="flex space-x-1 mb-6 border-b border-slate-800">
                                     {Object.values(ContentType).map((type) => (
                                         <button
                                             key={type}
                                             onClick={() => setActiveContentTab(type)}
-                                            className={`flex items-center px-4 py-2 rounded-t-lg transition-colors ${activeContentTab === type
+                                            className={`flex items-center px-4 py-2 transition-colors text-xs font-bold uppercase tracking-wider ${activeContentTab === type
                                                 ? 'bg-slate-800 text-cyan-400 border-t border-x border-slate-700'
-                                                : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                                                : 'text-slate-500 hover:text-white hover:bg-slate-800/50'
                                                 }`}
                                         >
                                             <span className="mr-2">{getContentIcon(type)}</span>
@@ -395,20 +439,39 @@ export const AdminPrompts: React.FC = () => {
                                     ))}
                                 </div>
 
-                                <div className="space-y-8">
+                                <div className="space-y-6">
                                     <div>
-                                        <label className="block text-lg font-bold text-white mb-2">
+                                        <label className="block text-sm font-bold text-white mb-1">
                                             {activeContentTab} Generation Prompt
                                         </label>
-                                        <p className="text-slate-400 text-sm mb-3">
+                                        <p className="text-slate-500 text-xs mb-3">
                                             Used when generating {activeContentTab.toLowerCase()} content.
                                         </p>
                                         <textarea
                                             value={config?.prompts[activeContentTab] || ''}
                                             onChange={(e) => handlePromptChange(activeContentTab, e.target.value)}
                                             rows={20}
-                                            className="w-full bg-[#0f172a] border border-slate-700 rounded-lg p-4 text-slate-300 font-mono text-sm focus:outline-none focus:border-cyan-500 leading-relaxed"
+                                            className="w-full bg-slate-950 border border-slate-700 p-4 text-slate-300 font-mono text-sm focus:outline-none focus:border-cyan-500 leading-relaxed"
                                         />
+
+                                        {/* Variable Documentation */}
+                                        <div className="mt-4 p-4 bg-slate-950 border border-slate-700">
+                                            <div className="flex items-center mb-2">
+                                                <HelpCircle size={16} className="mr-2 text-cyan-400" />
+                                                <h4 className="text-xs font-bold text-white uppercase tracking-wider">Available Variables</h4>
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-2 text-xs">
+                                                <div><code className="text-cyan-400">{'{{topic}}'}</code> - Post title</div>
+                                                <div><code className="text-cyan-400">{'{{category}}'}</code> - Category name</div>
+                                                <div><code className="text-cyan-400">{'{{targetAudience}}'}</code> - Target audience</div>
+                                                <div><code className="text-cyan-400">{'{{geographic}}'}</code> - Geographic location</div>
+                                                <div><code className="text-cyan-400">{'{{tone}}'}</code> - Content tone</div>
+                                                <div><code className="text-cyan-400">{'{{brandMessage}}'}</code> - Brand message</div>
+                                                <div><code className="text-cyan-400">{'{{brandCompliance}}'}</code> - Compliance guidelines</div>
+                                                <div><code className="text-cyan-400">{'{{keywords}}'}</code> - Target keywords</div>
+                                                <div><code className="text-cyan-400">{'{{teaser}}'}</code> - Post teaser/focus</div>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </>
@@ -417,14 +480,14 @@ export const AdminPrompts: React.FC = () => {
                         {/* System Prompts */}
                         {activeMainTab === 'system' && (
                             <>
-                                <div className="flex space-x-2 mb-6 border-b border-slate-700">
+                                <div className="flex space-x-1 mb-6 border-b border-slate-800">
                                     {Object.values(PromptType).map((type) => (
                                         <button
                                             key={type}
                                             onClick={() => setActiveSystemTab(type)}
-                                            className={`flex items-center px-4 py-2 rounded-t-lg transition-colors ${activeSystemTab === type
+                                            className={`flex items-center px-4 py-2 transition-colors text-xs font-bold uppercase tracking-wider ${activeSystemTab === type
                                                 ? 'bg-slate-800 text-purple-400 border-t border-x border-slate-700'
-                                                : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                                                : 'text-slate-500 hover:text-white hover:bg-slate-800/50'
                                                 }`}
                                         >
                                             <span className="mr-2">{getSystemIcon(type)}</span>
@@ -433,12 +496,12 @@ export const AdminPrompts: React.FC = () => {
                                     ))}
                                 </div>
 
-                                <div className="space-y-8">
+                                <div className="space-y-6">
                                     <div>
-                                        <label className="block text-lg font-bold text-white mb-2">
+                                        <label className="block text-sm font-bold text-white mb-1">
                                             {activeSystemTab} Prompt
                                         </label>
-                                        <p className="text-slate-400 text-sm mb-3">
+                                        <p className="text-slate-500 text-xs mb-3">
                                             {activeSystemTab === PromptType.TITLE_GENERATION && 'Used when generating blog post titles and ideas.'}
                                             {activeSystemTab === PromptType.CATEGORY_SUGGESTIONS && 'Used to suggest improvements for existing categories.'}
                                             {activeSystemTab === PromptType.CATEGORY_BREAKDOWN && 'Used to suggest subcategories or new categories.'}
@@ -448,22 +511,97 @@ export const AdminPrompts: React.FC = () => {
                                             value={config?.prompts[activeSystemTab] || ''}
                                             onChange={(e) => handlePromptChange(activeSystemTab, e.target.value)}
                                             rows={20}
-                                            className="w-full bg-[#0f172a] border border-slate-700 rounded-lg p-4 text-slate-300 font-mono text-sm focus:outline-none focus:border-purple-500 leading-relaxed"
+                                            className="w-full bg-slate-950 border border-slate-700 p-4 text-slate-300 font-mono text-sm focus:outline-none focus:border-purple-500 leading-relaxed"
                                         />
+
+                                        {/* Variable Documentation for System Prompts */}
+                                        <div className="mt-4 p-4 bg-slate-950 border border-slate-700">
+                                            <div className="flex items-center mb-2">
+                                                <HelpCircle size={16} className="mr-2 text-purple-400" />
+                                                <h4 className="text-xs font-bold text-white uppercase tracking-wider">Available Variables</h4>
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-2 text-xs">
+                                                {activeSystemTab === PromptType.TITLE_GENERATION && (
+                                                    <>
+                                                        <div><code className="text-purple-400">{'{{count}}'}</code> - Number of titles to generate</div>
+                                                        <div><code className="text-purple-400">{'{{categoryName}}'}</code> - Category name</div>
+                                                        <div><code className="text-purple-400">{'{{categoryDescription}}'}</code> - Category description</div>
+                                                        <div><code className="text-purple-400">{'{{geographic}}'}</code> - Geographic location</div>
+                                                    </>
+                                                )}
+                                                {activeSystemTab === PromptType.CATEGORY_SUGGESTIONS && (
+                                                    <>
+                                                        <div><code className="text-purple-400">{'{{categoryName}}'}</code> - Category name</div>
+                                                    </>
+                                                )}
+                                                {activeSystemTab === PromptType.CATEGORY_BREAKDOWN && (
+                                                    <>
+                                                        <div><code className="text-purple-400">{'{{parentCategory}}'}</code> - Parent category (if any)</div>
+                                                        <div><code className="text-purple-400">{'{{query}}'}</code> - Search query or focus</div>
+                                                    </>
+                                                )}
+                                                {activeSystemTab === PromptType.BRAND_RESEARCH && (
+                                                    <>
+                                                        <div><code className="text-purple-400">{'{{websiteUrl}}'}</code> - Website URL to analyze</div>
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
                                     </div>
 
-                                    <div className="border-t border-slate-700 pt-8">
-                                        <label className="block text-lg font-bold text-white mb-2">Summary Generation Prompt</label>
-                                        <p className="text-slate-400 text-sm mb-3">Used for generating teasers and summaries.</p>
+                                    <div className="border-t border-slate-800 pt-6">
+                                        <label className="block text-sm font-bold text-white mb-1">Summary Generation Prompt</label>
+                                        <p className="text-slate-500 text-xs mb-3">Used for generating teasers and summaries.</p>
                                         <textarea
                                             value={config?.prompts.summaryPrompt || ''}
                                             onChange={(e) => handlePromptChange('summaryPrompt', e.target.value)}
                                             rows={6}
-                                            className="w-full bg-[#0f172a] border border-slate-700 rounded-lg p-4 text-slate-300 font-mono text-sm focus:outline-none focus:border-purple-500 leading-relaxed"
+                                            className="w-full bg-slate-950 border border-slate-700 p-4 text-slate-300 font-mono text-sm focus:outline-none focus:border-purple-500 leading-relaxed"
                                         />
                                     </div>
                                 </div>
                             </>
+                        )}
+
+                        {/* Image Generation Prompt */}
+                        {activeMainTab === 'image' && (
+                            <div className="space-y-6">
+                                <div>
+                                    <label className="block text-sm font-bold text-white mb-1">
+                                        Image Generation System Prompt
+                                    </label>
+                                    <p className="text-slate-500 text-xs mb-3">
+                                        Used when generating images for blog posts. This prompt wraps around user-provided scene descriptions.
+                                    </p>
+                                    <textarea
+                                        value={config?.prompts.imageGenerationPrompt || ''}
+                                        onChange={(e) => handlePromptChange('imageGenerationPrompt', e.target.value)}
+                                        rows={15}
+                                        className="w-full bg-slate-950 border border-slate-700 p-4 text-slate-300 font-mono text-sm focus:outline-none focus:border-emerald-500 leading-relaxed"
+                                    />
+
+                                    {/* Variable Documentation */}
+                                    <div className="mt-4 p-4 bg-slate-950 border border-slate-700">
+                                        <div className="flex items-center mb-2">
+                                            <HelpCircle size={16} className="mr-2 text-emerald-400" />
+                                            <h4 className="text-xs font-bold text-white uppercase tracking-wider">Available Variables</h4>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2 text-xs">
+                                            <div><code className="text-emerald-400">{'{{prompt}}'}</code> - User's scene description</div>
+                                            <div><code className="text-emerald-400">{'{{brandStyle}}'}</code> - Organization brand style</div>
+                                            <div><code className="text-emerald-400">{'{{#if brandStyle}}...{{/if}}'}</code> - Conditional block</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="p-4 bg-slate-950/50 border border-slate-800 rounded">
+                                    <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-2">Hierarchy Override</h4>
+                                    <p className="text-slate-500 text-xs">
+                                        This is the <span className="text-cyan-400">Admin Default</span> prompt. Organizations and Projects can override this in their settings.
+                                        Priority: <span className="text-emerald-400">Project</span> → <span className="text-purple-400">Organization</span> → <span className="text-cyan-400">Admin</span>
+                                    </p>
+                                </div>
+                            </div>
                         )}
                     </section>
                 </div>

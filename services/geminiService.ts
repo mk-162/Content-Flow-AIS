@@ -2,7 +2,8 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { doc, getDoc, addDoc, collection, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { ContentType, Tone, PromptType } from '../types';
+import { ContentType, Tone, PromptType, AdminConfig, Project } from '../types';
+import { buildContentContext, buildPromptBlock } from './contextBuilder';
 
 const getClient = () => {
   const apiKey = process.env.API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
@@ -32,14 +33,41 @@ const estimateTokens = (text: string): number => {
   return Math.ceil(words / 0.75);
 };
 
-// Timeout wrapper for API calls
-const withTimeout = <T>(promise: Promise<T>, timeoutMs: number = 30000): Promise<T> => {
+// Helper to add timeout to promises
+const withTimeout = <T>(promise: Promise<T>, timeoutMs: number = 60000): Promise<T> => {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) =>
       setTimeout(() => reject(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs)
     )
   ]);
+};
+
+// Helper to add retry logic with exponential backoff
+const withRetry = async <T>(
+  fn: () => Promise<T>,
+  retries: number = 3,
+  baseDelay: number = 1000
+): Promise<T> => {
+  try {
+    return await fn();
+  } catch (error: any) {
+    if (retries === 0) throw error;
+
+    // Only retry on specific errors (503, 429, timeout)
+    const isRetryable =
+      error?.message?.includes('503') ||
+      error?.message?.includes('UNAVAILABLE') ||
+      error?.message?.includes('overloaded') ||
+      error?.message?.includes('429') ||
+      error?.message?.includes('timed out');
+
+    if (!isRetryable) throw error;
+
+    console.warn(`⚠️ [Gemini] Request failed. Retrying in ${baseDelay}ms... (${retries} attempts left)`);
+    await new Promise(resolve => setTimeout(resolve, baseDelay));
+    return withRetry(fn, retries - 1, baseDelay * 2);
+  }
 };
 
 // Track AI API usage for billing
@@ -72,6 +100,84 @@ const trackUsage = async (
   }
 };
 
+// ============================================
+// PROMPT HELPER FUNCTIONS
+// ============================================
+
+/**
+ * Replace variables in a prompt template with actual values
+ * Supports:
+ * - {{variable}} - simple replacement
+ * - {{#if variable}}...{{/if}} - conditional blocks (included if variable has value)
+ * @param template - The prompt template with {{variable}} placeholders
+ * @param variables - Object with variable names and their values
+ * @returns The template with all variables replaced
+ */
+export const replacePromptVariables = (
+  template: string,
+  variables: Record<string, string | string[] | undefined>
+): string => {
+  let result = template;
+
+  // First, handle {{#if variable}}...{{/if}} conditionals
+  const conditionalRegex = /\{\{#if\s+(\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g;
+  result = result.replace(conditionalRegex, (match, varName, content) => {
+    const value = variables[varName];
+    // If variable has a truthy value, include the content; otherwise remove the block
+    if (value && (Array.isArray(value) ? value.length > 0 : value.trim() !== '')) {
+      return content;
+    }
+    return '';
+  });
+
+  // Then, replace simple {{variable}} placeholders
+  for (const [key, value] of Object.entries(variables)) {
+    if (value === undefined || value === null) {
+      continue;
+    }
+
+    // Convert arrays to comma-separated strings
+    const stringValue = Array.isArray(value) ? value.join(', ') : value;
+
+    // Replace all occurrences of {{key}} with the value
+    const regex = new RegExp(`\\{\\{${key}\\}\\}`, 'g');
+    result = result.replace(regex, stringValue);
+  }
+
+  // Clean up any remaining empty {{variable}} placeholders
+  result = result.replace(/\{\{[^}]+\}\}/g, '');
+
+  // Clean up excessive newlines
+  result = result.replace(/\n{3,}/g, '\n\n');
+
+  return result.trim();
+};
+
+/**
+ * Validate that all required variables are present in a template
+ * @param template - The prompt template to validate
+ * @param requiredVars - Array of required variable names
+ * @returns Object with isValid flag and array of missing variables
+ */
+export const validatePromptVariables = (
+  template: string,
+  requiredVars: string[]
+): { isValid: boolean; missing: string[] } => {
+  const missing: string[] = [];
+
+  for (const varName of requiredVars) {
+    const regex = new RegExp(`\\{\\{${varName}\\}\\}`, 'g');
+    if (!regex.test(template)) {
+      missing.push(varName);
+    }
+  }
+
+  return {
+    isValid: missing.length === 0,
+    missing
+  };
+};
+
 export interface GeneratedTitleData {
   title: string;
   teaser: string;
@@ -92,31 +198,124 @@ export const generateCategoryTitles = async (
     console.log('[Gemini] Getting AI client...');
     const ai = getClient();
 
+    // Build comprehensive business context from project
+    let fullContext = '';
+    if (organizationId && projectId) {
+      try {
+        const projectDoc = await getDoc(doc(db, `organizations/${organizationId}/projects`, projectId));
+        if (projectDoc.exists()) {
+          const projectData = projectDoc.data();
+          const bp = projectData.businessProfile;
+
+          if (bp) {
+            const contextParts: string[] = [];
+
+            // Business Identity
+            contextParts.push('**BUSINESS CONTEXT**');
+            if (bp.businessName) contextParts.push(`Business: ${bp.businessName}`);
+            if (bp.businessSummary) contextParts.push(`About: ${bp.businessSummary}`);
+
+            // Industry
+            let industryStr = bp.industry?.primary || '';
+            if (bp.industry?.secondary) industryStr += ` / ${bp.industry.secondary}`;
+            if (bp.industry?.tertiary) industryStr += ` / ${bp.industry.tertiary}`;
+            if (industryStr) contextParts.push(`Industry: ${industryStr}`);
+
+            // Offerings
+            if (bp.offerings?.categories?.length) {
+              const offeringLabel = bp.offerings.type === 'products' ? 'Products' :
+                bp.offerings.type === 'services' ? 'Services' : 'Offerings';
+              contextParts.push(`${offeringLabel}: ${bp.offerings.categories.join(', ')}`);
+            }
+
+            // Unique Value
+            if (bp.brandVoice?.uniqueSellingPoints?.length) {
+              contextParts.push(`Value Proposition: ${bp.brandVoice.uniqueSellingPoints.join('. ')}`);
+            }
+
+            // Target Audience
+            contextParts.push('');
+            contextParts.push('**TARGET AUDIENCE**');
+            if (bp.targetAudience?.primary) contextParts.push(`Primary: ${bp.targetAudience.primary}`);
+            if (bp.targetAudience?.demographics) {
+              const demo = bp.targetAudience.demographics;
+              if (demo.ageRange || demo.income) {
+                contextParts.push(`Demographics: ${demo.ageRange || 'All ages'}${demo.income ? `, ${demo.income}` : ''}`);
+              }
+            }
+            if (bp.targetAudience?.painPoints?.length) {
+              contextParts.push(`Pain Points: ${bp.targetAudience.painPoints.join('; ')}`);
+            }
+
+            // Brand Voice
+            if (bp.brandVoice?.tone?.length) {
+              contextParts.push('');
+              contextParts.push('**BRAND VOICE**');
+              contextParts.push(`Tone: ${bp.brandVoice.tone.join(', ')}`);
+            }
+
+            fullContext = contextParts.join('\n');
+            console.log(`[Gemini] Using comprehensive business context`);
+          } else {
+            // Minimal context from project
+            fullContext = `Project: ${projectData.name}${projectData.description ? ` - ${projectData.description}` : ''}`;
+            console.log(`[Gemini] Using minimal project context: ${fullContext}`);
+          }
+        }
+      } catch (err) {
+        console.warn('[Gemini] Could not fetch project context:', err);
+      }
+    }
+
     // Fetch admin config for prompt template
     const adminConfig = await getAdminConfig();
     let prompt = '';
 
     if (adminConfig?.prompts?.[PromptType.TITLE_GENERATION]) {
-      // Use admin prompt template
-      prompt = adminConfig.prompts[PromptType.TITLE_GENERATION];
-      prompt = prompt.replace(/\{\{count\}\}/g, count.toString());
-      prompt = prompt.replace(/\{\{categoryName\}\}/g, categoryName);
-      prompt = prompt.replace(/\{\{categoryDescription\}\}/g, categoryDescription);
-    } else {
-      // Fallback prompt
-      prompt = `Generate ${count} high-quality blog post ideas for a category named "${categoryName}".
-      Context/Description: ${categoryDescription}.
+      // Use admin prompt template with helper function
+      prompt = replacePromptVariables(adminConfig.prompts[PromptType.TITLE_GENERATION], {
+        count: count.toString(),
+        categoryName,
+        categoryDescription,
+        projectContext: fullContext,
+        businessContext: ''
+      });
 
-      For each idea, provide:
-      1. A catchy, SEO-friendly Title.
-      2. A "Teaser" or "Prompt": A 1-2 sentence description of what the post should cover. This will be used as instructions for the writer.
-      3. Keywords: 3-5 target keywords or topics.`;
+      // If template doesn't include context, prepend it
+      if (fullContext && !prompt.includes('**BUSINESS CONTEXT**')) {
+        prompt = `${fullContext}\n\n${prompt}`;
+      }
+    } else {
+      // Fallback prompt with comprehensive context
+      prompt = `You are an expert Content Strategist specializing in AI-optimized content.
+
+${fullContext || 'No business context available.'}
+
+**CATEGORY CONTEXT**
+└─ Category: "${categoryName}"
+   Description: "${categoryDescription}"
+
+---
+
+**TASK:** Generate exactly ${count} high-quality blog post ideas for this category.
+
+CRITICAL REQUIREMENTS:
+1. Titles MUST be directly relevant to the category AND the business context above
+2. Titles should address the target audience's needs and pain points
+3. Each title should be specific, actionable, and SEO-friendly
+4. Titles should cover topics that AI assistants frequently answer questions about
+5. Include power words that drive engagement
+
+For each idea, provide:
+1. A catchy, SEO-friendly Title specific to this business
+2. A Teaser: 1-2 sentence description guiding what the post should cover
+3. Keywords: 3-5 target SEO keywords relevant to this specific business`;
     }
 
-    console.log('[Gemini] Calling generateContent with 30s timeout...');
-    const response = await withTimeout(
+    console.log('[Gemini] Calling generateContent with 60s timeout and retry...');
+    const response = await withRetry(() => withTimeout(
       ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-2.0-flash',
         contents: prompt,
         config: {
           responseMimeType: "application/json",
@@ -131,20 +330,52 @@ export const generateCategoryTitles = async (
                     title: { type: Type.STRING },
                     teaser: { type: Type.STRING },
                     keywords: { type: Type.ARRAY, items: { type: Type.STRING } }
-                  }
+                  },
+                  required: ['title', 'teaser', 'keywords']
                 }
               }
-            }
+            },
+            required: ['ideas']
           }
         }
       }),
-      30000 // 30 second timeout
-    );
+      60000 // 60 second timeout
+    ));
 
     console.log('[Gemini] Response received, parsing JSON...');
-    const json = JSON.parse(response.text || '{"ideas": []}');
+
+    // Handle potentially malformed JSON from AI
+    let json: any;
+    try {
+      json = JSON.parse(response.text || '{"ideas": []}');
+    } catch (parseError) {
+      console.warn('[Gemini] JSON parse failed, attempting to fix...');
+      const text = response.text || '';
+      // Try to find JSON object in response
+      const match = text.match(/\{[\s\S]*\}/);
+      if (match) {
+        try {
+          json = JSON.parse(match[0]);
+        } catch {
+          console.error('[Gemini] Could not parse JSON, returning empty');
+          json = { ideas: [] };
+        }
+      } else {
+        json = { ideas: [] };
+      }
+    }
+
     const ideas = json.ideas || [];
     console.log(`[Gemini] Successfully generated ${ideas.length} titles`);
+
+    // Log first idea to verify teaser is included
+    if (ideas.length > 0) {
+      console.log(`[Gemini] Sample idea:`, {
+        title: ideas[0].title,
+        teaser: ideas[0].teaser || '(missing)',
+        keywords: ideas[0].keywords
+      });
+    }
 
     // Track usage
     if (organizationId && projectId && userId) {
@@ -158,11 +389,16 @@ export const generateCategoryTitles = async (
         userId,
         1, // 1 API call
         totalTokens,
-        'gemini-2.5-flash'
+        'gemini-2.0-flash'
       );
     }
 
-    return ideas;
+    // Ensure we only return the requested number of ideas
+    // AI sometimes generates more than asked
+    const limitedIdeas = ideas.slice(0, count);
+    console.log(`[Gemini] Returning ${limitedIdeas.length} titles (requested: ${count})`);
+
+    return limitedIdeas;
   } catch (error: any) {
     console.error("❌ [Gemini] Title Generation Error:", error);
     console.error("Error details:", JSON.stringify(error, null, 2));
@@ -177,6 +413,10 @@ export const generateCategoryTitles = async (
       throw new Error('API quota exceeded. Please wait a few minutes and try again, or upgrade your Gemini API plan.');
     }
 
+    if (error?.message?.includes('503') || error?.message?.includes('UNAVAILABLE') || error?.message?.includes('overloaded')) {
+      throw new Error('The AI service is currently overloaded. Please wait a moment and try again.');
+    }
+
     if (error?.message?.includes('403') || error?.message?.includes('PERMISSION_DENIED')) {
       throw new Error('API key permission denied. Please check your Gemini API key configuration.');
     }
@@ -185,14 +425,8 @@ export const generateCategoryTitles = async (
       throw new Error('AI model not found. Please contact support.');
     }
 
-    // Fallback mock data for other errors
-    const mockData = Array.from({ length: count }).map((_, i) => ({
-      title: `Generated Title ${i + 1} for ${categoryName}`,
-      teaser: `This post will explore the key aspects of ${categoryName} and why it matters in 2024.`,
-      keywords: ["Trends", "Analysis", "Guide"]
-    }));
-    console.log(`[Gemini] Returning ${mockData.length} fallback titles`);
-    return mockData;
+    // Generic error
+    throw new Error(error?.message || 'Failed to generate titles. Please try again.');
   }
 };
 
@@ -300,6 +534,83 @@ const getOrgSettings = async (orgId: string): Promise<any> => {
   }
 };
 
+// Cache for project settings
+const projectSettingsCache = new Map<string, CacheEntry<any>>();
+const PROJECT_SETTINGS_TTL = 30 * 60 * 1000; // 30 minutes
+
+// Fetch Project Settings with caching
+const getProjectSettings = async (orgId: string, projectId: string): Promise<any> => {
+  const now = Date.now();
+  const cacheKey = `${orgId}:${projectId}`;
+  const cached = projectSettingsCache.get(cacheKey);
+
+  // Return cached data if still valid
+  if (cached && (now - cached.timestamp) < PROJECT_SETTINGS_TTL) {
+    console.log(`[Cache] Project ${projectId} settings served from cache`);
+    return cached.data;
+  }
+
+  // Fetch from Firestore
+  try {
+    console.log(`[Cache] Fetching project ${projectId} settings from Firestore...`);
+    const docSnap = await getDoc(doc(db, `organizations/${orgId}/projects`, projectId));
+    const data = docSnap.exists() ? docSnap.data() : null;
+
+    // Update cache
+    projectSettingsCache.set(cacheKey, { data, timestamp: now });
+    console.log(`[Cache] Project ${projectId} settings cached for 30 minutes`);
+
+    return data;
+  } catch (error) {
+    console.error('Error fetching project settings:', error);
+    // Return stale cache if available
+    return cached?.data || null;
+  }
+};
+
+/**
+ * Resolve a prompt using hierarchical override system.
+ * Priority: Project → Organization → Admin (most specific wins)
+ * 
+ * @param promptKey - The prompt key (ContentType, PromptType, or 'imageGeneration')
+ * @param orgId - Organization ID (optional)
+ * @param projectId - Project ID (optional)
+ * @returns The resolved prompt template string, or null if not found
+ */
+export const resolvePrompt = async (
+  promptKey: string,
+  orgId?: string,
+  projectId?: string
+): Promise<string | null> => {
+  // 1. Check project-level override (highest priority)
+  if (orgId && projectId) {
+    const projectData = await getProjectSettings(orgId, projectId);
+    if (projectData?.promptOverrides?.[promptKey]) {
+      console.log(`[Prompt] Using PROJECT override for ${promptKey}`);
+      return projectData.promptOverrides[promptKey];
+    }
+  }
+
+  // 2. Check org-level override
+  if (orgId) {
+    const orgData = await getOrgSettings(orgId);
+    if (orgData?.promptOverrides?.[promptKey]) {
+      console.log(`[Prompt] Using ORG override for ${promptKey}`);
+      return orgData.promptOverrides[promptKey];
+    }
+  }
+
+  // 3. Fall back to admin default (lowest priority)
+  const adminConfig = await getAdminConfig();
+  if (adminConfig?.prompts?.[promptKey]) {
+    console.log(`[Prompt] Using ADMIN default for ${promptKey}`);
+    return adminConfig.prompts[promptKey];
+  }
+
+  console.warn(`[Prompt] No prompt found for key: ${promptKey}`);
+  return null;
+};
+
 // Clear all caches (useful for testing or when data is updated)
 export const clearCaches = () => {
   adminConfigCache = null;
@@ -321,6 +632,7 @@ export const generatePostOutline = async (
   organizationId?: string,
   projectId?: string,
   userId?: string,
+  categoryDescription?: string,
   contentType: ContentType = ContentType.ARTICLE,
   tone: Tone = Tone.PROFESSIONAL
 ): Promise<string> => {
@@ -328,14 +640,31 @@ export const generatePostOutline = async (
     console.log(`[Gemini] 🎯 Starting content generation for: "${title}"`);
     const ai = getClient();
     let prompt = '';
-    let modelVersion = 'gemini-2.5-flash';
+    let modelVersion = 'gemini-2.0-flash';
 
-    // 1. Fetch Admin Config & Org Settings
-    console.log('[Gemini] 📥 Fetching admin config and org settings...');
-    const [adminConfig, orgData] = await Promise.all([
+    // 1. Fetch Admin Config, Org Settings, and Project
+    console.log('[Gemini] 📥 Fetching context data...');
+    const [adminConfig, orgData, projectDoc] = await Promise.all([
       getAdminConfig(),
-      organizationId ? getOrgSettings(organizationId) : null
+      organizationId ? getOrgSettings(organizationId) : null,
+      (organizationId && projectId) ? getDoc(doc(db, `organizations/${organizationId}/projects`, projectId)) : null
     ]);
+
+    // Build Business Context using Context Builder
+    let businessContextBlock = '';
+    if (projectDoc && projectDoc.exists()) {
+      const projectData = { id: projectDoc.id, ...projectDoc.data() } as Project;
+      // We don't have parent categories here easily, but we have the current category
+      const context = buildContentContext(projectData);
+
+      // Override the category chain in the context builder since we have specific params
+      context.categoryChain = [{ name: categoryName, description: categoryDescription || '' }];
+
+      businessContextBlock = buildPromptBlock(context);
+      console.log('[Gemini] ✅ Built business context from project profile');
+    } else {
+      console.warn('[Gemini] ⚠️ Project context not found, using defaults');
+    }
 
     console.log('[Gemini] ✅ Config fetched:', {
       hasAdminConfig: !!adminConfig,
@@ -351,52 +680,100 @@ export const generatePostOutline = async (
 
       // Auto-migrate old model names to new ones
       if (modelVersion === 'gemini-1.5-flash-001' || modelVersion === 'gemini-1.5-flash-latest') {
-        console.warn('⚠️ [Gemini] Auto-migrating old model name to gemini-2.5-flash');
-        modelVersion = 'gemini-2.5-flash';
+        console.warn('⚠️ [Gemini] Auto-migrating old model name to gemini-1.5-flash');
+        modelVersion = 'gemini-2.0-flash';
       }
     }
 
     // 3. Construct Prompt
-    // Check if we have a specific prompt for this content type
-    const template = adminConfig?.prompts?.[contentType];
+    // Check hierarchy: Project > Org > Admin > Default
+    let template = adminConfig?.prompts?.[contentType];
+
+    // Check Project Overrides
+    if (projectDoc && projectDoc.exists()) {
+      const projectData = { id: projectDoc.id, ...projectDoc.data() } as Project;
+      if (projectData.promptOverrides?.[contentType]) {
+        template = projectData.promptOverrides[contentType];
+        console.log(`[Gemini] 🚩 Using Project Override for ${contentType}`);
+      }
+    }
+
+    // Check Org Overrides (if no project override)
+    if (!projectDoc?.data()?.promptOverrides?.[contentType] && orgData?.promptOverrides?.[contentType]) {
+      template = orgData.promptOverrides[contentType];
+      console.log(`[Gemini] 🏢 Using Organization Override for ${contentType}`);
+    }
 
     if (template) {
-      // Use Admin Prompt Template
-      let finalPrompt = template;
+      // Use Resolved Prompt Template
+      // Extract geographic location from org data
+      let geographic = 'Global';
+      if (orgData?.targetAudience?.demographics?.geographic) {
+        geographic = Array.isArray(orgData.targetAudience.demographics.geographic)
+          ? orgData.targetAudience.demographics.geographic.join(', ')
+          : orgData.targetAudience.demographics.geographic;
+      }
 
-      // Replace variables
-      finalPrompt = finalPrompt.replace(/\{\{topic\}\}/g, title);
-      finalPrompt = finalPrompt.replace(/\{\{category\}\}/g, categoryName);
-      finalPrompt = finalPrompt.replace(/\{\{targetAudience\}\}/g, 'General Audience');
-      finalPrompt = finalPrompt.replace(/\{\{tone\}\}/g, tone);
-      finalPrompt = finalPrompt.replace(/\{\{brandMessage\}\}/g, orgData?.brandMessage || 'Not specified');
-      finalPrompt = finalPrompt.replace(/\{\{brandCompliance\}\}/g, orgData?.brandCompliance || 'None');
-      finalPrompt = finalPrompt.replace(/\{\{keywords\}\}/g, tags?.join(', ') || 'None');
-      finalPrompt = finalPrompt.replace(/\{\{teaser\}\}/g, teaser || 'None');
+      // Use helper function for variable replacement
+      prompt = replacePromptVariables(template, {
+        topic: title,
+        category: categoryName,
+        categoryDescription: categoryDescription || '',
+        targetAudience: orgData?.targetAudience?.primary || 'General Audience',
+        geographic,
+        tone,
+        brandMessage: orgData?.brandMessage || 'Not specified',
+        brandCompliance: orgData?.brandCompliance || 'None',
+        keywords: tags?.join(', ') || 'None',
+        teaser: teaser || 'None',
+        businessContext: businessContextBlock // Inject the built context
+      });
 
-      prompt = finalPrompt;
+      // If template doesn't include businessContext variable, prepend it
+      if (businessContextBlock && !prompt.includes('**BUSINESS CONTEXT**') && !prompt.includes('{{businessContext}}')) {
+        prompt = `${businessContextBlock}\n\n${prompt}`;
+      }
     } else {
+      // Extract geographic location from org data for fallback
+      let geographic = 'Global';
+      if (orgData?.targetAudience?.demographics?.geographic) {
+        geographic = Array.isArray(orgData.targetAudience.demographics.geographic)
+          ? orgData.targetAudience.demographics.geographic.join(', ')
+          : orgData.targetAudience.demographics.geographic;
+      }
+
       // Fallback to hardcoded prompt (Article default)
-      prompt = `Write a detailed ${contentType.toLowerCase()} about: "${title}" in the category "${categoryName}".
+      prompt = `
+      ${businessContextBlock}
+
+      Write a detailed ${contentType.toLowerCase()} about: "${title}" in the category "${categoryName}".
       
+      ${categoryDescription ? `Category Context: ${categoryDescription}` : ''}
       Tone: ${tone}
+      Target Geographic Location: ${geographic}
       ${teaser ? `**Specific Instructions/Focus:** ${teaser}` : ''}
       ${tags && tags.length > 0 ? `**Target Keywords to Include:** ${tags.join(', ')}` : ''}
       
       ${orgData?.brandMessage ? `**Brand Message:** ${orgData.brandMessage}` : ''}
       ${orgData?.brandCompliance ? `**Compliance Guidelines:** ${orgData.brandCompliance}` : ''}
 
-      IMPORTANT: Start directly with the markdown content. Do not include any preambles.
-      Format in clean Markdown.`;
+      IMPORTANT: 
+      - Start directly with the markdown content. Do not include any preambles.
+      - Use spelling, terminology, and cultural references appropriate for ${geographic} audience.
+      - Format in clean Markdown.`;
     }
 
     console.log('[Gemini] 📤 Calling API with model:', modelVersion);
     console.log('[Gemini] 📝 Prompt length:', prompt.length, 'chars');
 
-    const response = await ai.models.generateContent({
-      model: modelVersion,
-      contents: prompt,
-    });
+    // FIXED: Added timeout wrapper to prevent indefinite hangs
+    const response = await withRetry(() => withTimeout(
+      ai.models.generateContent({
+        model: modelVersion,
+        contents: prompt,
+      }),
+      60000 // 60 second timeout for content generation (longer than title generation)
+    ));
 
     console.log('[Gemini] ✅ API response received');
     const rawContent = response.text || "Could not generate content.";
@@ -425,9 +802,22 @@ export const generatePostOutline = async (
     console.error("❌ [Gemini] Content Generation Error:", error);
     console.error("❌ [Gemini] Error details:", JSON.stringify(error, null, 2));
 
+    // Check for timeout errors
+    if (error?.message?.includes('timed out')) {
+      const msg = 'Request timed out. The AI service is taking too long to respond. Please try again.';
+      console.error(`❌ [Gemini] ${msg}`);
+      throw new Error(msg);
+    }
+
     // Check for quota errors
     if (error?.message?.includes('429') || error?.message?.includes('RESOURCE_EXHAUSTED')) {
       const msg = 'API quota exceeded. Please wait a few minutes and try again, or upgrade your Gemini API plan.';
+      console.error(`❌ [Gemini] ${msg}`);
+      throw new Error(msg);
+    }
+
+    if (error?.message?.includes('503') || error?.message?.includes('UNAVAILABLE') || error?.message?.includes('overloaded')) {
+      const msg = 'The AI service is currently overloaded. Please wait a moment and try again.';
       console.error(`❌ [Gemini] ${msg}`);
       throw new Error(msg);
     }
@@ -457,24 +847,39 @@ export const getCategorySuggestions = async (categoryName: string): Promise<stri
     let prompt = '';
 
     if (adminConfig?.prompts?.[PromptType.CATEGORY_SUGGESTIONS]) {
-      prompt = adminConfig.prompts[PromptType.CATEGORY_SUGGESTIONS];
-      prompt = prompt.replace(/\{\{categoryName\}\}/g, categoryName);
+      prompt = replacePromptVariables(adminConfig.prompts[PromptType.CATEGORY_SUGGESTIONS], {
+        categoryName
+      });
     } else {
       prompt = `Analyze the content category "${categoryName}" and suggest 3 quick improvements or sub-niches to make it more specific and engaging for an audience. Return as a JSON array of strings.`;
     }
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: { type: Type.STRING }
+    const response = await withRetry(() => withTimeout(
+      ai.models.generateContent({
+        model: 'gemini-2.0-flash', // Using 1.5-flash for suggestions
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          }
         }
+      }),
+      60000 // 60 second timeout
+    ));
+
+    // Handle potentially malformed JSON
+    try {
+      return JSON.parse(response.text || '[]');
+    } catch {
+      const text = response.text || '';
+      const match = text.match(/\[[\s\S]*\]/);
+      if (match) {
+        try { return JSON.parse(match[0]); } catch { return []; }
       }
-    });
-    return JSON.parse(response.text || '[]');
+      return [];
+    }
   } catch (error: any) {
     console.error("Error getting category suggestions", error);
 
@@ -498,11 +903,86 @@ export interface CategorySuggestion {
   reason: string;
 }
 
-export const suggestCategories = async (query: string, parentCategoryName?: string): Promise<CategorySuggestion[]> => {
+export const suggestCategories = async (
+  query: string,
+  parentCategoryName?: string,
+  organizationId?: string,
+  projectId?: string,
+  parentCategoryDescription?: string // NEW: Pass parent's description for context
+): Promise<CategorySuggestion[]> => {
   try {
     const ai = getClient();
     const adminConfig = await getAdminConfig();
     let prompt = "";
+
+    // Build comprehensive business context from project
+    let fullContext = '';
+
+    if (organizationId && projectId) {
+      try {
+        const projectDoc = await getDoc(doc(db, `organizations/${organizationId}/projects`, projectId));
+        if (projectDoc.exists()) {
+          const projectData = projectDoc.data();
+          const bp = projectData.businessProfile;
+
+          if (bp) {
+            const contextParts: string[] = [];
+
+            // Business Identity
+            contextParts.push('**BUSINESS CONTEXT**');
+            if (bp.businessName) contextParts.push(`Business: ${bp.businessName}`);
+            if (bp.businessSummary) contextParts.push(`About: ${bp.businessSummary}`);
+
+            // Industry
+            let industryStr = bp.industry?.primary || '';
+            if (bp.industry?.secondary) industryStr += ` / ${bp.industry.secondary}`;
+            if (bp.industry?.tertiary) industryStr += ` / ${bp.industry.tertiary}`;
+            if (industryStr) contextParts.push(`Industry: ${industryStr}`);
+
+            // Offerings
+            if (bp.offerings?.categories?.length) {
+              const offeringLabel = bp.offerings.type === 'products' ? 'Products' :
+                bp.offerings.type === 'services' ? 'Services' : 'Offerings';
+              contextParts.push(`${offeringLabel}: ${bp.offerings.categories.join(', ')}`);
+            }
+
+            // Unique Value
+            if (bp.brandVoice?.uniqueSellingPoints?.length) {
+              contextParts.push(`Value Proposition: ${bp.brandVoice.uniqueSellingPoints.join('. ')}`);
+            }
+
+            // Target Audience
+            contextParts.push('');
+            contextParts.push('**TARGET AUDIENCE**');
+            if (bp.targetAudience?.primary) contextParts.push(`Primary: ${bp.targetAudience.primary}`);
+            if (bp.targetAudience?.demographics) {
+              const demo = bp.targetAudience.demographics;
+              if (demo.ageRange || demo.income) {
+                contextParts.push(`Demographics: ${demo.ageRange || 'All ages'}${demo.income ? `, ${demo.income}` : ''}`);
+              }
+            }
+            if (bp.targetAudience?.painPoints?.length) {
+              contextParts.push(`Pain Points: ${bp.targetAudience.painPoints.join('; ')}`);
+            }
+
+            // Brand Voice
+            if (bp.brandVoice?.tone?.length || bp.contentStyle?.types?.length) {
+              contextParts.push('');
+              contextParts.push('**BRAND VOICE**');
+              if (bp.brandVoice?.tone?.length) contextParts.push(`Tone: ${bp.brandVoice.tone.join(', ')}`);
+              if (bp.contentStyle?.types?.length) contextParts.push(`Content Types: ${bp.contentStyle.types.join(', ')}`);
+            }
+
+            fullContext = contextParts.join('\n');
+          } else {
+            // Minimal context from project name/description
+            fullContext = `Project: ${projectData.name}${projectData.description ? ` - ${projectData.description}` : ''}`;
+          }
+        }
+      } catch (err) {
+        console.warn('[Gemini] Could not fetch project context for categories:', err);
+      }
+    }
 
     if (adminConfig?.prompts?.[PromptType.CATEGORY_BREAKDOWN]) {
       // Use admin prompt template
@@ -533,51 +1013,111 @@ export const suggestCategories = async (query: string, parentCategoryName?: stri
         }
         prompt = prompt.replace('{{query}}', query);
       }
+
+      // Append context if available
+      if (fullContext) {
+        prompt = `${fullContext}\n\n${prompt}`;
+      }
+
+      // Force description requirement even for admin prompts
+      prompt += "\n\nIMPORTANT: You must provide a clear, specific description for each category explaining what content belongs in it.";
     } else {
-      // Fallback prompt
+      // Fallback prompt with comprehensive context
       if (parentCategoryName) {
-        prompt = `You are an expert Content Strategist.
-          The user has a main category: "${parentCategoryName}".
-          
-          Task: Break this down into 6 logical, distinct sub-categories or sub-niches.
-          ${query ? `Focus specifically on areas related to: "${query}".` : 'Ensure a broad coverage.'}
-          
-          Return a list of objects with name, description, and reason.`;
+        prompt = `You are an expert Content Strategist specializing in AI-optimized content.
+
+${fullContext || 'No business context available.'}
+
+**PARENT CATEGORY CONTEXT**
+└─ Category: "${parentCategoryName}"
+${parentCategoryDescription ? `   Description: "${parentCategoryDescription}"` : ''}
+
+---
+
+**TASK:** Break down the parent category above into 6 highly specific sub-categories.
+
+CRITICAL REQUIREMENTS:
+1. Subcategories MUST be directly relevant to both the parent category AND the business context above
+2. Subcategories should be specific enough to generate focused articles
+3. Each subcategory should address a distinct aspect of the parent topic
+4. Focus on topics that AI assistants frequently answer questions about
+${query ? `5. Focus specifically on areas related to: "${query}"` : ''}
+
+IMPORTANT: Return a JSON array of objects. Each object MUST have:
+- "name": The subcategory name (2-4 words)
+- "description": A specific description of what content belongs here (2-3 sentences)
+- "reason": Why this fits the parent category and business`;
       } else {
-        prompt = `You are an expert Content Strategist.
-          The user is looking for ideas for a new top-level content category related to: "${query}".
-          
-          Task: Suggest 5 distinct, high-value category names.
-          
-          Return a list of objects with name, description, and reason.`;
+        prompt = `You are an expert Content Strategist specializing in AI-optimized content.
+
+${fullContext || 'No business context available.'}
+
+---
+
+**TASK:** Suggest 6 distinct, high-value content categories for this business.
+${query ? `Focus on topics related to: "${query}"` : ''}
+
+CRITICAL REQUIREMENTS:
+1. Categories MUST be directly relevant to the business's products/services
+2. Categories should address the target audience's needs and pain points
+3. Focus on topics that AI assistants frequently answer questions about
+4. Categories should be specific enough to generate focused articles
+
+IMPORTANT: Return a JSON array of objects. Each object MUST have:
+- "name": The category name (2-4 words)
+- "description": A specific description of what content belongs here (2-3 sentences)
+- "reason": Why this fits the business`;
       }
     }
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              name: { type: Type.STRING },
-              description: { type: Type.STRING },
-              reason: { type: Type.STRING }
+    const response = await withRetry(() => withTimeout(
+      ai.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                description: { type: Type.STRING },
+                reason: { type: Type.STRING }
+              }
             }
           }
         }
+      }),
+      60000 // 60 second timeout
+    ));
+
+    // Handle potentially malformed JSON
+    try {
+      const results = JSON.parse(response.text || '[]');
+      return results.map((r: any) => ({
+        name: r.name || 'Untitled Category',
+        description: r.description || `Content related to ${r.name}`,
+        reason: r.reason || 'Relevant to business context'
+      }));
+    } catch {
+      const text = response.text || '';
+      const match = text.match(/\[[\s\S]*\]/);
+      if (match) {
+        try { return JSON.parse(match[0]); } catch { return []; }
       }
-    });
-    return JSON.parse(response.text || '[]');
+      return [];
+    }
   } catch (error: any) {
     console.error("Error generating category suggestions", error);
 
     // Check for specific error types and throw user-friendly messages
     if (error?.message?.includes('429') || error?.message?.includes('RESOURCE_EXHAUSTED')) {
       throw new Error('API quota exceeded. Please wait a few minutes and try again, or upgrade your Gemini API plan.');
+    }
+
+    if (error?.message?.includes('503') || error?.message?.includes('UNAVAILABLE') || error?.message?.includes('overloaded')) {
+      throw new Error('The AI service is currently overloaded. Please wait a moment and try again.');
     }
 
     if (error?.message?.includes('403') || error?.message?.includes('PERMISSION_DENIED')) {
@@ -592,3 +1132,82 @@ export const suggestCategories = async (query: string, parentCategoryName?: stri
     throw new Error(error?.message || 'Failed to generate category suggestions. Please try again.');
   }
 }
+
+// ============================================
+// BRAND RESEARCH
+// ============================================
+
+import { fetchWebsiteContent, extractTextContent } from './websiteAnalysisService';
+
+export const fetchBrandInfo = async (
+  websiteUrl: string,
+  organizationId: string
+): Promise<any> => {
+  console.log(`[Gemini] Fetching brand info for: ${websiteUrl}`);
+  const ai = getClient();
+
+  // 1. Get Admin Config for Prompt
+  let adminConfig: AdminConfig | null = null;
+  try {
+    const adminDoc = await getDoc(doc(db, 'adminConfig', 'prompts'));
+    if (adminDoc.exists()) {
+      adminConfig = adminDoc.data() as AdminConfig;
+    }
+  } catch (e) {
+    console.warn('Could not fetch admin config, using defaults');
+  }
+
+  // 2. Fetch Website Content
+  let websiteContent = '';
+  try {
+    const pageContent = await fetchWebsiteContent(websiteUrl);
+    websiteContent = extractTextContent(pageContent.html);
+    console.log(`[Gemini] Successfully fetched ${websiteContent.length} chars of content`);
+  } catch (error) {
+    console.warn('[Gemini] Could not fetch website content directly:', error);
+    // We continue without content, letting the AI try to use its internal knowledge or give general advice
+  }
+
+  // 3. Construct Prompt
+  let prompt = '';
+  if (adminConfig?.prompts?.[PromptType.BRAND_RESEARCH]) {
+    prompt = replacePromptVariables(adminConfig.prompts[PromptType.BRAND_RESEARCH], {
+      websiteUrl
+    });
+  } else {
+    prompt = `You are a Brand Analyst. Analyze the website ${websiteUrl} and extract brand information (Voice, Message, Audience, Colors, Compliance). Return as JSON.`;
+  }
+
+  // Append content if available
+  if (websiteContent) {
+    prompt += `\n\nHere is the text content extracted from the website:\n"""\n${websiteContent.substring(0, 15000)}\n"""\n\nBased ONLY on this content, extract the brand information.`;
+  }
+
+  // 4. Call AI
+  try {
+    const modelVersion = adminConfig?.modelVersion || 'gemini-2.5-flash';
+    const response = await withRetry(() => withTimeout(
+      ai.models.generateContent({
+        model: modelVersion,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json"
+        }
+      }),
+      45000
+    ));
+
+    const text = response.text || '{}';
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      // Try to find JSON block
+      const match = text.match(/\{[\s\S]*\}/);
+      if (match) return JSON.parse(match[0]);
+      throw new Error('Invalid JSON response');
+    }
+  } catch (error) {
+    console.error('[Gemini] Brand research failed:', error);
+    throw error;
+  }
+};

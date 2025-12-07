@@ -14,10 +14,10 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, requir
   // Show loading spinner while checking auth state
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+      <div className="min-h-screen bg-[#0f172a] flex items-center justify-center">
         <div className="text-center">
-          <div className="w-16 h-16 border-4 border-cyan-500/30 border-t-cyan-500 rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-slate-400">Loading...</p>
+          <div className="w-12 h-12 border-2 border-cyan-500/30 border-t-cyan-500 rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-slate-500 text-sm">Loading...</p>
         </div>
       </div>
     );
@@ -45,16 +45,16 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, requir
 
     if (!hasRequiredRole()) {
       return (
-        <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+        <div className="min-h-screen bg-[#0f172a] flex items-center justify-center p-4">
           <div className="text-center max-w-md">
-            <h1 className="text-4xl font-bold text-slate-200 mb-4">Access Denied</h1>
-            <p className="text-slate-400 mb-6">
+            <h1 className="text-2xl font-bold text-white mb-2">Access Denied</h1>
+            <p className="text-slate-500 text-sm mb-6">
               You don't have permission to access this page.
             </p>
             <a
               href="/"
-              className="inline-block bg-cyan-500 hover:bg-cyan-600 text-white font-medium
-                       py-3 px-6 rounded-lg transition-colors"
+              className="inline-block bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold uppercase tracking-wider
+                       py-3 px-6 transition-colors"
             >
               Go to Dashboard
             </a>

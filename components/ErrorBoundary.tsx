@@ -88,10 +88,10 @@ export class ErrorBoundary extends Component<Props, State> {
       // Default fallback UI
       return (
         <div className="min-h-screen bg-[#0f172a] flex items-center justify-center p-4">
-          <div className="max-w-2xl w-full bg-slate-900 border border-slate-800 rounded-lg p-8">
+          <div className="max-w-2xl w-full bg-slate-900 border border-slate-800 p-8">
             {/* Icon and Title */}
             <div className="flex items-center gap-4 mb-6">
-              <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center">
+              <div className="w-16 h-16 bg-red-500/10 flex items-center justify-center">
                 <AlertTriangle className="w-8 h-8 text-red-500" />
               </div>
               <div>
@@ -107,7 +107,7 @@ export class ErrorBoundary extends Component<Props, State> {
             {/* Error Details (Development Mode) */}
             {process.env.NODE_ENV === 'development' && this.state.error && (
               <div className="mb-6">
-                <details className="bg-slate-950 border border-slate-800 rounded-lg p-4">
+                <details className="bg-slate-950 border border-slate-800 p-4">
                   <summary className="text-sm font-medium text-cyan-400 cursor-pointer hover:text-cyan-300 transition-colors">
                     Show Error Details
                   </summary>
@@ -116,7 +116,7 @@ export class ErrorBoundary extends Component<Props, State> {
                       <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
                         Error Message
                       </h3>
-                      <p className="text-sm text-red-400 font-mono bg-red-950/20 p-3 rounded border border-red-900/50">
+                      <p className="text-sm text-red-400 font-mono bg-red-950/20 p-3 border border-red-900/50">
                         {this.state.error.message}
                       </p>
                     </div>
@@ -126,7 +126,7 @@ export class ErrorBoundary extends Component<Props, State> {
                         <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
                           Stack Trace
                         </h3>
-                        <pre className="text-xs text-slate-300 font-mono bg-slate-950 p-3 rounded border border-slate-800 overflow-x-auto">
+                        <pre className="text-xs text-slate-300 font-mono bg-slate-950 p-3 border border-slate-800 overflow-x-auto">
                           {this.state.error.stack}
                         </pre>
                       </div>
@@ -137,7 +137,7 @@ export class ErrorBoundary extends Component<Props, State> {
                         <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
                           Component Stack
                         </h3>
-                        <pre className="text-xs text-slate-300 font-mono bg-slate-950 p-3 rounded border border-slate-800 overflow-x-auto">
+                        <pre className="text-xs text-slate-300 font-mono bg-slate-950 p-3 border border-slate-800 overflow-x-auto">
                           {this.state.errorInfo.componentStack}
                         </pre>
                       </div>
@@ -151,25 +151,25 @@ export class ErrorBoundary extends Component<Props, State> {
             <div className="flex gap-3">
               <button
                 onClick={this.handleReset}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-cyan-600 hover:bg-cyan-500 text-white font-medium rounded-lg transition-colors"
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold uppercase tracking-wider transition-colors"
               >
-                <RefreshCw size={18} />
+                <RefreshCw size={16} />
                 Try Again
               </button>
 
               <button
                 onClick={this.handleReload}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-slate-800 hover:bg-slate-700 text-white font-medium rounded-lg transition-colors"
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold uppercase tracking-wider transition-colors"
               >
-                <RefreshCw size={18} />
+                <RefreshCw size={16} />
                 Reload Page
               </button>
 
               <button
                 onClick={this.handleGoHome}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-slate-800 hover:bg-slate-700 text-white font-medium rounded-lg transition-colors"
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold uppercase tracking-wider transition-colors"
               >
-                <Home size={18} />
+                <Home size={16} />
                 Go Home
               </button>
             </div>

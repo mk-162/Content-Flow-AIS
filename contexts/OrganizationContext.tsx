@@ -19,6 +19,7 @@ import {
   OrgMemberRole,
 } from '../types';
 import { useAuth } from './AuthContext';
+import { useImpersonation } from './ImpersonationContext';
 
 const OrganizationContext = createContext<OrganizationContextType | undefined>(undefined);
 
@@ -36,9 +37,13 @@ interface OrganizationProviderProps {
 
 export const OrganizationProvider: React.FC<OrganizationProviderProps> = ({ children }) => {
   const { user } = useAuth();
-  const [currentOrg, setCurrentOrgState] = useState<Organization | null>(null);
+  const { isImpersonating, impersonatedOrg } = useImpersonation();
+  const [currentOrgState, setCurrentOrgState] = useState<Organization | null>(null);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // If impersonating, use impersonated org; otherwise use actual current org
+  const currentOrg = isImpersonating && impersonatedOrg ? impersonatedOrg : currentOrgState;
 
   // Fetch user's organizations
   const fetchOrganizations = async () => {
@@ -80,7 +85,7 @@ export const OrganizationProvider: React.FC<OrganizationProviderProps> = ({ chil
       setOrganizations(orgs);
 
       // Set current org if not already set
-      if (!currentOrg && orgs.length > 0) {
+      if (!currentOrgState && orgs.length > 0) {
         // Try to get from localStorage
         const savedOrgId = localStorage.getItem('currentOrganizationId');
         const savedOrg = orgs.find((o) => o.id === savedOrgId);
@@ -95,6 +100,8 @@ export const OrganizationProvider: React.FC<OrganizationProviderProps> = ({ chil
 
   // Listen to organization changes
   useEffect(() => {
+    let isMounted = true;
+
     if (!user) {
       setOrganizations([]);
       setCurrentOrgState(null);
@@ -102,15 +109,25 @@ export const OrganizationProvider: React.FC<OrganizationProviderProps> = ({ chil
       return;
     }
 
-    fetchOrganizations();
+    const loadOrganizations = async () => {
+      if (isMounted) {
+        await fetchOrganizations();
+      }
+    };
+
+    loadOrganizations();
+
+    return () => {
+      isMounted = false;
+    };
   }, [user]);
 
-  // Listen to current organization updates
+  // Listen to current organization updates (only for real org, not impersonated)
   useEffect(() => {
-    if (!currentOrg) return;
+    if (!currentOrgState || !user || isImpersonating) return;
 
     const unsubscribe = onSnapshot(
-      doc(db, 'organizations', currentOrg.id),
+      doc(db, 'organizations', currentOrgState.id),
       (snapshot) => {
         if (snapshot.exists()) {
           setCurrentOrgState({
@@ -125,7 +142,7 @@ export const OrganizationProvider: React.FC<OrganizationProviderProps> = ({ chil
     );
 
     return unsubscribe;
-  }, [currentOrg?.id]);
+  }, [currentOrgState?.id, user, isImpersonating]);
 
   // Set current organization
   const setCurrentOrg = (orgId: string) => {

@@ -87,7 +87,7 @@
 - ✅ **Filter by Status** - Filters post list
 
 ### Post Editor:
-- ✅ **Publish Button** - Updates status to PUBLISHED
+- ✅ **Approve Button** - Updates status to APPROVED
 - ✅ **Reject Button** - Updates status to REJECTED
 - ✅ **Delete Button** - Removes post from Firestore
 - ✅ **Edit Title** (inline) - Updates Firestore

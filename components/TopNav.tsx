@@ -9,7 +9,10 @@ import {
   Settings,
   User,
   Folder,
+  Shield,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { GlobalRole } from '../types';
 import { OrganizationSelector } from './OrganizationSelector';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -17,11 +20,17 @@ export const TopNav: React.FC = () => {
   const { user, signOut } = useAuth();
   const { currentOrg } = useOrganization();
   const { currentProject } = useProject();
+  const navigate = useNavigate();
   const [showOrgSelector, setShowOrgSelector] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
 
+  const isSystemAdmin = user?.globalRole === GlobalRole.SYSTEM_ADMIN;
+
   const handleSignOut = async () => {
     try {
+      // Navigate to login FIRST to unmount protected components
+      navigate('/login');
+      // Then sign out
       await signOut();
     } catch (error) {
       console.error('Sign out error:', error);
@@ -107,6 +116,20 @@ export const TopNav: React.FC = () => {
                       <Settings className="w-4 h-4" />
                       Settings
                     </button>
+                    {isSystemAdmin && (
+                      <button
+                        onClick={() => {
+                          setShowUserMenu(false);
+                          navigate('/admin');
+                        }}
+                        className="w-full flex items-center gap-3 px-3 py-2 hover:bg-slate-700
+                                 text-purple-400 text-sm transition-colors"
+                      >
+                        <Shield className="w-4 h-4" />
+                        Admin Panel
+                      </button>
+                    )}
+                    <div className="border-t border-slate-700 my-1" />
                     <button
                       onClick={() => {
                         setShowUserMenu(false);

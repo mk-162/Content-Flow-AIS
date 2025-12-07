@@ -12,7 +12,14 @@
       "Bash(firebase init:*)",
       "Bash(npm run build:*)",
       "Bash(firebase functions:config:set:*)",
-      "Bash(node scripts/set-admin-role.js:*)"
+      "Bash(node scripts/set-admin-role.js:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm install:*)",
+      "Bash(dir \"C:\\AI_Project\\Content Flow AIS\" /s /b)",
+      "Bash(cat:*)",
+      "Bash(npm run:*)",
+      "Bash(npx kill-port 3000 3001)",
+      "Bash(taskkill:*)"
     ],
     "deny": [],
     "ask": []

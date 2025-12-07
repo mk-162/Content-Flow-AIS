@@ -29,6 +29,7 @@ interface AuthProviderProps {
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   // Fetch user data from Firestore
   const fetchUserData = async (firebaseUser: FirebaseUser): Promise<User | null> => {
@@ -84,7 +85,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   }, []);
 
   // Sign up new user
-  const signUp = async (email: string, password: string, displayName: string) => {
+  const signUp = async (email: string, password: string, displayName: string): Promise<User> => {
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
 
@@ -102,11 +103,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       await setDoc(doc(db, 'users', userCredential.user.uid), newUser);
 
-      // Update local state
-      setUser({
+      // Create full user object
+      const createdUser: User = {
         id: userCredential.user.uid,
         ...newUser,
-      });
+      };
+
+      // Update local state
+      setUser(createdUser);
+
+      return createdUser;
     } catch (error: any) {
       console.error('Sign up error:', error);
       throw new Error(error.message || 'Failed to create account');
@@ -128,6 +134,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   // Sign out
   const signOut = async () => {
     try {
+      // Clear onboarding session on logout
+      localStorage.removeItem('contentflow_onboarding_session');
+      // Clear impersonation state
+      sessionStorage.removeItem('impersonatedOrgId');
+
       await firebaseSignOut(auth);
       setUser(null);
     } catch (error: any) {

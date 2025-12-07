@@ -14,7 +14,7 @@ Content Flow AIS is a multi-tenant SaaS platform for AI-powered content generati
 ### Core Value Proposition
 - **AI-Powered Content Generation**: Uses Google Gemini 2.5 Flash for title generation and content outlines
 - **Multi-tenant Architecture**: Organizations → Projects → Categories → Posts
-- **Editorial Workflow**: PENDING → GENERATING → NEEDS_REVIEW → PUBLISHED/REJECTED
+- **Editorial Workflow**: PENDING → GENERATING → NEEDS_REVIEW → APPROVED/REJECTED
 - **Real-time Collaboration**: Firestore real-time listeners for live updates
 
 ---
@@ -175,12 +175,12 @@ C:\AI_Project\Content Flow AIS\
 **Visual Design:**
 - Resizable column divider (same as Categories page)
 - Post list with checkboxes for bulk selection
-- Status color coding: emerald (published), amber (review), cyan (queue), red (rejected)
+- Status color coding: emerald (approved), amber (review), cyan (queue), red (rejected)
 
 **Functionality:**
 - Expandable search icon in top-right (animates to full search bar)
 - Bulk select with "Bulk Approve" button
-- Post status reordering: Review → In Queue → Published
+- Post status reordering: Review → In Queue → Approved
 - Slide-left animation on approve (1.8s, auto-advances to next review post)
 - WYSIWYG Markdown editor (@uiw/react-md-editor)
   - Edit mode: Full toolbar, markdown editing
@@ -280,7 +280,7 @@ Login/SignUp → AuthContext → Firebase Auth
 - All text: `text-white`
 
 **Status Colors:**
-- Published: `text-emerald-500` / `bg-emerald-500`
+- Approved: `text-emerald-500` / `bg-emerald-500`
 - Review: `text-amber-500` / `bg-amber-500`
 - In Queue: `text-cyan-500` / `bg-cyan-500`
 - Rejected: `text-red-500` / `bg-red-500`

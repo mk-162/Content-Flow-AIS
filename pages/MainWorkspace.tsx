@@ -5,14 +5,20 @@ import {
   FileText,
   ChevronLeft,
   ChevronRight,
-  Folder,
+  ChevronDown,
   Building2,
   Settings,
-  Terminal, // Added Terminal icon import
+  Terminal,
+  Rocket,
+  Zap,
+  LayoutGrid,
+  LogOut,
+  User,
+  Shield
 } from 'lucide-react';
 import { CategoryWorkspace } from '../components/CategoryWorkspace';
 import { PostsWorkspace } from '../components/PostsWorkspace';
-import { TopNav } from '../components/TopNav';
+import { PublishingWorkspace } from '../components/PublishingWorkspace';
 import { useAuth } from '../contexts/AuthContext';
 import { useOrganization } from '../contexts/OrganizationContext';
 import { useProject } from '../contexts/ProjectContext';
@@ -24,6 +30,7 @@ import {
   TaskStatus,
   TaskType,
   PostStatus,
+  GlobalRole,
 } from '../types';
 import {
   collection,
@@ -39,7 +46,11 @@ import {
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { generateCategoryTitles, generatePostOutline, GeneratedTitleData } from '../services/geminiService';
-import { ProjectSettings } from '../components/ProjectSettings'; // Added ProjectSettings import
+import { ProjectSettings } from '../components/ProjectSettings';
+import { CreditManagementModal } from '../components/CreditManagementModal';
+import { DebugFooter } from '../components/DebugFooter';
+import { creditService, CREDIT_COSTS } from '../services/creditService';
+import { imageGenerationService } from '../services/imageGenerationService';
 
 interface ExtendedGenerationTask extends GenerationTask {
   requestedCount?: number;
@@ -49,9 +60,9 @@ interface ExtendedGenerationTask extends GenerationTask {
 export const MainWorkspace: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
   const { currentOrg } = useOrganization();
-  const { currentProject } = useProject();
+  const { currentProject, projects, setCurrentProject } = useProject();
 
   const [currentScreen, setCurrentScreen] = useState<Screen>(
     (location.state as any)?.initialScreen || Screen.CATEGORIES
@@ -60,8 +71,14 @@ export const MainWorkspace: React.FC = () => {
   const [posts, setPosts] = useState<Post[]>([]);
   const [tasks, setTasks] = useState<ExtendedGenerationTask[]>([]);
   const [notifications, setNotifications] = useState<{ id: string; msg: string; type: 'success' | 'info' }[]>([]);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
+  const [showProjectMenu, setShowProjectMenu] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const isProcessingRef = React.useRef(false);
+
+  const isSystemAdmin = user?.globalRole === GlobalRole.SYSTEM_ADMIN;
 
   const notify = (msg: string, type: 'success' | 'info' = 'info') => {
     const id = Math.random().toString(36);
@@ -171,8 +188,13 @@ export const MainWorkspace: React.FC = () => {
     const nextTask = tasks.find((t) => t.status === TaskStatus.QUEUED);
     if (!nextTask) return;
 
+    // Fix: Use ref to lock processing to prevent parallel execution during status updates
+    if (isProcessingRef.current) return;
+
     const processTask = async () => {
+      isProcessingRef.current = true;
       console.log(`[Queue] Processing task:`, nextTask);
+
 
       const taskRef = doc(db, 'generationQueue', nextTask.id);
       console.log(`[Queue] Setting status to PROCESSING...`);
@@ -214,18 +236,37 @@ export const MainWorkspace: React.FC = () => {
 
             for (const item of generatedData) {
               console.log(`[Queue] Adding post:`, item.title);
-              await addDoc(postsRef, {
+              const newPostRef = await addDoc(postsRef, {
                 projectId: currentProject.id,
                 organizationId: currentOrg.id,
                 categoryId: category.id,
                 title: item.title,
                 teaser: item.teaser,
+                metaDescription: item.teaser,
                 tags: item.keywords,
+                metaKeywords: item.keywords,
                 status: PostStatus.PENDING,
                 createdBy: user.id,
                 createdAt: Timestamp.now(),
                 updatedAt: Timestamp.now(),
               });
+
+              // Auto-Generate Image if enabled
+              if (currentProject.settings?.imageGeneration?.autoGenerate) {
+                console.log(`[Queue] Queuing auto-image generation for:`, item.title);
+                await addDoc(collection(db, 'generationQueue'), {
+                  type: TaskType.GENERATE_IMAGE,
+                  organizationId: currentOrg.id,
+                  projectId: currentProject.id,
+                  categoryId: category.id,
+                  categoryName: category.name,
+                  targetPostId: newPostRef.id,
+                  status: TaskStatus.QUEUED,
+                  progress: 0,
+                  createdBy: user.id,
+                  startedAt: Timestamp.now(),
+                });
+              }
             }
 
             console.log(`[Queue] ✅ Successfully saved all titles`);
@@ -233,9 +274,22 @@ export const MainWorkspace: React.FC = () => {
           } else {
             console.error(`[Queue] ❌ Category not found:`, nextTask.categoryId);
           }
+
+
+          // ...
+
         } else if (nextTask.type === TaskType.GENERATE_CONTENT) {
           const post = posts.find((p) => p.id === nextTask.targetPostId);
           if (post) {
+            // Deduct credits
+            await creditService.deductCredits(
+              currentOrg.id,
+              user.id,
+              CREDIT_COSTS.ARTICLE_GENERATION,
+              `Generated Article: ${post.title}`,
+              { projectId: currentProject.id, postId: post.id }
+            );
+
             const content = await generatePostOutline(
               post.title,
               nextTask.categoryName,
@@ -244,6 +298,7 @@ export const MainWorkspace: React.FC = () => {
               currentOrg.id,
               currentProject.id,
               user.id,
+              categories.find(c => c.id === post.categoryId)?.description,
               post.contentType,
               post.tone
             );
@@ -260,9 +315,56 @@ export const MainWorkspace: React.FC = () => {
               generatedAt: Timestamp.now(),
               submittedAt: Timestamp.now(),
               updatedAt: Timestamp.now(),
+              // Backfill meta data if missing
+              ...(!post.metaDescription ? { metaDescription: post.teaser } : {}),
+              ...(!post.metaKeywords && post.tags ? { metaKeywords: post.tags } : {}),
             });
 
+
             notify(`Content ready for: ${post.title}`, 'success');
+          }
+        } else if (nextTask.type === TaskType.GENERATE_IMAGE) {
+          const post = posts.find((p) => p.id === nextTask.targetPostId);
+          if (post) {
+            console.log(`[Queue] Generating image for: ${post.title}`);
+            await updateDoc(taskRef, { progress: 20 });
+
+            // Generate Prompt
+            const prompt = await imageGenerationService.generateImagePrompt(post.title, post.teaser || '');
+            await updateDoc(taskRef, { progress: 40 });
+
+            // Generate Image
+            const result = await imageGenerationService.generateImage(
+              currentOrg.id,
+              currentProject.id,
+              user.id,
+              {
+                prompt,
+                aspectRatio: '16:9',
+                brandStyle: currentOrg.brandImageStyle
+              }
+            );
+            await updateDoc(taskRef, { progress: 80 });
+
+            // Update Post
+            const postRef = doc(
+              db,
+              `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`,
+              post.id
+            );
+            await updateDoc(postRef, {
+              heroImage: {
+                url: result.url,
+                prompt: result.assetId,
+                altText: prompt,
+                generatedAt: Timestamp.now(),
+                providerId: result.assetId,
+                aspectRatio: '16:9'
+              },
+              updatedAt: Timestamp.now(),
+            });
+
+            notify(`Image generated for: ${post.title}`, 'success');
           }
         }
 
@@ -293,10 +395,10 @@ export const MainWorkspace: React.FC = () => {
           });
           notify('Generation failed - Try again', 'info');
         }
+      } finally {
+        isProcessingRef.current = false;
       }
-    };
-
-    processTask();
+    }; processTask();
   }, [tasks, categories, posts, currentOrg, currentProject, user]);
 
   // Actions
@@ -346,6 +448,28 @@ export const MainWorkspace: React.FC = () => {
     }
   };
 
+  const deleteCategory = async (categoryId: string) => {
+    if (!currentOrg || !currentProject) return;
+    try {
+      const categoryRef = doc(
+        db,
+        `organizations/${currentOrg.id}/projects/${currentProject.id}/categories`,
+        categoryId
+      );
+      await deleteDoc(categoryRef);
+      notify('Category deleted', 'success');
+    } catch (error) {
+      console.error('Error deleting category:', error);
+      notify('Failed to delete category', 'info');
+    }
+  };
+
+  const moveCategory = async (id: string, newParentId: string | null, reorderedSiblings: { id: string; order: number; }[]) => {
+    // Placeholder for drag and drop reordering
+    console.log('Move category:', id, newParentId, reorderedSiblings);
+    notify('Reordering not yet implemented', 'info');
+  };
+
   const queueTitleGeneration = async (
     categoryId: string,
     count: number = 5,
@@ -380,6 +504,14 @@ export const MainWorkspace: React.FC = () => {
 
   const queueContentGeneration = async (post: Post) => {
     if (!currentOrg || !currentProject || !user) return;
+
+    // Check balance
+    const hasCredits = await creditService.checkBalance(currentOrg.id, CREDIT_COSTS.ARTICLE_GENERATION);
+    if (!hasCredits) {
+      notify('Insufficient credits', 'info');
+      setIsCreditModalOpen(true);
+      return;
+    }
 
     const cat = categories.find((c) => c.id === post.categoryId);
 
@@ -508,88 +640,221 @@ export const MainWorkspace: React.FC = () => {
       <aside
         className={`
             ${isSidebarCollapsed ? 'w-16' : 'w-64'}
-            bg-slate-950 border-r border-slate-800 flex flex-col justify-between shrink-0 z-50 transition-all duration-300 ease-in-out
+            bg-slate-950 border-r border-slate-800 flex flex-col shrink-0 z-50 transition-all duration-300 ease-in-out
           `}
       >
-        <div className="flex flex-col py-6">
-          <div
-            className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'justify-start px-8'
-              } mb-10 transition-all`}
+        {/* Header: Branding + Collapse Toggle */}
+        <div className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'justify-between'} p-4 border-b border-slate-800`}>
+          {!isSidebarCollapsed && (
+            <h1 className="text-lg font-bold text-cyan-400 tracking-tight">ContentFlow</h1>
+          )}
+          <button
+            onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+            className="p-1 text-slate-500 hover:text-white hover:bg-slate-800 transition-colors rounded"
+            title={isSidebarCollapsed ? 'Expand' : 'Collapse'}
           >
-            {currentProject && (
-              <>
-                <div className="w-10 h-10 bg-cyan-500/20 flex items-center justify-center shrink-0">
-                  <Folder className="text-cyan-400 w-6 h-6" />
-                </div>
-                {!isSidebarCollapsed && (
-                  <span className="ml-4 font-bold text-white text-lg tracking-tight whitespace-nowrap overflow-hidden">
-                    {currentProject.name}
-                  </span>
-                )}
-              </>
-            )}
-          </div>
+            {isSidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+          </button>
+        </div>
 
-          <nav className="w-full">
+        {/* Project & Org Selector */}
+        {!isSidebarCollapsed && (
+          <div className="p-4 border-b border-slate-800">
+            <div className="relative">
+              <button
+                onClick={() => setShowProjectMenu(!showProjectMenu)}
+                className="w-full flex items-center justify-between p-3 bg-slate-900 border border-slate-700 hover:border-slate-600 transition-colors rounded text-left"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-white truncate">{currentProject?.name || 'Select Project'}</p>
+                  <p className="text-xs text-slate-500 truncate">{currentOrg?.name || 'No Organization'}</p>
+                </div>
+                <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${showProjectMenu ? 'rotate-180' : ''}`} />
+              </button>
+
+              {/* Project Dropdown */}
+              {showProjectMenu && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setShowProjectMenu(false)} />
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-slate-900 border border-slate-700 rounded shadow-xl z-40 max-h-64 overflow-y-auto">
+                    {projects.map((project) => (
+                      <button
+                        key={project.id}
+                        onClick={() => {
+                          setCurrentProject(project.id);
+                          setShowProjectMenu(false);
+                        }}
+                        className={`w-full px-3 py-2 text-left text-sm hover:bg-slate-800 transition-colors ${currentProject?.id === project.id ? 'bg-slate-800 text-cyan-400' : 'text-slate-200'
+                          }`}
+                      >
+                        {project.name}
+                      </button>
+                    ))}
+                    <div className="border-t border-slate-700 mt-1 pt-1">
+                      <button
+                        onClick={() => {
+                          navigate('/projects');
+                          setShowProjectMenu(false);
+                        }}
+                        className="w-full px-3 py-2 text-left text-xs text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex items-center gap-2"
+                      >
+                        <LayoutGrid size={14} />
+                        Manage All Projects
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Collapsed: Just show icon */}
+        {isSidebarCollapsed && (
+          <div className="p-3 flex justify-center border-b border-slate-800">
+            <button
+              onClick={() => setIsSidebarCollapsed(false)}
+              className="p-2 bg-slate-900 border border-slate-700 rounded"
+              title={`${currentProject?.name} - ${currentOrg?.name}`}
+            >
+              <Building2 className="w-4 h-4 text-cyan-400" />
+            </button>
+          </div>
+        )}
+
+        {/* Main Navigation */}
+        <nav className="flex-1 py-4 overflow-y-auto">
+          <NavButton
+            active={currentScreen === Screen.CATEGORIES}
+            onClick={() => setCurrentScreen(Screen.CATEGORIES)}
+            icon={<FolderTree />}
+            label="Categories"
+            collapsed={isSidebarCollapsed}
+          />
+          <NavButton
+            active={currentScreen === Screen.POSTS}
+            onClick={() => setCurrentScreen(Screen.POSTS)}
+            icon={<FileText />}
+            label="Posts"
+            badge={
+              activeTaskCount > 0
+                ? activeTaskCount
+                : reviewCount > 0
+                  ? reviewCount
+                  : undefined
+            }
+            badgeColor={activeTaskCount > 0 ? 'bg-cyan-500' : 'bg-emerald-500'}
+            collapsed={isSidebarCollapsed}
+          />
+          <NavButton
+            active={currentScreen === Screen.PUBLISHING}
+            onClick={() => setCurrentScreen(Screen.PUBLISHING)}
+            icon={<Rocket />}
+            label="Publishing"
+            collapsed={isSidebarCollapsed}
+          />
+          <div className="my-2 mx-4 border-b border-slate-800" />
+          <NavButton
+            onClick={() => setCurrentScreen(Screen.SETTINGS)}
+            icon={<Settings />}
+            label="Project Settings"
+            collapsed={isSidebarCollapsed}
+          />
+          <NavButton
+            active={false}
+            onClick={() => navigate('/settings/organization')}
+            icon={<Building2 />}
+            label="Org Settings"
+            collapsed={isSidebarCollapsed}
+          />
+          {isSystemAdmin && (
             <NavButton
-              active={currentScreen === Screen.CATEGORIES}
-              onClick={() => setCurrentScreen(Screen.CATEGORIES)}
-              icon={<FolderTree />}
-              label="Categories"
-              collapsed={isSidebarCollapsed}
-            />
-            <NavButton
-              active={currentScreen === Screen.POSTS}
-              onClick={() => setCurrentScreen(Screen.POSTS)}
-              icon={<FileText />}
-              label="Posts"
-              badge={
-                activeTaskCount > 0
-                  ? activeTaskCount
-                  : reviewCount > 0
-                    ? reviewCount
-                    : undefined
-              }
-              badgeColor={activeTaskCount > 0 ? 'bg-cyan-500' : 'bg-emerald-500'}
-              collapsed={isSidebarCollapsed}
-            />
-            <NavButton
-              onClick={() => setCurrentScreen(Screen.SETTINGS)}
-              icon={<Settings />}
-              label="Project Settings"
-              collapsed={isSidebarCollapsed}
-            />
-            <NavButton
-              active={false} // Always navigates away
-              onClick={() => navigate('/settings/organization')}
-              icon={<Building2 />}
-              label="Org Settings"
-              collapsed={isSidebarCollapsed}
-            />
-            <NavButton
-              active={false} // Always navigates away
+              active={false}
               onClick={() => navigate('/admin/prompts')}
-              icon={<Terminal />} // Using Terminal icon for Admin
+              icon={<Terminal />}
               label="Admin Prompts"
               collapsed={isSidebarCollapsed}
             />
-          </nav>
-        </div>
+          )}
+        </nav>
 
-        <div className="flex flex-col">
-          {/* Collapse Toggle */}
+        {/* Bottom Section: Credits + User Account */}
+        <div className="border-t border-slate-800">
+          {/* Credits */}
           <button
-            onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-            className="h-10 flex items-center justify-center text-slate-500 hover:text-white hover:bg-slate-800 transition-colors"
-            title={isSidebarCollapsed ? 'Expand' : 'Collapse'}
+            onClick={() => setIsCreditModalOpen(true)}
+            className={`w-full flex items-center gap-3 p-3 hover:bg-slate-900 transition-colors ${isSidebarCollapsed ? 'justify-center' : ''}`}
+            title={isSidebarCollapsed ? `Credits: ${currentOrg?.credits?.balance ?? 0}` : undefined}
           >
-            {isSidebarCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
+            <Zap className="w-4 h-4 text-indigo-400 shrink-0" />
+            {!isSidebarCollapsed && (
+              <div className="flex-1 text-left">
+                <p className="text-xs text-slate-500">Credits</p>
+                <p className="text-sm font-semibold text-white">{currentOrg?.credits?.balance ?? 0}</p>
+              </div>
+            )}
           </button>
+
+          {/* User Account */}
+          <div className="relative">
+            <button
+              onClick={() => setShowUserMenu(!showUserMenu)}
+              className={`w-full flex items-center gap-3 p-3 hover:bg-slate-900 transition-colors border-t border-slate-800 ${isSidebarCollapsed ? 'justify-center' : ''}`}
+              title={isSidebarCollapsed ? user?.displayName : undefined}
+            >
+              <div className="w-8 h-8 bg-cyan-500/20 rounded-full flex items-center justify-center shrink-0">
+                {user?.photoURL ? (
+                  <img src={user.photoURL} alt="" className="w-full h-full rounded-full object-cover" />
+                ) : (
+                  <User className="w-4 h-4 text-cyan-400" />
+                )}
+              </div>
+              {!isSidebarCollapsed && (
+                <div className="flex-1 text-left min-w-0">
+                  <p className="text-sm font-medium text-white truncate">{user?.displayName}</p>
+                  <p className="text-xs text-slate-500 truncate">{user?.email}</p>
+                </div>
+              )}
+            </button>
+
+            {/* User Menu Dropdown */}
+            {showUserMenu && !isSidebarCollapsed && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setShowUserMenu(false)} />
+                <div className="absolute bottom-full left-0 right-0 mb-1 mx-3 bg-slate-900 border border-slate-700 rounded shadow-xl z-40">
+                  {isSystemAdmin && (
+                    <button
+                      onClick={() => { navigate('/admin'); setShowUserMenu(false); }}
+                      className="w-full px-3 py-2 text-left text-sm text-purple-400 hover:bg-slate-800 transition-colors flex items-center gap-2"
+                    >
+                      <Shield size={14} />
+                      Admin Panel
+                    </button>
+                  )}
+                  <button
+                    onClick={async () => {
+                      setShowUserMenu(false);
+                      navigate('/login');
+                      await signOut();
+                    }}
+                    className="w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-slate-800 transition-colors flex items-center gap-2"
+                  >
+                    <LogOut size={14} />
+                    Sign Out
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </aside>
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col h-full overflow-hidden bg-[#0f172a] relative">
+        <CreditManagementModal
+          isOpen={isCreditModalOpen}
+          onClose={() => setIsCreditModalOpen(false)}
+        />
         {/* Notifications */}
         <div className="absolute top-0 right-0 z-50 p-6 flex flex-col items-end gap-2 pointer-events-none">
           {notifications.map((n) => (
@@ -609,17 +874,21 @@ export const MainWorkspace: React.FC = () => {
         </div>
 
         {currentScreen === Screen.CATEGORIES && (
-          <CategoryWorkspace
-            categories={categories}
-            posts={posts}
-            tasks={tasks}
-            onAddCategory={addCategory}
-            onUpdateCategory={updateCategory}
-            onQueueTitles={queueTitleGeneration}
-            onQueueContent={queueContentGeneration}
-            onUpdatePost={updatePostFields}
-            onDeletePost={deletePost}
-          />
+          <div className="flex-1 w-full h-full overflow-hidden">
+            <CategoryWorkspace
+              categories={categories}
+              posts={posts}
+              tasks={tasks}
+              onAddCategory={addCategory}
+              onUpdateCategory={updateCategory}
+              onDeleteCategory={deleteCategory}
+              onMoveCategory={moveCategory}
+              onQueueTitles={queueTitleGeneration}
+              onQueueContent={queueContentGeneration}
+              onUpdatePost={updatePostFields}
+              onDeletePost={deletePost}
+            />
+          </div>
         )}
 
         {currentScreen === Screen.POSTS && (
@@ -634,15 +903,32 @@ export const MainWorkspace: React.FC = () => {
           />
         )}
 
-        {currentScreen === Screen.SETTINGS && currentProject && (
-          <ProjectSettings
+        {currentScreen === Screen.PUBLISHING && (
+          <PublishingWorkspace
+            posts={posts}
+            categories={categories}
+            onUpdateStatus={updatePostStatus}
+            onUpdatePost={updatePostFields}
+            onDeletePost={deletePost}
             project={currentProject}
-            onUpdate={() => {
-              notify('Project settings updated', 'success');
-            }}
+            organization={currentOrg}
           />
         )}
+
+        {currentScreen === Screen.SETTINGS && currentProject && (
+          <div className="flex-1 w-full h-full overflow-hidden">
+            <ProjectSettings
+              project={currentProject}
+              onUpdate={() => {
+                notify('Project settings updated', 'success');
+              }}
+            />
+          </div>
+        )}
       </main>
+
+      {/* Debug Footer for System Admins */}
+      <DebugFooter />
     </div>
   );
 };

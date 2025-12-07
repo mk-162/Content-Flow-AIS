@@ -1,6 +1,11 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, connectAuthEmulator } from 'firebase/auth';
-import { getFirestore, connectFirestoreEmulator, enableIndexedDbPersistence } from 'firebase/firestore';
+import {
+  initializeFirestore,
+  connectFirestoreEmulator,
+  persistentLocalCache,
+  persistentMultipleTabManager
+} from 'firebase/firestore';
 import { getStorage, connectStorageEmulator } from 'firebase/storage';
 import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
 
@@ -18,25 +23,18 @@ const app = initializeApp(firebaseConfig);
 
 // Initialize services
 export const auth = getAuth(app);
-export const db = getFirestore(app);
-export const storage = getStorage(app);
-export const functions = getFunctions(app);
 
-// Enable offline persistence for massive performance boost and cost savings
-// This caches all Firestore data locally and only reads changed documents
-enableIndexedDbPersistence(db).catch((err) => {
-  if (err.code === 'failed-preconditions') {
-    // Multiple tabs open, persistence can only be enabled in one tab at a time
-    console.warn('[Firestore] Offline persistence not enabled: Multiple tabs open');
-  } else if (err.code === 'unimplemented') {
-    // Browser doesn't support persistence
-    console.warn('[Firestore] Offline persistence not supported by browser');
-  } else {
-    console.error('[Firestore] Error enabling offline persistence:', err);
-  }
-}).then(() => {
-  console.log('✅ [Firestore] Offline persistence enabled - 70-80% read reduction!');
+// Initialize Firestore with multi-tab persistence support
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager()
+  })
 });
+
+export const storage = getStorage(app);
+export const functions = getFunctions(app, 'europe-west2');
+
+console.log('✅ [Firestore] Multi-tab persistence enabled');
 
 // Connect to emulators in development (optional)
 if (import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true') {

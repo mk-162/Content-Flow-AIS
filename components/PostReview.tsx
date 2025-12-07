@@ -104,8 +104,8 @@ export const PostReview: React.FC<Props> = ({ posts, categories, onUpdateStatus,
                         Reject
                     </button>
                     
-                    <button 
-                        onClick={() => handleAction(PostStatus.PUBLISHED)}
+                    <button
+                        onClick={() => handleAction(PostStatus.APPROVED)}
                         className="px-10 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold uppercase tracking-widest transition-colors flex items-center"
                     >
                         Approve <ArrowRight className="ml-2 w-4 h-4"/>

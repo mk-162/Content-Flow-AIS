@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Post, Category, PostStatus, GenerationTask, TaskStatus, ContentType, Tone } from '../types';
 import {
@@ -11,13 +10,15 @@ import MDEditor from '@uiw/react-md-editor';
 import '@uiw/react-md-editor/markdown-editor.css';
 import '@uiw/react-markdown-preview/markdown.css';
 import { Timestamp } from 'firebase/firestore';
+import { ImageInspectorControl } from './ImageInspectorControl';
+import { ImageGenerationResult } from '../services/imageGenerationService';
 
 interface Props {
     posts: Post[];
     categories: Category[];
     tasks: GenerationTask[];
     onUpdateStatus: (id: string, status: PostStatus) => void;
-    onUpdatePost: (id: string, updates: Partial<Post>) => void;
+    onUpdatePost: (id: string, updates: Partial<Post>) => Promise<void> | void;
     onDeletePost: (id: string) => void;
     onQueueContent: (post: Post) => void;
 }
@@ -27,6 +28,9 @@ const STATUS_FILTERS = [
     { label: 'In Queue', value: PostStatus.GENERATING },
     { label: 'Review', value: PostStatus.NEEDS_REVIEW },
     { label: 'Approved', value: PostStatus.APPROVED },
+    { label: 'Scheduled', value: PostStatus.SCHEDULED },
+    { label: 'Published', value: PostStatus.PUBLISHED },
+    { label: 'Archived', value: PostStatus.ARCHIVED },
 ];
 
 export const PostsWorkspace: React.FC<Props> = ({
@@ -39,6 +43,16 @@ export const PostsWorkspace: React.FC<Props> = ({
     const [editMode, setEditMode] = useState(false);
     const [inspectorTab, setInspectorTab] = useState<'info' | 'history'>('info');
     const [approvingPostId, setApprovingPostId] = useState<string | null>(null);
+    const [showScheduleModal, setShowScheduleModal] = useState(false);
+    const [scheduleDate, setScheduleDate] = useState<string>('');
+    const [scheduleTime, setScheduleTime] = useState<string>('09:00');
+    const [saving, setSaving] = useState(false);
+
+    const handleUpdate = async (id: string, updates: Partial<Post>) => {
+        setSaving(true);
+        await onUpdatePost(id, updates);
+        setTimeout(() => setSaving(false), 1000);
+    };
 
     // Layout resizing
     const [leftPaneWidth, setLeftPaneWidth] = useState(320);
@@ -66,19 +80,24 @@ export const PostsWorkspace: React.FC<Props> = ({
         return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
     }, []);
 
-    // Filter Posts
+    // Filter Posts - Exclude PENDING (stubs) from editorial queue
+    // PENDING posts belong in Categories tab until user clicks "Generate"
     const filteredPosts = useMemo(() => {
         return posts.filter(post => {
+            // Exclude PENDING status - these are stubs that haven't been generated yet
+            if (post.status === PostStatus.PENDING) return false;
+
             const matchesStatus = statusFilter === 'ALL' || post.status === statusFilter;
             const matchesSearch = post.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
                 post.editor?.toLowerCase().includes(searchQuery.toLowerCase());
-            const isActionable = post.status !== PostStatus.PENDING;
-            return matchesStatus && matchesSearch && isActionable;
+
+            return matchesStatus && matchesSearch;
         }).sort((a, b) => {
+            // Priority: Review first, then Generating
             const score = (s: PostStatus) => {
-                if (s === PostStatus.NEEDS_REVIEW) return 3;
-                if (s === PostStatus.GENERATING) return 2;
-                if (s === PostStatus.APPROVED) return 1;
+                if (s === PostStatus.NEEDS_REVIEW) return 5;
+                if (s === PostStatus.GENERATING) return 4;
+                if (s === PostStatus.REJECTED) return 1;
                 return 0;
             };
             return score(b.status) - score(a.status);
@@ -128,27 +147,82 @@ export const PostsWorkspace: React.FC<Props> = ({
         }
     }, [posts, selectedPost]);
 
-    const handleApprove = (postId: string) => {
+    // Approve -> Moves to Publishing Queue
+    const handleApprove = async (postId: string) => {
         setApprovingPostId(postId);
-        setTimeout(() => {
-            // Use the calculated recommended date
-            const publishDate = recommendedPublishDate;
-            // If the date is today, use current time, otherwise use start of day
-            const isToday = publishDate.toDateString() === new Date().toDateString();
-            const finalDate = isToday ? new Date() : publishDate;
 
-            onUpdatePost(postId, {
+        try {
+            // Brief delay for visual feedback
+            await new Promise(resolve => setTimeout(resolve, 1500));
+
+            await onUpdatePost(postId, {
                 status: PostStatus.APPROVED,
-                approvedAt: Timestamp.fromDate(finalDate)
+                approvedAt: Timestamp.now()
             });
 
-            setApprovingPostId(null);
-
-            // Auto-advance
+            // Auto-advance on success
             const currentIndex = filteredPosts.findIndex(p => p.id === postId);
             const nextPost = filteredPosts.find((p, idx) => idx > currentIndex && p.status === PostStatus.NEEDS_REVIEW);
             if (nextPost) setSelectedPostId(nextPost.id);
-        }, 1500);
+            else setSelectedPostId(null);
+
+        } catch (error) {
+            console.error('Failed to approve post:', error);
+        } finally {
+            setApprovingPostId(null);
+        }
+    };
+
+    // Publish immediately
+    const handlePublishNow = async (postId: string) => {
+        try {
+            await onUpdatePost(postId, {
+                status: PostStatus.PUBLISHED,
+                publishedAt: Timestamp.now(),
+                scheduledAt: undefined, // Clear any scheduled date
+            });
+        } catch (error) {
+            console.error('Failed to publish post:', error);
+        }
+    };
+
+    // Unpublish - back to review
+    const handleUnpublish = async (postId: string) => {
+        try {
+            await onUpdatePost(postId, {
+                status: PostStatus.NEEDS_REVIEW,
+                publishedAt: undefined,
+            });
+        } catch (error) {
+            console.error('Failed to unpublish post:', error);
+        }
+    };
+
+    // Schedule for future date
+    const handleSchedule = async (postId: string) => {
+        if (!scheduleDate) return;
+
+        try {
+            const [year, month, day] = scheduleDate.split('-').map(Number);
+            const [hours, minutes] = scheduleTime.split(':').map(Number);
+            const scheduledDateTime = new Date(year, month - 1, day, hours, minutes);
+
+            await onUpdatePost(postId, {
+                status: PostStatus.SCHEDULED,
+                scheduledAt: Timestamp.fromDate(scheduledDateTime),
+            });
+
+            setShowScheduleModal(false);
+            setScheduleDate('');
+            setScheduleTime('09:00');
+        } catch (error) {
+            console.error('Failed to schedule post:', error);
+        }
+    };
+
+    const handleImageUpdate = async (image: any) => {
+        if (!selectedPostId) return;
+        await onUpdatePost(selectedPostId, { heroImage: image });
     };
 
     const getCategoryBreadcrumb = (catId: string) => {
@@ -177,18 +251,24 @@ export const PostsWorkspace: React.FC<Props> = ({
             >
                 {/* Header */}
                 <div className="p-4 border-b border-slate-800">
-                    <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3">Blog Posts</h2>
+                    <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3">Editorial Queue</h2>
                     <div className="relative mb-3">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
                         <input
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            placeholder="Search..."
-                            className="w-full bg-slate-900 border border-slate-800 pl-9 pr-3 py-2 text-sm text-slate-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none transition-all"
+                            placeholder="Search drafts..."
+                            className="w-full bg-slate-900 border border-slate-800 pl-9 pr-3 py-2 text-sm text-slate-200 focus:border-cyan-500 focus:outline-none transition-all"
                         />
                     </div>
                     <div className="flex gap-1 overflow-x-auto pb-1 custom-scrollbar">
-                        {STATUS_FILTERS.map(f => (
+                        {/* Simplified Filters for Editorial */}
+                        {[
+                            { label: 'All', value: 'ALL' },
+                            { label: 'Review', value: PostStatus.NEEDS_REVIEW },
+                            { label: 'Generating', value: PostStatus.GENERATING },
+                            { label: 'Rejected', value: PostStatus.REJECTED },
+                        ].map(f => (
                             <button
                                 key={f.value}
                                 onClick={() => setStatusFilter(f.value)}
@@ -207,43 +287,50 @@ export const PostsWorkspace: React.FC<Props> = ({
 
                 {/* Post List */}
                 <div className="flex-1 overflow-y-auto custom-scrollbar">
-                    {filteredPosts.map(post => {
-                        const activeTask = tasks.find(t => t.targetPostId === post.id && t.status === TaskStatus.PROCESSING);
-                        return (
-                            <div
-                                key={post.id}
-                                onClick={() => setSelectedPostId(post.id)}
-                                className={`
-                            p-4 border-b border-slate-800/50 cursor-pointer transition-all hover:bg-slate-900/50
-                            ${selectedPostId === post.id ? 'bg-slate-900 border-l-2 border-l-cyan-500' : 'border-l-2 border-l-transparent'}
-                        `}
-                            >
-                                <div className="flex justify-between items-start mb-1">
-                                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider truncate max-w-[120px]">
-                                        {getCategoryBreadcrumb(post.categoryId)}
-                                    </span>
-                                    <span className={`text-[10px] font-bold uppercase ${post.status === PostStatus.APPROVED ? 'text-emerald-500' :
-                                        post.status === PostStatus.REJECTED ? 'text-red-500' :
+                    {filteredPosts.length === 0 ? (
+                        <div className="p-8 text-center text-slate-600 text-xs">
+                            No drafts found.
+                        </div>
+                    ) : (
+                        filteredPosts.map(post => {
+                            const activeTask = tasks.find(t => t.targetPostId === post.id && t.status === TaskStatus.PROCESSING);
+                            return (
+                                <div
+                                    key={post.id}
+                                    onClick={() => setSelectedPostId(post.id)}
+                                    className={`
+                                p-4 border-b border-slate-800/50 cursor-pointer transition-all hover:bg-slate-900/50
+                                ${selectedPostId === post.id ? 'bg-slate-900 border-l-2 border-l-cyan-500' : 'border-l-2 border-l-transparent'}
+                            `}
+                                >
+                                    <div className="flex justify-between items-start mb-1">
+                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider truncate max-w-[120px]">
+                                            {getCategoryBreadcrumb(post.categoryId)}
+                                        </span>
+                                        <span className={`text-[10px] font-bold uppercase ${post.status === PostStatus.REJECTED ? 'text-red-500' :
                                             post.status === PostStatus.GENERATING ? 'text-cyan-500' : 'text-amber-500'
-                                        }`}>
-                                        {post.status === PostStatus.NEEDS_REVIEW ? 'REVIEW' : post.status === PostStatus.GENERATING ? 'QUEUE' : post.status}
-                                    </span>
-                                </div>
-                                <h3 className={`text-sm font-medium leading-snug mb-2 ${selectedPostId === post.id ? 'text-white' : 'text-slate-400'}`}>
-                                    {post.title}
-                                </h3>
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-5 h-5 bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-400">
-                                            {(post.editor || 'SJ').substring(0, 2).toUpperCase()}
-                                        </div>
-                                        <span className="text-xs text-slate-600">{post.updatedAt?.toDate().toLocaleDateString()}</span>
+                                            }`}>
+                                            {post.status === PostStatus.NEEDS_REVIEW ? 'REVIEW' :
+                                                post.status === PostStatus.GENERATING ? 'QUEUE' :
+                                                    post.status.toUpperCase()}
+                                        </span>
                                     </div>
-                                    {activeTask && <Loader2 size={14} className="animate-spin text-cyan-500" />}
+                                    <h3 className={`text-sm font-medium leading-snug mb-2 ${selectedPostId === post.id ? 'text-white' : 'text-slate-400'}`}>
+                                        {post.title}
+                                    </h3>
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-5 h-5 bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-400">
+                                                {(post.editor || 'SJ').substring(0, 2).toUpperCase()}
+                                            </div>
+                                            <span className="text-xs text-slate-600">{post.updatedAt?.toDate().toLocaleDateString()}</span>
+                                        </div>
+                                        {activeTask && <Loader2 size={14} className="animate-spin text-cyan-500" />}
+                                    </div>
                                 </div>
-                            </div>
-                        );
-                    })}
+                            );
+                        })
+                    )}
                 </div>
             </div>
 
@@ -271,17 +358,18 @@ export const PostsWorkspace: React.FC<Props> = ({
                                 >
                                     {/* Internal Header */}
                                     <div className="p-8 pb-4 relative">
-                                        <div className="flex justify-end items-start mb-4">
+                                        <h1 className="text-2xl font-bold text-slate-200 leading-snug mb-2 flex items-start gap-3">
+                                            {selectedPost.title}
                                             <button
                                                 onClick={() => setEditMode(!editMode)}
-                                                className={`p-2 rounded-lg transition-colors ${editMode ? 'bg-cyan-500/10 text-cyan-400' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}
+                                                className={`mt-1 p-1.5 rounded-md transition-colors ${editMode ? 'bg-cyan-500/10 text-cyan-400' : 'text-slate-500 hover:bg-slate-800 hover:text-slate-300'}`}
                                                 title={editMode ? "Finish Editing" : "Edit Content"}
                                             >
-                                                {editMode ? <CheckCircle size={20} /> : <Edit3 size={20} />}
+                                                {editMode ? <CheckCircle size={16} /> : <Edit3 size={16} />}
                                             </button>
-                                        </div>
-                                        <h1 className="text-2xl font-bold text-slate-200 leading-snug mb-2">
-                                            {selectedPost.title}
+                                            <div className="mt-1 p-1.5 text-cyan-500" title="AI Generated">
+                                                <Sparkles size={16} />
+                                            </div>
                                         </h1>
                                         <div className="text-xs text-slate-500 mb-4">
                                             {getCategoryBreadcrumb(selectedPost.categoryId)}
@@ -291,8 +379,9 @@ export const PostsWorkspace: React.FC<Props> = ({
                                                 {(selectedPost.editor || 'SJ').substring(0, 2).toUpperCase()}
                                             </div>
                                             <div>
-                                                <div className="text-sm font-medium text-slate-300">
+                                                <div className="text-sm font-medium text-slate-300 flex items-center gap-2">
                                                     By {selectedPost.editor || 'Sarah Jenkins'}
+                                                    <Edit3 size={12} className="text-slate-600 cursor-pointer hover:text-slate-400" />
                                                 </div>
                                                 <div className="text-xs text-slate-500">
                                                     {selectedPost.submittedAt ? selectedPost.submittedAt.toDate().toLocaleDateString() : new Date().toLocaleDateString()}
@@ -323,7 +412,10 @@ export const PostsWorkspace: React.FC<Props> = ({
                                             </div>
                                         ) : selectedPost.content ? (
                                             <div className="prose prose-invert prose-slate max-w-none prose-headings:font-serif prose-headings:font-bold prose-p:leading-relaxed prose-li:marker:text-indigo-400">
-                                                <MDEditor.Markdown source={selectedPost.content} style={{ backgroundColor: 'transparent', color: 'inherit' }} />
+                                                <MDEditor.Markdown
+                                                    source={selectedPost.content.replace(new RegExp(`^#\\s*${selectedPost.title}\\s*`, 'i'), '').trim()}
+                                                    style={{ backgroundColor: 'transparent', color: 'inherit' }}
+                                                />
                                             </div>
                                         ) : (
                                             <div className="text-center py-20 border-2 border-dashed border-slate-800">
@@ -343,7 +435,7 @@ export const PostsWorkspace: React.FC<Props> = ({
                     </>
                 ) : (
                     <div className="flex-1 flex items-center justify-center text-slate-600">
-                        <p>Select a post to view details</p>
+                        <p>Select a draft to view details</p>
                     </div>
                 )}
             </div>
@@ -359,30 +451,46 @@ export const PostsWorkspace: React.FC<Props> = ({
                         <div className="flex items-center justify-between">
                             <span className={`
                                 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider
-                                ${selectedPost.status === PostStatus.APPROVED ? 'bg-emerald-500/10 text-emerald-500' :
-                                    selectedPost.status === PostStatus.NEEDS_REVIEW ? 'bg-amber-500/10 text-amber-500' :
+                                ${selectedPost.status === PostStatus.NEEDS_REVIEW ? 'bg-amber-500/10 text-amber-500' :
+                                    selectedPost.status === PostStatus.REJECTED ? 'bg-red-500/10 text-red-500' :
                                         'bg-slate-800 text-slate-400'}
                             `}>
                                 {selectedPost.status.replace('_', ' ')}
                             </span>
                             <div className="flex items-center gap-1">
-                                <button
-                                    onClick={() => onUpdateStatus(selectedPost.id, PostStatus.REJECTED)}
-                                    className="p-1.5 text-rose-400 hover:bg-rose-500/10 transition-colors"
-                                    title="Reject"
-                                >
-                                    <X size={16} />
-                                </button>
+                                {selectedPost.status === PostStatus.NEEDS_REVIEW && (
+                                    <button
+                                        onClick={() => onUpdateStatus(selectedPost.id, PostStatus.REJECTED)}
+                                        className="p-1.5 text-rose-400 hover:bg-rose-500/10 transition-colors"
+                                        title="Reject"
+                                    >
+                                        <X size={16} />
+                                    </button>
+                                )}
                             </div>
                         </div>
-                        <button
-                            onClick={() => handleApprove(selectedPost.id)}
-                            disabled={approvingPostId === selectedPost.id}
-                            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50"
-                        >
-                            {approvingPostId === selectedPost.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
-                            Approve
-                        </button>
+
+                        {/* Context-aware action buttons */}
+                        {selectedPost.status === PostStatus.NEEDS_REVIEW && (
+                            <button
+                                onClick={() => handleApprove(selectedPost.id)}
+                                disabled={approvingPostId === selectedPost.id}
+                                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50"
+                            >
+                                {approvingPostId === selectedPost.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
+                                Approve for Publishing
+                            </button>
+                        )}
+
+                        {selectedPost.status === PostStatus.REJECTED && (
+                            <button
+                                onClick={() => onUpdateStatus(selectedPost.id, PostStatus.NEEDS_REVIEW)}
+                                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold uppercase tracking-wider transition-all"
+                            >
+                                <RefreshCw size={14} />
+                                Restore to Review
+                            </button>
+                        )}
                     </div>
                 )}
 
@@ -408,31 +516,58 @@ export const PostsWorkspace: React.FC<Props> = ({
                         <div className="space-y-8">
                             {/* Publishing Details */}
                             <section className="space-y-4">
-                                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Publishing Details</h3>
+                                <div className="flex items-center justify-between">
+                                    <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Editorial Details</h3>
+                                    <AnimatePresence>
+                                        {saving ? (
+                                            <motion.div
+                                                initial={{ opacity: 0, x: -10 }}
+                                                animate={{ opacity: 1, x: 0 }}
+                                                exit={{ opacity: 0 }}
+                                                className="flex items-center gap-1.5 text-[10px] font-medium text-indigo-400"
+                                            >
+                                                <Loader2 size={10} className="animate-spin" />
+                                                <span>Saving...</span>
+                                            </motion.div>
+                                        ) : (
+                                            <motion.div
+                                                initial={{ opacity: 0 }}
+                                                animate={{ opacity: 1 }}
+                                                exit={{ opacity: 0 }}
+                                                className="flex items-center gap-1.5 text-[10px] font-medium text-emerald-500"
+                                            >
+                                                <CheckCircle size={10} />
+                                                <span>Saved</span>
+                                            </motion.div>
+                                        )}
+                                    </AnimatePresence>
+                                </div>
 
-                                <div className="space-y-1">
-                                    <label className="text-xs text-slate-400 font-medium">Editor</label>
-                                    <div className="relative">
-                                        <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
-                                        <input
-                                            value={selectedPost.editor || 'Sarah Jenkins'}
-                                            onChange={(e) => onUpdatePost(selectedPost.id, { editor: e.target.value })}
-                                            className="w-full bg-slate-950 border border-slate-700 py-2 pl-9 pr-3 text-sm text-slate-200 focus:border-indigo-500 outline-none"
-                                        />
-                                    </div>
+                                {/* Hero Image Section - Moved to Top */}
+                                <div className="space-y-2 pb-4 border-b border-slate-800">
+                                    <ImageInspectorControl
+                                        currentImage={selectedPost.heroImage}
+                                        postTitle={selectedPost.title}
+                                        postTeaser={selectedPost.teaser}
+                                        onImageUpdate={handleImageUpdate}
+                                    />
                                 </div>
 
                                 <div className="space-y-1">
-                                    <label className="text-xs text-slate-400 font-medium flex justify-between">
-                                        <span>Recommended Publish Date</span>
-                                        <span className="text-[10px] text-slate-600">Velocity: 10/day</span>
-                                    </label>
+                                    <label className="text-xs text-slate-400 font-medium">Publish Date</label>
                                     <div className="relative">
                                         <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
                                         <input
-                                            readOnly
-                                            value={recommendedPublishDate.toLocaleDateString()}
-                                            className="w-full bg-slate-950 border border-slate-700 py-2 pl-9 pr-3 text-sm text-emerald-500 font-bold cursor-not-allowed"
+                                            type="datetime-local"
+                                            value={selectedPost.publishedAt ? new Date(selectedPost.publishedAt.toDate().getTime() - (new Date().getTimezoneOffset() * 60000)).toISOString().slice(0, 16) : ''}
+                                            onChange={(e) => {
+                                                const date = e.target.value ? new Date(e.target.value) : null;
+                                                handleUpdate(selectedPost.id, {
+                                                    publishedAt: date ? Timestamp.fromDate(date) : undefined,
+                                                    status: date && date > new Date() ? PostStatus.SCHEDULED : PostStatus.PUBLISHED
+                                                });
+                                            }}
+                                            className="w-full bg-slate-950 border border-slate-700 py-2 pl-9 pr-3 text-sm text-slate-200 focus:border-indigo-500 outline-none"
                                         />
                                     </div>
                                 </div>
@@ -442,87 +577,69 @@ export const PostsWorkspace: React.FC<Props> = ({
                                     <div className="relative">
                                         <select
                                             value={selectedPost.categoryId}
-                                            onChange={(e) => onUpdatePost(selectedPost.id, { categoryId: e.target.value })}
+                                            onChange={(e) => handleUpdate(selectedPost.id, { categoryId: e.target.value })}
                                             className="w-full bg-slate-950 border border-slate-700 py-2 pl-3 pr-8 text-sm text-slate-200 focus:border-indigo-500 outline-none appearance-none"
                                         >
-                                            {categories.map(c => (
-                                                <option key={c.id} value={c.id}>{c.name}</option>
-                                            ))}
+                                            {categories.map(c => {
+                                                // Calculate depth for visual hierarchy
+                                                let depth = 0;
+                                                let current = c;
+                                                while (current.parentId) {
+                                                    depth++;
+                                                    const parent = categories.find(cat => cat.id === current.parentId);
+                                                    if (parent) current = parent;
+                                                    else break;
+                                                }
+                                                const prefix = depth > 0 ? '-'.repeat(depth) + ' ' : '';
+
+                                                return (
+                                                    <option key={c.id} value={c.id}>
+                                                        {prefix}{c.name}
+                                                    </option>
+                                                );
+                                            })}
                                         </select>
                                         <ChevronDownIcon className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" size={14} />
                                     </div>
                                 </div>
-
-                                <div className="space-y-1">
-                                    <label className="text-xs text-slate-400 font-medium">Content Type</label>
-                                    <div className="relative">
-                                        <select
-                                            value={selectedPost.contentType || ContentType.ARTICLE}
-                                            onChange={(e) => onUpdatePost(selectedPost.id, { contentType: e.target.value as ContentType })}
-                                            className="w-full bg-slate-950 border border-slate-700 py-2 pl-3 pr-8 text-sm text-slate-200 focus:border-indigo-500 outline-none appearance-none"
-                                        >
-                                            {Object.values(ContentType).map(type => (
-                                                <option key={type} value={type}>{type}</option>
-                                            ))}
-                                        </select>
-                                        <ChevronDownIcon className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" size={14} />
-                                    </div>
-                                </div>
-
-                                <div className="space-y-1">
-                                    <label className="text-xs text-slate-400 font-medium">Tone</label>
-                                    <div className="relative">
-                                        <select
-                                            value={selectedPost.tone || Tone.PROFESSIONAL}
-                                            onChange={(e) => onUpdatePost(selectedPost.id, { tone: e.target.value as Tone })}
-                                            className="w-full bg-slate-950 border border-slate-700 py-2 pl-3 pr-8 text-sm text-slate-200 focus:border-indigo-500 outline-none appearance-none"
-                                        >
-                                            {Object.values(Tone).map(tone => (
-                                                <option key={tone} value={tone}>{tone}</option>
-                                            ))}
-                                        </select>
-                                        <ChevronDownIcon className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" size={14} />
-                                    </div>
-                                </div>
-
-                                <button
-                                    onClick={() => onQueueContent(selectedPost)}
-                                    className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-indigo-900/20 transition-all"
-                                >
-                                    <Sparkles size={14} /> Regenerate with AI
-                                </button>
                             </section>
 
-                            {/* SEO Metadata */}
+                            {/* SEO & Meta Data */}
                             <section className="space-y-4 pt-4 border-t border-slate-800">
-                                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">SEO Metadata</h3>
+                                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">SEO & Meta Data</h3>
 
                                 <div className="space-y-1">
-                                    <div className="flex justify-between">
-                                        <label className="text-xs text-slate-400 font-medium">Meta Description</label>
-                                        <span className={`text-[10px] ${(selectedPost.metaDescription?.length || 0) > 160 ? 'text-red-400' : 'text-slate-600'}`}>
+                                    <label className="text-xs text-slate-400 font-medium">Meta Description</label>
+                                    <textarea
+                                        value={selectedPost.metaDescription || ''}
+                                        onChange={(e) => handleUpdate(selectedPost.id, { metaDescription: e.target.value })}
+                                        className="w-full bg-slate-950 border border-slate-700 p-3 text-sm text-slate-200 focus:border-indigo-500 outline-none min-h-[100px] resize-y"
+                                        placeholder="Enter meta description..."
+                                    />
+                                    <div className="flex justify-end">
+                                        <span className={`text-[10px] ${(selectedPost.metaDescription?.length || 0) > 160 ? 'text-red-500' : 'text-slate-600'}`}>
                                             {selectedPost.metaDescription?.length || 0}/160
                                         </span>
                                     </div>
-                                    <textarea
-                                        rows={4}
-                                        value={selectedPost.metaDescription || ''}
-                                        onChange={(e) => onUpdatePost(selectedPost.id, { metaDescription: e.target.value })}
-                                        className="w-full bg-slate-950 border border-slate-700 py-2 px-3 text-sm text-slate-200 focus:border-indigo-500 outline-none resize-none"
-                                    />
                                 </div>
 
                                 <div className="space-y-1">
-                                    <label className="text-xs text-slate-400 font-medium">Keywords</label>
+                                    <label className="text-xs text-slate-400 font-medium">Meta Keywords (comma separated)</label>
                                     <div className="relative">
-                                        <Hash className="absolute left-3 top-3 text-slate-500" size={14} />
+                                        <Hash className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
                                         <input
-                                            value={selectedPost.metaKeywords || ''}
-                                            onChange={(e) => onUpdatePost(selectedPost.id, { metaKeywords: e.target.value })}
-                                            placeholder="comma, separated, keywords"
+                                            type="text"
+                                            defaultValue={Array.isArray(selectedPost.metaKeywords) ? selectedPost.metaKeywords.join(', ') : (selectedPost.metaKeywords || '')}
+                                            onBlur={(e) => {
+                                                const val = e.target.value;
+                                                const keywords = val.split(',').map(k => k.trim()).filter(k => k.length > 0);
+                                                handleUpdate(selectedPost.id, { metaKeywords: keywords });
+                                            }}
                                             className="w-full bg-slate-950 border border-slate-700 py-2 pl-9 pr-3 text-sm text-slate-200 focus:border-indigo-500 outline-none"
+                                            placeholder="keyword1, keyword2, keyword3"
                                         />
                                     </div>
+                                    <p className="text-[10px] text-slate-500 pt-1">Click outside to save</p>
                                 </div>
                             </section>
                         </div>
@@ -532,8 +649,14 @@ export const PostsWorkspace: React.FC<Props> = ({
                         <div className="relative pl-4 border-l border-slate-800 space-y-8 my-2">
                             {(() => {
                                 const history = [];
+                                if (selectedPost.publishedAt) {
+                                    history.push({ action: 'Published', user: 'System', time: selectedPost.publishedAt.toDate().toLocaleString(), active: selectedPost.status === PostStatus.PUBLISHED });
+                                }
+                                if (selectedPost.scheduledAt && selectedPost.status === PostStatus.SCHEDULED) {
+                                    history.push({ action: `Scheduled for ${selectedPost.scheduledAt.toDate().toLocaleDateString()}`, user: selectedPost.editor || 'Editor', time: selectedPost.updatedAt.toDate().toLocaleString(), active: true });
+                                }
                                 if (selectedPost.approvedAt) {
-                                    history.push({ action: 'Published', user: 'System', time: selectedPost.approvedAt.toDate().toLocaleString(), active: selectedPost.status === PostStatus.APPROVED });
+                                    history.push({ action: 'Approved', user: selectedPost.editor || 'Editor', time: selectedPost.approvedAt.toDate().toLocaleString(), active: selectedPost.status === PostStatus.APPROVED });
                                 }
                                 if (selectedPost.submittedAt) {
                                     history.push({ action: 'Submitted for Review', user: selectedPost.editor || 'Editor', time: selectedPost.submittedAt.toDate().toLocaleString(), active: selectedPost.status === PostStatus.NEEDS_REVIEW });
@@ -563,6 +686,95 @@ export const PostsWorkspace: React.FC<Props> = ({
                     )}
                 </div>
             </div >
+
+            {/* Schedule Modal */}
+            <AnimatePresence>
+                {showScheduleModal && selectedPost && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
+                        onClick={() => setShowScheduleModal(false)}
+                    >
+                        <motion.div
+                            initial={{ scale: 0.95, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.95, opacity: 0 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="bg-slate-900 border border-slate-700 p-6 w-full max-w-md shadow-2xl"
+                        >
+                            <h2 className="text-lg font-bold text-white mb-4">Schedule Publication</h2>
+
+                            <div className="space-y-4">
+                                <div className="space-y-1">
+                                    <label className="text-xs text-slate-400 font-medium">Publish Date</label>
+                                    <input
+                                        type="date"
+                                        value={scheduleDate}
+                                        onChange={(e) => setScheduleDate(e.target.value)}
+                                        min={new Date().toISOString().split('T')[0]}
+                                        className="w-full bg-slate-950 border border-slate-700 py-2 px-3 text-sm text-slate-200 focus:border-blue-500 outline-none"
+                                    />
+                                </div>
+
+                                <div className="space-y-1">
+                                    <label className="text-xs text-slate-400 font-medium">Publish Time</label>
+                                    <input
+                                        type="time"
+                                        value={scheduleTime}
+                                        onChange={(e) => setScheduleTime(e.target.value)}
+                                        className="w-full bg-slate-950 border border-slate-700 py-2 px-3 text-sm text-slate-200 focus:border-blue-500 outline-none"
+                                    />
+                                </div>
+
+                                {/* Publishing Queue Preview */}
+                                <div className="bg-slate-950 border border-slate-800 p-4">
+                                    <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Publishing Queue</h3>
+                                    <div className="space-y-2">
+                                        {(() => {
+                                            const scheduledPosts = posts.filter(p =>
+                                                p.status === PostStatus.SCHEDULED && p.scheduledAt
+                                            ).sort((a, b) =>
+                                                (a.scheduledAt?.toDate().getTime() || 0) - (b.scheduledAt?.toDate().getTime() || 0)
+                                            ).slice(0, 5);
+
+                                            if (scheduledPosts.length === 0) {
+                                                return <p className="text-xs text-slate-500">No posts scheduled</p>;
+                                            }
+
+                                            return scheduledPosts.map(p => (
+                                                <div key={p.id} className="flex justify-between text-xs">
+                                                    <span className="text-slate-400 truncate max-w-[200px]">{p.title}</span>
+                                                    <span className="text-blue-400">
+                                                        {p.scheduledAt?.toDate().toLocaleDateString()}
+                                                    </span>
+                                                </div>
+                                            ));
+                                        })()}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex gap-3 mt-6">
+                                <button
+                                    onClick={() => setShowScheduleModal(false)}
+                                    className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold uppercase tracking-wider transition-all"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={() => handleSchedule(selectedPost.id)}
+                                    disabled={!scheduleDate}
+                                    className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 text-white text-xs font-bold uppercase tracking-wider transition-all"
+                                >
+                                    Schedule
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div >
     );
 };
