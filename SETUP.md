@@ -1,4 +1,4 @@
-# ContentFlow AI - Multi-Tenant SaaS Setup Guide
+# MissionContent - Multi-Tenant SaaS Setup Guide
 
 This guide will help you transform your AI Studio project into a production-ready multi-tenant SaaS application.
 
@@ -124,7 +124,7 @@ The app will be available at `http://localhost:3000`
 ## 📁 Project Structure
 
 ```
-Content Flow AIS/
+MissionContent/
 ├── components/           # React components
 │   ├── CategoryWorkspace.tsx
 │   ├── GenerationQueue.tsx
@@ -239,4 +239,4 @@ For issues or questions:
 
 ## 📝 License
 
-This project is part of ContentFlow AI platform.
+This project is part of MissionContent platform.

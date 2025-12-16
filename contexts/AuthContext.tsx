@@ -135,7 +135,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const signOut = async () => {
     try {
       // Clear onboarding session on logout
-      localStorage.removeItem('contentflow_onboarding_session');
+      localStorage.removeItem('missioncontent_onboarding_session');
       // Clear impersonation state
       sessionStorage.removeItem('impersonatedOrgId');
 

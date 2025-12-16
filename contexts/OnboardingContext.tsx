@@ -22,7 +22,7 @@ import { suggestCategories as suggestSubcategories } from '../services/geminiSer
 // CONSTANTS
 // ============================================================================
 
-const STORAGE_KEY = 'contentflow_onboarding_session';
+const STORAGE_KEY = 'missioncontent_onboarding_session';
 const SESSION_EXPIRY_HOURS = 24;
 
 const STEP_ORDER: OnboardingStep[] = [

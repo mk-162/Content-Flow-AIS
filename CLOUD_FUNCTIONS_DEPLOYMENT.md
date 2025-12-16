@@ -64,7 +64,7 @@ All Cloud Functions have been created and are ready to deploy:
 ### Step 2: Deploy Functions
 
 ```bash
-cd "C:\AI_Project\Content Flow AIS"
+cd "C:\AI_Project\MissionContent"
 firebase deploy --only functions
 ```
 

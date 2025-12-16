@@ -1,4 +1,4 @@
-# Simplified Architecture: Content Flow AIS + Astro
+# Simplified Architecture: MissionContent + Astro
 
 ## Overview
 
@@ -6,7 +6,7 @@ Single platform for content generation, editing, and publishing. No WordPress.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     CONTENT FLOW AIS                            │
+│                     MISSIONCONTENT                              │
 │                   (React + Firebase)                            │
 │                                                                 │
 │  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐  │
@@ -63,7 +63,7 @@ Single platform for content generation, editing, and publishing. No WordPress.
 Since you're already on Firebase, this keeps everything in one ecosystem.
 
 ### Flow
-1. User approves post in Content Flow AIS
+1. User approves post in MissionContent
 2. Cloud Function triggers on Firestore write
 3. Function generates markdown with frontmatter
 4. Saves to Firebase Storage: `/sites/{projectId}/content/{category}/{slug}.md`

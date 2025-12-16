@@ -1,4 +1,4 @@
-# Content Flow AIS: Architecture & Publishing Decision
+# MissionContent: Architecture & Publishing Decision
 
 ## Executive Summary
 
@@ -9,7 +9,7 @@ We built a SaaS platform that uses AI to generate blog content. Content lives in
 ## Current Architecture
 
 ### System Overview
-**Content Flow AIS** is a multi-tenant SaaS platform for AI-powered content generation and editorial workflow management.
+**MissionContent** is a multi-tenant SaaS platform for AI-powered content generation and editorial workflow management.
 
 ### Tech Stack
 - **Frontend:** React 19 + TypeScript + Vite
@@ -65,7 +65,7 @@ Organizations (multi-tenant)
 
 ### Architecture Overview
 
-**Content Flow AIS (React + Firebase)**
+**MissionContent (React + Firebase)**
 - User approves post in UI
 - Triggers export function
 - Generates markdown file with YAML front matter
@@ -381,7 +381,7 @@ Your markdown content here...
 If AWS complexity is a concern, consider **Next.js + Vercel** instead:
 
 ### How it works
-1. Content Flow AIS exports markdown to **GitHub repository**
+1. MissionContent exports markdown to **GitHub repository**
 2. GitHub Actions commits new/updated posts
 3. Vercel auto-deploys on every Git push
 4. Next.js builds static pages from markdown
@@ -486,7 +486,7 @@ If AWS complexity is a concern, consider **Next.js + Vercel** instead:
    - Measure build time and performance
 
 3. **If POC successful:**
-   - Implement S3 export service in Content Flow AIS
+   - Implement S3 export service in MissionContent
    - Set up CI/CD pipeline
    - Build production Astro site
    - Migrate remaining posts

@@ -1,4 +1,4 @@
-# ContentFlow AI - Multi-Tenant SaaS Platform
+# MissionContent - Multi-Tenant SaaS Platform
 
 A production-ready, multi-tenant content generation platform powered by Google Gemini AI, Firebase, and React.
 
@@ -55,7 +55,7 @@ A production-ready, multi-tenant content generation platform powered by Google G
 ### 1. Clone and Install Dependencies
 
 ```bash
-cd "C:\AI_Project\Content Flow AIS"
+cd "C:\AI_Project\MissionContent"
 npm install
 ```
 
@@ -72,7 +72,7 @@ npm install
 
 1. In Firebase Console → Project Settings → General
 2. Under "Your apps" → Click Web icon (</>)
-3. Register app (name: "ContentFlow AI")
+3. Register app (name: "MissionContent")
 4. Copy the configuration values
 
 ### 4. Get Gemini API Key
@@ -165,7 +165,7 @@ The app will be available at `http://localhost:3000`
 ## 📁 Project Structure
 
 ```
-Content Flow AIS/
+MissionContent/
 ├── components/              # React components
 │   ├── CategoryWorkspace.tsx   # Category management UI
 │   ├── GenerationQueue.tsx     # Task queue visualization

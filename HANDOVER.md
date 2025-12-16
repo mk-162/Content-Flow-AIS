@@ -1,7 +1,7 @@
-# Content Flow AIS - Project Handover Document
+# MissionContent - Project Handover Document
 
 **Date:** 2025-11-20
-**Project:** Content Flow AIS (AI-Powered Content Management System)
+**Project:** MissionContent (AI-Powered Content Management System)
 **Status:** Active Development
 **Dev Server:** http://localhost:3001
 
@@ -9,7 +9,7 @@
 
 ## 📋 Project Overview
 
-Content Flow AIS is a multi-tenant SaaS platform for AI-powered content generation and management. Users can organize content into hierarchical categories, generate blog post titles and outlines using AI, and manage posts through a complete editorial workflow.
+MissionContent is a multi-tenant SaaS platform for AI-powered content generation and management. Users can organize content into hierarchical categories, generate blog post titles and outlines using AI, and manage posts through a complete editorial workflow.
 
 ### Core Value Proposition
 - **AI-Powered Content Generation**: Uses Google Gemini 2.5 Flash for title generation and content outlines
@@ -103,7 +103,7 @@ User (Auth)
 ## 📁 File Structure
 
 ```
-C:\AI_Project\Content Flow AIS\
+C:\AI_Project\MissionContent\
 ├── src/
 │   ├── components/
 │   │   ├── CategoryWorkspace.tsx      # Categories page with tree view
@@ -359,7 +359,7 @@ May need composite indexes for:
 
 ### Setup
 ```bash
-cd "C:\AI_Project\Content Flow AIS"
+cd "C:\AI_Project\MissionContent"
 npm install
 npm run dev  # Starts on http://localhost:3001
 ```
