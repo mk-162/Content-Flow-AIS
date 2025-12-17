@@ -18,9 +18,11 @@ export const Settings: React.FC = () => {
   const [activeTab, setActiveTab] = useState<SettingsTab>('account');
 
   // Determine if user can see organization settings (owner or admin)
+  // Must have an organization to show the tab
+  const hasOrg = !!currentOrg;
   const isOrgOwner = currentOrg?.ownerId === user?.id;
   const isSystemAdmin = user?.globalRole === GlobalRole.SYSTEM_ADMIN;
-  const canEditOrg = isOrgOwner || isSystemAdmin;
+  const canEditOrg = hasOrg && (isOrgOwner || isSystemAdmin);
 
   // Determine if user can see project settings (has a project selected)
   const hasProject = !!currentProject;
