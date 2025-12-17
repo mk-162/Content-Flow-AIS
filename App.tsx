@@ -15,7 +15,7 @@ import { Settings } from './pages/Settings';
 import { AdminPrompts } from './pages/AdminPrompts';
 import { OnboardingFlow } from './pages/OnboardingFlow';
 import { ProjectOnboardingFlow } from './pages/ProjectOnboardingFlow';
-import { AdminDashboard, AdminOverview, AdminUsers, AdminOrganizations, AdminSettings } from './pages/admin';
+import { AdminDashboard, AdminOverview, AdminUsers, AdminOrganizations, AdminDeployments, AdminSettings } from './pages/admin';
 import { GlobalRole } from './types';
 
 const App: React.FC = () => {
@@ -91,6 +91,7 @@ const App: React.FC = () => {
                   <Route index element={<AdminOverview />} />
                   <Route path="users" element={<AdminUsers />} />
                   <Route path="organizations" element={<AdminOrganizations />} />
+                  <Route path="deployments" element={<AdminDeployments />} />
                   <Route path="prompts" element={<AdminPrompts />} />
                   <Route path="settings" element={<AdminSettings />} />
                 </Route>

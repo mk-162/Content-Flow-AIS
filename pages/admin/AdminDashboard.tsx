@@ -8,6 +8,7 @@ import {
   Settings,
   ArrowLeft,
   Shield,
+  Rocket,
 } from 'lucide-react';
 import { TopBar } from '../../components/layout';
 
@@ -15,6 +16,7 @@ const navItems = [
   { to: '/admin', icon: LayoutDashboard, label: 'Overview', end: true },
   { to: '/admin/users', icon: Users, label: 'Users', end: false },
   { to: '/admin/organizations', icon: Building2, label: 'Organizations', end: false },
+  { to: '/admin/deployments', icon: Rocket, label: 'Deployments', end: false },
   { to: '/admin/prompts', icon: Terminal, label: 'Prompts', end: false },
   { to: '/admin/settings', icon: Settings, label: 'Settings', end: false },
 ];

@@ -363,6 +363,14 @@ export interface Project {
       defaultStatus: 'publish' | 'draft' | 'pending';
       defaultAuthor?: number;    // WP author ID (optional)
     };
+    // CloudFlare/Terraform Deployment Configuration
+    deployment?: {
+      theme?: string;                    // Theme folder name in astromssn repo (e.g., "default", "ribble")
+      webhookUrl?: string;               // CloudFlare Pages deploy hook URL
+      customDomain?: string;             // Published site domain (e.g., "ribble.mssnhst.com")
+      lastBuildTriggeredAt?: Timestamp;  // Last time a build was triggered
+      lastBuildTriggeredBy?: string;     // userId who triggered the build
+    };
   };
   businessProfile?: BusinessProfile;
   // Hierarchical Prompt Overrides
