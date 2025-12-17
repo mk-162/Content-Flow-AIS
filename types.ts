@@ -107,6 +107,105 @@ export enum Tone {
   AUTHORITATIVE = 'Authoritative'
 }
 
+// ============================================================================
+// RESEARCH & SEO TYPES
+// ============================================================================
+
+// Source of keyword data
+export type KeywordSource = 'ai_estimated' | 'dataforseo';
+
+// Content format for diversity tracking
+export type ContentFormat =
+  | 'how-to'
+  | 'listicle'
+  | 'comparison'
+  | 'guide'
+  | 'case-study'
+  | 'news'
+  | 'opinion'
+  | 'review';
+
+// Keyword data - unified for both AI estimates and DataForSEO
+export interface KeywordData {
+  keyword: string;
+  searchVolume: number | null;    // Monthly searches (null if unknown)
+  difficulty: number | null;       // 0-100 scale (null if unknown)
+  cpc: number | null;              // Cost per click in USD
+  trend?: 'rising' | 'stable' | 'declining';
+  source: KeywordSource;
+}
+
+// Research report stored per category
+export interface CategoryResearch {
+  id: string;
+  categoryId: string;
+  projectId: string;
+  organizationId: string;
+
+  // Research type
+  researchType: 'shallow' | 'deep';
+
+  // Keywords
+  primaryKeywords: KeywordData[];
+  relatedKeywords: KeywordData[];
+  questionsToAnswer: string[];
+
+  // Content gaps
+  contentGaps: {
+    topic: string;
+    opportunity: string;
+    angle: string;
+  }[];
+
+  // Competitor insights (deep research only)
+  competitors?: {
+    title: string;
+    url: string;
+    wordCount: number;
+  }[];
+  avgCompetitorWordCount?: number;
+  missingTopics?: string[];
+
+  // Topic tracking for deduplication
+  coveredTopics: string[];
+  suggestedTopics: string[];
+
+  // Metadata
+  createdAt: Timestamp;
+  expiresAt: Timestamp;
+  creditCost: number;
+}
+
+// Tier-specific feature configuration
+export interface TierFeatures {
+  researchType: 'shallow' | 'deep';
+  showKeywordMetrics: boolean;
+  maxKeywordsPerResearch: number;
+}
+
+export const TIER_FEATURES: Record<SubscriptionTier, TierFeatures> = {
+  [SubscriptionTier.FREE]: {
+    researchType: 'shallow',
+    showKeywordMetrics: false,
+    maxKeywordsPerResearch: 10
+  },
+  [SubscriptionTier.STARTER]: {
+    researchType: 'shallow',
+    showKeywordMetrics: true,
+    maxKeywordsPerResearch: 20
+  },
+  [SubscriptionTier.PROFESSIONAL]: {
+    researchType: 'deep',
+    showKeywordMetrics: true,
+    maxKeywordsPerResearch: 50
+  },
+  [SubscriptionTier.ENTERPRISE]: {
+    researchType: 'deep',
+    showKeywordMetrics: true,
+    maxKeywordsPerResearch: 100
+  }
+};
+
 export interface AdminConfig {
   prompts: Record<ContentType, string> & Record<PromptType, string> & {
     summaryPrompt: string;
@@ -282,6 +381,9 @@ export interface Category {
   children?: Category[];
   createdAt: Timestamp;
   updatedAt: Timestamp;
+  // Research tracking
+  researchId?: string;           // Link to CategoryResearch document
+  lastResearchAt?: Timestamp;    // When research was last generated
 }
 
 // Posts
@@ -341,6 +443,11 @@ export interface Post {
   // WordPress Export
   wordpressExportedAt?: Timestamp;
   wordpressPostId?: number;         // The ID returned from WordPress
+  // SEO & Research (for deduplication and keyword tracking)
+  embedding?: number[];             // Vector embedding for similarity detection
+  contentFormat?: ContentFormat;    // Content format type for diversity
+  primaryAngle?: string;            // Main angle/hook of this post
+  targetKeyword?: string;           // Primary keyword this post targets
 }
 
 // Generation Queue
@@ -568,6 +675,7 @@ export interface CategorySuggestion {
   reasoning?: string;
   selected: boolean;
   isUserAdded?: boolean;
+  estimatedArticles?: number;
 }
 
 export interface SubcategorySuggestion {
@@ -577,8 +685,9 @@ export interface SubcategorySuggestion {
   description: string;
   demandScore: number;
   demandLevel: DemandLevel;
-  audienceMatch: 'high' | 'medium' | 'low';
+  audienceMatch?: 'high' | 'medium' | 'low';
   selected: boolean;
+  estimatedArticles?: number;
 }
 
 export type OnboardingMode = 'client' | 'project';
@@ -622,6 +731,7 @@ export interface OrganizationContextType {
   setCurrentOrg: (orgId: string) => void;
   createOrganization: (name: string) => Promise<string>;
   loading: boolean;
+  archivedOrgBlock: Organization | null;
 }
 
 export interface CloneProjectOptions {

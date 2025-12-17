@@ -11,7 +11,7 @@ export const GenerationQueue: React.FC<Props> = ({ tasks }) => {
   const sortedTasks = [...tasks].sort((a, b) => {
     const statusOrder = { [TaskStatus.PROCESSING]: 0, [TaskStatus.QUEUED]: 1, [TaskStatus.COMPLETED]: 2, [TaskStatus.FAILED]: 3 };
     if (statusOrder[a.status] !== statusOrder[b.status]) return statusOrder[a.status] - statusOrder[b.status];
-    return b.startedAt.getTime() - a.startedAt.getTime();
+    return (b.startedAt?.toMillis() ?? 0) - (a.startedAt?.toMillis() ?? 0);
   });
 
   const activeCount = tasks.filter(t => t.status === TaskStatus.PROCESSING).length;

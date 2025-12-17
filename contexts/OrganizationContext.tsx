@@ -17,6 +17,7 @@ import {
   OrganizationMember,
   SubscriptionTier,
   OrgMemberRole,
+  GlobalRole,
 } from '../types';
 import { useAuth } from './AuthContext';
 import { useImpersonation } from './ImpersonationContext';
@@ -41,6 +42,10 @@ export const OrganizationProvider: React.FC<OrganizationProviderProps> = ({ chil
   const [currentOrgState, setCurrentOrgState] = useState<Organization | null>(null);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
+  const [archivedOrgBlock, setArchivedOrgBlock] = useState<Organization | null>(null);
+
+  // System admins can access archived orgs
+  const isSystemAdmin = user?.globalRole === GlobalRole.SYSTEM_ADMIN;
 
   // If impersonating, use impersonated org; otherwise use actual current org
   const currentOrg = isImpersonating && impersonatedOrg ? impersonatedOrg : currentOrgState;
@@ -78,18 +83,42 @@ export const OrganizationProvider: React.FC<OrganizationProviderProps> = ({ chil
         return null;
       });
 
-      const orgs = (await Promise.all(orgPromises)).filter(
+      const allOrgs = (await Promise.all(orgPromises)).filter(
         (org): org is Organization => org !== null
       );
 
-      setOrganizations(orgs);
+      // For non-admin users, filter out archived organizations
+      const activeOrgs = isSystemAdmin
+        ? allOrgs
+        : allOrgs.filter(org => !org.isArchived);
+
+      // Check if user only has archived orgs (blocked)
+      if (!isSystemAdmin && allOrgs.length > 0 && activeOrgs.length === 0) {
+        // User only has archived organizations - block them
+        const archivedOrg = allOrgs.find(org => org.isArchived) || allOrgs[0];
+        setArchivedOrgBlock(archivedOrg);
+        setOrganizations([]);
+        setCurrentOrgState(null);
+        setLoading(false);
+        return;
+      }
+
+      // Clear any previous archived block
+      setArchivedOrgBlock(null);
+      setOrganizations(activeOrgs);
 
       // Set current org if not already set
-      if (!currentOrgState && orgs.length > 0) {
+      if (!currentOrgState && activeOrgs.length > 0) {
         // Try to get from localStorage
         const savedOrgId = localStorage.getItem('currentOrganizationId');
-        const savedOrg = orgs.find((o) => o.id === savedOrgId);
-        setCurrentOrgState(savedOrg || orgs[0]);
+        const savedOrg = activeOrgs.find((o) => o.id === savedOrgId);
+
+        // Make sure saved org is not archived (for non-admins)
+        if (savedOrg && (isSystemAdmin || !savedOrg.isArchived)) {
+          setCurrentOrgState(savedOrg);
+        } else {
+          setCurrentOrgState(activeOrgs[0]);
+        }
       }
     } catch (error) {
       console.error('Error fetching organizations:', error);
@@ -214,6 +243,7 @@ export const OrganizationProvider: React.FC<OrganizationProviderProps> = ({ chil
     setCurrentOrg,
     createOrganization,
     loading,
+    archivedOrgBlock,
   };
 
   return <OrganizationContext.Provider value={value}>{children}</OrganizationContext.Provider>;

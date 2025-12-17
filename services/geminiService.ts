@@ -2,8 +2,10 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { doc, getDoc, addDoc, collection, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { ContentType, Tone, PromptType, AdminConfig, Project } from '../types';
+import { ContentType, Tone, PromptType, AdminConfig, Project, TIER_FEATURES, SubscriptionTier, CategoryResearch, ContentFormat } from '../types';
 import { buildContentContext, buildPromptBlock } from './contextBuilder';
+import { researchService, getExistingResearch, buildResearchContext } from './researchService';
+import { deduplicationService } from './deduplicationService';
 
 const getClient = () => {
   const apiKey = process.env.API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
@@ -182,6 +184,8 @@ export interface GeneratedTitleData {
   title: string;
   teaser: string;
   keywords: string[];
+  searchIntent?: 'informational' | 'commercial' | 'transactional';
+  contentFormat?: ContentFormat;
 }
 
 export const generateCategoryTitles = async (
@@ -190,7 +194,8 @@ export const generateCategoryTitles = async (
   count: number = 5,
   organizationId?: string,
   projectId?: string,
-  userId?: string
+  userId?: string,
+  categoryId?: string  // NEW: For research and deduplication
 ): Promise<GeneratedTitleData[]> => {
   console.log(`[Gemini] Starting title generation for "${categoryName}" (${count} titles)`);
 
@@ -271,6 +276,57 @@ export const generateCategoryTitles = async (
     const adminConfig = await getAdminConfig();
     let prompt = '';
 
+    // ========================================
+    // RESEARCH & DEDUPLICATION CONTEXT
+    // ========================================
+    let researchData: CategoryResearch | null = null;
+    let existingTitles = '';
+    let coveredTopics: string[] = [];
+    let suggestedFormats: ContentFormat[] = [];
+    let orgTier: SubscriptionTier = SubscriptionTier.FREE;
+
+    if (categoryId && organizationId && projectId) {
+      try {
+        // Get org tier for determining what to show
+        const orgSnap = await getDoc(doc(db, 'organizations', organizationId));
+        if (orgSnap.exists()) {
+          orgTier = orgSnap.data().subscriptionTier || SubscriptionTier.FREE;
+        }
+
+        // Fetch existing research (don't generate new - that happens on-demand)
+        researchData = await getExistingResearch(categoryId);
+        console.log(`[Gemini] Research data: ${researchData ? 'found' : 'not found'}`);
+
+        // Fetch deduplication context
+        [existingTitles, coveredTopics, suggestedFormats] = await Promise.all([
+          deduplicationService.getExistingTitlesContext(categoryId, organizationId, projectId, 30),
+          deduplicationService.getCoveredTopics(categoryId, organizationId, projectId),
+          deduplicationService.suggestContentFormats(categoryId, organizationId, projectId)
+        ]);
+
+        console.log(`[Gemini] Dedup context: ${existingTitles ? 'found' : 'none'}, ${coveredTopics.length} topics, ${suggestedFormats.length} format suggestions`);
+      } catch (err) {
+        console.warn('[Gemini] Could not fetch research/dedup context:', err);
+      }
+    }
+
+    // Build research context for prompt
+    const showMetrics = TIER_FEATURES[orgTier].showKeywordMetrics;
+    const formatKeywords = (keywords: any[] | undefined) => {
+      if (!keywords || keywords.length === 0) return '';
+      return keywords.map(k => {
+        if (showMetrics && k.searchVolume) {
+          return `${k.keyword} (${k.searchVolume}/mo)`;
+        }
+        return k.keyword;
+      }).join(', ');
+    };
+
+    const formatContentGaps = (gaps: any[] | undefined) => {
+      if (!gaps || gaps.length === 0) return '';
+      return gaps.map(g => `- ${g.topic}: ${g.opportunity}`).join('\n');
+    };
+
     if (adminConfig?.prompts?.[PromptType.TITLE_GENERATION]) {
       // Use admin prompt template with helper function
       prompt = replacePromptVariables(adminConfig.prompts[PromptType.TITLE_GENERATION], {
@@ -278,7 +334,17 @@ export const generateCategoryTitles = async (
         categoryName,
         categoryDescription,
         projectContext: fullContext,
-        businessContext: ''
+        businessContext: '',
+        // Research data
+        researchData: researchData ? 'true' : '',
+        primaryKeywords: formatKeywords(researchData?.primaryKeywords),
+        relatedKeywords: formatKeywords(researchData?.relatedKeywords),
+        questionsToAnswer: researchData?.questionsToAnswer?.join('\n') || '',
+        contentGaps: formatContentGaps(researchData?.contentGaps),
+        // Deduplication data
+        existingTitles,
+        coveredTopics: coveredTopics.join(', '),
+        suggestedFormats: suggestedFormats.join(', ')
       });
 
       // If template doesn't include context, prepend it
@@ -329,7 +395,9 @@ For each idea, provide:
                   properties: {
                     title: { type: Type.STRING },
                     teaser: { type: Type.STRING },
-                    keywords: { type: Type.ARRAY, items: { type: Type.STRING } }
+                    keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    searchIntent: { type: Type.STRING },
+                    contentFormat: { type: Type.STRING }
                   },
                   required: ['title', 'teaser', 'keywords']
                 }
@@ -634,7 +702,9 @@ export const generatePostOutline = async (
   userId?: string,
   categoryDescription?: string,
   contentType: ContentType = ContentType.ARTICLE,
-  tone: Tone = Tone.PROFESSIONAL
+  tone: Tone = Tone.PROFESSIONAL,
+  categoryId?: string,  // NEW: For research data
+  postContentFormat?: ContentFormat  // NEW: Content format from title generation
 ): Promise<string> => {
   try {
     console.log(`[Gemini] 🎯 Starting content generation for: "${title}"`);
@@ -649,6 +719,13 @@ export const generatePostOutline = async (
       organizationId ? getOrgSettings(organizationId) : null,
       (organizationId && projectId) ? getDoc(doc(db, `organizations/${organizationId}/projects`, projectId)) : null
     ]);
+
+    // Fetch research data for SEO context
+    let researchData: CategoryResearch | null = null;
+    if (categoryId) {
+      researchData = await getExistingResearch(categoryId);
+      console.log(`[Gemini] Research data for content: ${researchData ? 'found' : 'not found'}`);
+    }
 
     // Build Business Context using Context Builder
     let businessContextBlock = '';
@@ -714,11 +791,19 @@ export const generatePostOutline = async (
           : orgData.targetAudience.demographics.geographic;
       }
 
+      // Build SEO context from research
+      const primaryKeyword = researchData?.primaryKeywords?.[0]?.keyword || '';
+      const secondaryKeywords = researchData?.primaryKeywords?.slice(1, 4).map(k => k.keyword).join(', ') || '';
+      const targetWordCount = researchData?.avgCompetitorWordCount
+        ? Math.ceil(researchData.avgCompetitorWordCount * 1.2)
+        : 1500;
+
       // Use helper function for variable replacement
       prompt = replacePromptVariables(template, {
         topic: title,
         category: categoryName,
         categoryDescription: categoryDescription || '',
+        contentFormat: postContentFormat || '',
         targetAudience: orgData?.targetAudience?.primary || 'General Audience',
         geographic,
         tone,
@@ -726,7 +811,17 @@ export const generatePostOutline = async (
         brandCompliance: orgData?.brandCompliance || 'None',
         keywords: tags?.join(', ') || 'None',
         teaser: teaser || 'None',
-        businessContext: businessContextBlock // Inject the built context
+        businessContext: businessContextBlock, // Inject the built context
+        // SEO/Research variables
+        researchData: researchData ? 'true' : '',
+        primaryKeyword,
+        secondaryKeywords,
+        targetWordCount: targetWordCount.toString(),
+        questionsToAnswer: researchData?.questionsToAnswer?.join('\n') || '',
+        // Competitor analysis
+        competitorAnalysis: researchData?.avgCompetitorWordCount ? 'true' : '',
+        avgCompetitorWordCount: researchData?.avgCompetitorWordCount?.toString() || '',
+        missingTopics: researchData?.missingTopics?.join(', ') || ''
       });
 
       // If template doesn't include businessContext variable, prepend it

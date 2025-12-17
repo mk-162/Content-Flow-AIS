@@ -1,7 +1,9 @@
 import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useOrganization } from '../contexts/OrganizationContext';
 import { GlobalRole } from '../types';
+import { ArchivedOrganizationPage } from '../pages/ArchivedOrganizationPage';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -10,9 +12,10 @@ interface ProtectedRouteProps {
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, requireRole }) => {
   const { user, loading } = useAuth();
+  const { archivedOrgBlock, loading: orgLoading } = useOrganization();
 
   // Show loading spinner while checking auth state
-  if (loading) {
+  if (loading || orgLoading) {
     return (
       <div className="min-h-screen bg-[#0f172a] flex items-center justify-center">
         <div className="text-center">
@@ -26,6 +29,11 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, requir
   // Redirect to login if not authenticated
   if (!user) {
     return <Navigate to="/login" replace />;
+  }
+
+  // Show archived organization page if user's only org is archived
+  if (archivedOrgBlock) {
+    return <ArchivedOrganizationPage organizationName={archivedOrgBlock.name} />;
   }
 
   // Check role requirement if specified

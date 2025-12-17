@@ -9,8 +9,10 @@ import {
   Shield,
   ChevronDown,
   MoreVertical,
-  RefreshCw
+  RefreshCw,
+  UserPlus
 } from 'lucide-react';
+import { AdminAddUserModal } from '../../components/AdminAddUserModal';
 
 export const AdminUsers: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
@@ -20,6 +22,7 @@ export const AdminUsers: React.FC = () => {
   const [roleFilter, setRoleFilter] = useState<GlobalRole | 'ALL'>('ALL');
   const [actionMenuOpen, setActionMenuOpen] = useState<string | null>(null);
   const [updating, setUpdating] = useState<string | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -129,14 +132,23 @@ export const AdminUsers: React.FC = () => {
             {filteredUsers.length} of {users.length} users
           </p>
         </div>
-        <button
-          onClick={fetchUsers}
-          disabled={loading}
-          className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm rounded-lg transition-colors"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-sm rounded-lg font-medium transition-colors"
+          >
+            <UserPlus className="w-4 h-4" />
+            Add User
+          </button>
+          <button
+            onClick={fetchUsers}
+            disabled={loading}
+            className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm rounded-lg transition-colors"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -306,6 +318,16 @@ export const AdminUsers: React.FC = () => {
           </tbody>
         </table>
       </div>
+
+      {/* Add User Modal */}
+      <AdminAddUserModal
+        isOpen={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        onSuccess={() => {
+          fetchUsers();
+          setShowAddModal(false);
+        }}
+      />
     </div>
   );
 };

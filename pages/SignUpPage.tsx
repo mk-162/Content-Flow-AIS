@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { UserPlus, Mail, Lock, User, AlertCircle, CheckCircle } from 'lucide-react';
+import MissionLogo from '../Mission.svg';
 
 export const SignUpPage: React.FC = () => {
   const navigate = useNavigate();
@@ -59,7 +60,7 @@ export const SignUpPage: React.FC = () => {
       <div className="w-full max-w-md">
         {/* Logo/Brand */}
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-white mb-1">ContentFlow AI</h1>
+          <img src={MissionLogo} alt="MissionContent" className="h-10 mx-auto mb-2" />
           <p className="text-slate-500 text-sm">Create your account</p>
         </div>
 

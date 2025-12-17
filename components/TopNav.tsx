@@ -15,6 +15,7 @@ import { useNavigate } from 'react-router-dom';
 import { GlobalRole } from '../types';
 import { OrganizationSelector } from './OrganizationSelector';
 import { motion, AnimatePresence } from 'framer-motion';
+import MissionLogo from '../Mission.svg';
 
 export const TopNav: React.FC = () => {
   const { user, signOut } = useAuth();
@@ -43,7 +44,7 @@ export const TopNav: React.FC = () => {
         <div className="flex items-center justify-between">
           {/* Left: Logo and Organization/Project */}
           <div className="flex items-center gap-4">
-            <h1 className="text-xl font-bold text-cyan-400">ContentFlow AI</h1>
+            <img src={MissionLogo} alt="MissionContent" className="h-10" />
 
             {/* Organization Selector */}
             {currentOrg && (

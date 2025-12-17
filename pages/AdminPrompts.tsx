@@ -8,33 +8,56 @@ import { clearCaches } from '../services/geminiService';
 
 // DEFAULT PROMPTS - Content Generation
 const DEFAULT_CONTENT_PROMPTS: Record<ContentType, string> = {
-    [ContentType.ARTICLE]: `You are an expert content writer creating a comprehensive blog post.
+    [ContentType.ARTICLE]: `You are an expert content writer creating a comprehensive, SEO-optimized blog post.
 
+**ARTICLE BRIEF**
 Topic: "{{topic}}"
 Category: {{category}}
+Content Format: {{contentFormat}}
 Target Audience: {{targetAudience}}
 Tone: {{tone}}
+
+{{#if researchData}}
+**SEO REQUIREMENTS**
+Primary Keyword: {{primaryKeyword}} (use in first 100 words, H1, and at least one H2)
+Secondary Keywords: {{secondaryKeywords}} (incorporate naturally throughout)
+Target Word Count: {{targetWordCount}} words
+Questions to Address: {{questionsToAnswer}}
+{{/if}}
+
+{{#if competitorAnalysis}}
+**COMPETITIVE DIFFERENTIATION**
+Competitor average word count: {{avgCompetitorWordCount}} words
+Topics competitors miss: {{missingTopics}}
+Your goal: Be MORE comprehensive and address the missing topics
+{{/if}}
+
+**BRAND VOICE**
 Brand Message: {{brandMessage}}
 Compliance Guidelines: {{brandCompliance}}
 Target Keywords: {{keywords}}
 
 {{#if teaser}}
-Specific Focus: {{teaser}}
+**Specific Focus/Angle:** {{teaser}}
 {{/if}}
 
-Structure:
-1. **Engaging Introduction** (Hook the reader, establish relevance)
-2. **3-5 Main Sections** (Use H2 and H3 headings, include examples)
-3. **Key Takeaways** (Bullet points)
-4. **Conclusion** (Call to action)
+**STRUCTURE**
+1. **Hook** (50-100 words) - Start with primary keyword, grab attention
+2. **Context** (100-150 words) - Why this matters to the reader
+3. **Main Content** (800-1200 words) - 3-5 H2 sections with H3 subsections
+   {{#if questionsToAnswer}}- Address the questions listed above{{/if}}
+4. **Key Takeaways** - Bullet point summary
+5. **Conclusion** - Clear call to action
 
-Requirements:
+**REQUIREMENTS**
 - Write in {{tone}} tone
+- {{#if primaryKeyword}}Use "{{primaryKeyword}}" in first 100 words{{/if}}
 - Naturally incorporate keywords: {{keywords}}
 - Align with brand message: {{brandMessage}}
 - Follow compliance: {{brandCompliance}}
-- Use markdown formatting
-- Start directly with content (no preambles)`,
+- Use markdown formatting (H2, H3, bullets, bold)
+- Start directly with the hook (no preambles like "Here is...")
+- {{#if targetWordCount}}Target {{targetWordCount}} words{{/if}}`,
 
     [ContentType.SOCIAL_MEDIA]: `Create a compelling social media post for: "{{topic}}"
 
@@ -96,7 +119,7 @@ Requirements:
 
 // DEFAULT PROMPTS - System Prompts
 const DEFAULT_SYSTEM_PROMPTS: Record<PromptType, string> = {
-    [PromptType.TITLE_GENERATION]: `You are an expert Content Strategist.
+    [PromptType.TITLE_GENERATION]: `You are an expert SEO Content Strategist.
 
 {{#if projectContext}}
 {{projectContext}}
@@ -109,21 +132,41 @@ Generate {{count}} high-quality, SEO-optimized blog post ideas for the category:
 
 Category Description: {{categoryDescription}}
 
-CRITICAL: All ideas MUST be directly relevant to the project and business context above. Do NOT generate generic content or content about unrelated topics.
+{{#if researchData}}
+**KEYWORD RESEARCH DATA**
+Target Keywords: {{primaryKeywords}}
+Related Keywords: {{relatedKeywords}}
+Questions to Address: {{questionsToAnswer}}
+Content Gaps & Opportunities: {{contentGaps}}
+{{/if}}
+
+{{#if existingTitles}}
+**AVOID DUPLICATES - These titles already exist:**
+{{existingTitles}}
+
+Topics already covered: {{coveredTopics}}
+Generate DIFFERENT angles and perspectives.
+{{/if}}
+
+{{#if suggestedFormats}}
+**CONTENT DIVERSITY - Prioritize these formats:**
+{{suggestedFormats}}
+{{/if}}
+
+CRITICAL REQUIREMENTS:
+1. All ideas MUST be directly relevant to the project and business context
+2. {{#if researchData}}Each title should target a specific keyword from the research{{/if}}
+3. {{#if existingTitles}}Generate completely NEW angles - avoid similar topics{{/if}}
+4. Include search intent (informational/commercial/transactional)
 
 For each idea, provide:
-1. **Title**: Compelling, click-worthy, 50-60 characters, specific to this business
-2. **Teaser**: 1-2 sentence description of what the post should cover (this guides the writer)
-3. **Keywords**: 3-5 target SEO keywords relevant to this specific business/industry
+1. **Title**: Compelling, click-worthy, 50-60 characters, targets a specific keyword
+2. **Teaser**: 1-2 sentence description guiding what the post should cover
+3. **Keywords**: 3-5 target SEO keywords from the research data
+4. **searchIntent**: Type of search intent (informational, commercial, transactional)
+5. **contentFormat**: Suggested format (how-to, listicle, comparison, guide, case-study, news, opinion, review)
 
-Ensure titles are:
-- Directly relevant to the project/business context
-- Actionable and specific to this industry
-- Include power words
-- Address user pain points or curiosity
-- Optimized for search intent
-
-Return as JSON array with fields: title, teaser, keywords`,
+Return as JSON: { ideas: [{ title, teaser, keywords, searchIntent, contentFormat }] }`,
 
     [PromptType.CATEGORY_SUGGESTIONS]: `You are an expert Content Strategist.
 
@@ -463,13 +506,21 @@ export const AdminPrompts: React.FC = () => {
                                             <div className="grid grid-cols-2 gap-2 text-xs">
                                                 <div><code className="text-cyan-400">{'{{topic}}'}</code> - Post title</div>
                                                 <div><code className="text-cyan-400">{'{{category}}'}</code> - Category name</div>
+                                                <div><code className="text-cyan-400">{'{{contentFormat}}'}</code> - Content format type</div>
                                                 <div><code className="text-cyan-400">{'{{targetAudience}}'}</code> - Target audience</div>
-                                                <div><code className="text-cyan-400">{'{{geographic}}'}</code> - Geographic location</div>
                                                 <div><code className="text-cyan-400">{'{{tone}}'}</code> - Content tone</div>
                                                 <div><code className="text-cyan-400">{'{{brandMessage}}'}</code> - Brand message</div>
                                                 <div><code className="text-cyan-400">{'{{brandCompliance}}'}</code> - Compliance guidelines</div>
                                                 <div><code className="text-cyan-400">{'{{keywords}}'}</code> - Target keywords</div>
                                                 <div><code className="text-cyan-400">{'{{teaser}}'}</code> - Post teaser/focus</div>
+                                                <div><code className="text-cyan-400">{'{{researchData}}'}</code> - Has research (for #if)</div>
+                                                <div><code className="text-cyan-400">{'{{primaryKeyword}}'}</code> - Primary SEO keyword</div>
+                                                <div><code className="text-cyan-400">{'{{secondaryKeywords}}'}</code> - Secondary keywords</div>
+                                                <div><code className="text-cyan-400">{'{{targetWordCount}}'}</code> - Target word count</div>
+                                                <div><code className="text-cyan-400">{'{{questionsToAnswer}}'}</code> - FAQs to address</div>
+                                                <div><code className="text-cyan-400">{'{{competitorAnalysis}}'}</code> - Has competitor data</div>
+                                                <div><code className="text-cyan-400">{'{{avgCompetitorWordCount}}'}</code> - Avg competitor length</div>
+                                                <div><code className="text-cyan-400">{'{{missingTopics}}'}</code> - Topics competitors miss</div>
                                             </div>
                                         </div>
                                     </div>
@@ -526,7 +577,14 @@ export const AdminPrompts: React.FC = () => {
                                                         <div><code className="text-purple-400">{'{{count}}'}</code> - Number of titles to generate</div>
                                                         <div><code className="text-purple-400">{'{{categoryName}}'}</code> - Category name</div>
                                                         <div><code className="text-purple-400">{'{{categoryDescription}}'}</code> - Category description</div>
-                                                        <div><code className="text-purple-400">{'{{geographic}}'}</code> - Geographic location</div>
+                                                        <div><code className="text-purple-400">{'{{researchData}}'}</code> - Has research (for #if)</div>
+                                                        <div><code className="text-purple-400">{'{{primaryKeywords}}'}</code> - Target keywords</div>
+                                                        <div><code className="text-purple-400">{'{{relatedKeywords}}'}</code> - Related keywords</div>
+                                                        <div><code className="text-purple-400">{'{{questionsToAnswer}}'}</code> - FAQs to address</div>
+                                                        <div><code className="text-purple-400">{'{{contentGaps}}'}</code> - Content opportunities</div>
+                                                        <div><code className="text-purple-400">{'{{existingTitles}}'}</code> - Existing post titles</div>
+                                                        <div><code className="text-purple-400">{'{{coveredTopics}}'}</code> - Topics already covered</div>
+                                                        <div><code className="text-purple-400">{'{{suggestedFormats}}'}</code> - Recommended formats</div>
                                                     </>
                                                 )}
                                                 {activeSystemTab === PromptType.CATEGORY_SUGGESTIONS && (

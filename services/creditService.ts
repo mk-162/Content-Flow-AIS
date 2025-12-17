@@ -11,7 +11,9 @@ import { CreditTransaction, Organization, SubscriptionTier, TIER_LIMITS } from '
 
 export const CREDIT_COSTS = {
     ARTICLE_GENERATION: 1,
-    IMAGE_GENERATION: 5
+    IMAGE_GENERATION: 5,
+    SHALLOW_RESEARCH: 2,   // AI-estimated keyword research
+    DEEP_RESEARCH: 8       // DataForSEO real keyword data
 };
 
 export const MONTHLY_ALLOWANCE: Record<SubscriptionTier, number> = {
@@ -127,8 +129,20 @@ export const creditService = {
                 const currentBalance = orgData.credits?.balance ?? 0;
                 const newBalance = currentBalance + amount;
 
-                transaction.update(orgRef, {
+                // Ensure the full credits object exists (not just balance)
+                const creditsUpdate = orgData.credits ? {
                     'credits.balance': newBalance,
+                } : {
+                    credits: {
+                        balance: newBalance,
+                        monthlyAllowance: 0,
+                        lastRefillAt: Timestamp.now(),
+                        nextRefillAt: Timestamp.now()
+                    }
+                };
+
+                transaction.update(orgRef, {
+                    ...creditsUpdate,
                     updatedAt: Timestamp.now()
                 });
 

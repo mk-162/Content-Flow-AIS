@@ -8,13 +8,8 @@ import {
   ChevronDown,
   Building2,
   Settings,
-  Terminal,
   Rocket,
-  Zap,
   LayoutGrid,
-  LogOut,
-  User,
-  Shield
 } from 'lucide-react';
 import { CategoryWorkspace } from '../components/CategoryWorkspace';
 import { PostsWorkspace } from '../components/PostsWorkspace';
@@ -30,7 +25,6 @@ import {
   TaskStatus,
   TaskType,
   PostStatus,
-  GlobalRole,
 } from '../types';
 import {
   collection,
@@ -42,15 +36,14 @@ import {
   deleteDoc,
   doc,
   Timestamp,
-  getDocs,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { generateCategoryTitles, generatePostOutline, GeneratedTitleData } from '../services/geminiService';
 import { ProjectSettings } from '../components/ProjectSettings';
-import { CreditManagementModal } from '../components/CreditManagementModal';
-import { DebugFooter } from '../components/DebugFooter';
+import { TopBar } from '../components/layout';
 import { creditService, CREDIT_COSTS } from '../services/creditService';
 import { imageGenerationService } from '../services/imageGenerationService';
+import { CreditManagementModal } from '../components/CreditManagementModal';
 
 interface ExtendedGenerationTask extends GenerationTask {
   requestedCount?: number;
@@ -60,7 +53,7 @@ interface ExtendedGenerationTask extends GenerationTask {
 export const MainWorkspace: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, signOut } = useAuth();
+  const { user } = useAuth();
   const { currentOrg } = useOrganization();
   const { currentProject, projects, setCurrentProject } = useProject();
 
@@ -73,12 +66,9 @@ export const MainWorkspace: React.FC = () => {
   const [notifications, setNotifications] = useState<{ id: string; msg: string; type: 'success' | 'info' }[]>([]);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
   const [showProjectMenu, setShowProjectMenu] = useState(false);
-  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
   const isProcessingRef = React.useRef(false);
-
-  const isSystemAdmin = user?.globalRole === GlobalRole.SYSTEM_ADMIN;
 
   const notify = (msg: string, type: 'success' | 'info' = 'info') => {
     const id = Math.random().toString(36);
@@ -635,222 +625,143 @@ export const MainWorkspace: React.FC = () => {
   const reviewCount = posts.filter((p) => p.status === PostStatus.NEEDS_REVIEW).length;
 
   return (
-    <div className="flex h-screen bg-[#0f172a] text-slate-200 font-sans selection:bg-cyan-500/30">
-      {/* SIDEBAR */}
-      <aside
-        className={`
-            ${isSidebarCollapsed ? 'w-16' : 'w-64'}
-            bg-slate-950 border-r border-slate-800 flex flex-col shrink-0 z-50 transition-all duration-300 ease-in-out
-          `}
-      >
-        {/* Header: Branding + Collapse Toggle */}
-        <div className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'justify-between'} p-4 border-b border-slate-800`}>
-          {!isSidebarCollapsed && (
-            <h1 className="text-lg font-bold text-cyan-400 tracking-tight">ContentFlow</h1>
-          )}
-          <button
-            onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-            className="p-1 text-slate-500 hover:text-white hover:bg-slate-800 transition-colors rounded"
-            title={isSidebarCollapsed ? 'Expand' : 'Collapse'}
-          >
-            {isSidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-          </button>
-        </div>
+    <div className="flex flex-col h-screen bg-[#0f172a] text-slate-200 font-sans selection:bg-cyan-500/30">
+      {/* TOP BAR */}
+      <TopBar showProject={true} />
 
-        {/* Project & Org Selector */}
-        {!isSidebarCollapsed && (
-          <div className="p-4 border-b border-slate-800">
-            <div className="relative">
-              <button
-                onClick={() => setShowProjectMenu(!showProjectMenu)}
-                className="w-full flex items-center justify-between p-3 bg-slate-900 border border-slate-700 hover:border-slate-600 transition-colors rounded text-left"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-white truncate">{currentProject?.name || 'Select Project'}</p>
-                  <p className="text-xs text-slate-500 truncate">{currentOrg?.name || 'No Organization'}</p>
-                </div>
-                <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${showProjectMenu ? 'rotate-180' : ''}`} />
-              </button>
-
-              {/* Project Dropdown */}
-              {showProjectMenu && (
-                <>
-                  <div className="fixed inset-0 z-30" onClick={() => setShowProjectMenu(false)} />
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-slate-900 border border-slate-700 rounded shadow-xl z-40 max-h-64 overflow-y-auto">
-                    {projects.map((project) => (
-                      <button
-                        key={project.id}
-                        onClick={() => {
-                          setCurrentProject(project.id);
-                          setShowProjectMenu(false);
-                        }}
-                        className={`w-full px-3 py-2 text-left text-sm hover:bg-slate-800 transition-colors ${currentProject?.id === project.id ? 'bg-slate-800 text-cyan-400' : 'text-slate-200'
-                          }`}
-                      >
-                        {project.name}
-                      </button>
-                    ))}
-                    <div className="border-t border-slate-700 mt-1 pt-1">
-                      <button
-                        onClick={() => {
-                          navigate('/projects');
-                          setShowProjectMenu(false);
-                        }}
-                        className="w-full px-3 py-2 text-left text-xs text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex items-center gap-2"
-                      >
-                        <LayoutGrid size={14} />
-                        Manage All Projects
-                      </button>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Collapsed: Just show icon */}
-        {isSidebarCollapsed && (
-          <div className="p-3 flex justify-center border-b border-slate-800">
+      {/* MAIN AREA: Sidebar + Content */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* TOOLS SIDEBAR */}
+        <aside
+          className={`
+              ${isSidebarCollapsed ? 'w-16' : 'w-64'}
+              bg-slate-950 border-r border-slate-800 flex flex-col shrink-0 z-40 transition-all duration-300 ease-in-out
+            `}
+        >
+          {/* Header: Collapse Toggle + Project Selector */}
+          <div className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'justify-between'} p-4 border-b border-slate-800`}>
+            {!isSidebarCollapsed && (
+              <span className="text-sm font-medium text-slate-400 uppercase tracking-wider">Workspace</span>
+            )}
             <button
-              onClick={() => setIsSidebarCollapsed(false)}
-              className="p-2 bg-slate-900 border border-slate-700 rounded"
-              title={`${currentProject?.name} - ${currentOrg?.name}`}
+              onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+              className="p-1 text-slate-500 hover:text-white hover:bg-slate-800 transition-colors"
+              title={isSidebarCollapsed ? 'Expand' : 'Collapse'}
             >
-              <Building2 className="w-4 h-4 text-cyan-400" />
+              {isSidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
             </button>
           </div>
-        )}
 
-        {/* Main Navigation */}
-        <nav className="flex-1 py-4 overflow-y-auto">
-          <NavButton
-            active={currentScreen === Screen.CATEGORIES}
-            onClick={() => setCurrentScreen(Screen.CATEGORIES)}
-            icon={<FolderTree />}
-            label="Categories"
-            collapsed={isSidebarCollapsed}
-          />
-          <NavButton
-            active={currentScreen === Screen.POSTS}
-            onClick={() => setCurrentScreen(Screen.POSTS)}
-            icon={<FileText />}
-            label="Posts"
-            badge={
-              activeTaskCount > 0
-                ? activeTaskCount
-                : reviewCount > 0
-                  ? reviewCount
-                  : undefined
-            }
-            badgeColor={activeTaskCount > 0 ? 'bg-cyan-500' : 'bg-emerald-500'}
-            collapsed={isSidebarCollapsed}
-          />
-          <NavButton
-            active={currentScreen === Screen.PUBLISHING}
-            onClick={() => setCurrentScreen(Screen.PUBLISHING)}
-            icon={<Rocket />}
-            label="Publishing"
-            collapsed={isSidebarCollapsed}
-          />
-          <div className="my-2 mx-4 border-b border-slate-800" />
-          <NavButton
-            onClick={() => setCurrentScreen(Screen.SETTINGS)}
-            icon={<Settings />}
-            label="Project Settings"
-            collapsed={isSidebarCollapsed}
-          />
-          <NavButton
-            active={false}
-            onClick={() => navigate('/settings/organization')}
-            icon={<Building2 />}
-            label="Org Settings"
-            collapsed={isSidebarCollapsed}
-          />
-          {isSystemAdmin && (
-            <NavButton
-              active={false}
-              onClick={() => navigate('/admin/prompts')}
-              icon={<Terminal />}
-              label="Admin Prompts"
-              collapsed={isSidebarCollapsed}
-            />
-          )}
-        </nav>
+          {/* Project Selector (when expanded) */}
+          {!isSidebarCollapsed && (
+            <div className="p-4 border-b border-slate-800">
+              <div className="relative">
+                <button
+                  onClick={() => setShowProjectMenu(!showProjectMenu)}
+                  className="w-full flex items-center justify-between p-3 bg-slate-900 border border-slate-700 hover:border-slate-600 transition-colors text-left"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-white truncate">{currentProject?.name || 'Select Project'}</p>
+                    <p className="text-xs text-slate-500 truncate">{currentOrg?.name || 'No Organization'}</p>
+                  </div>
+                  <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${showProjectMenu ? 'rotate-180' : ''}`} />
+                </button>
 
-        {/* Bottom Section: Credits + User Account */}
-        <div className="border-t border-slate-800">
-          {/* Credits */}
-          <button
-            onClick={() => setIsCreditModalOpen(true)}
-            className={`w-full flex items-center gap-3 p-3 hover:bg-slate-900 transition-colors ${isSidebarCollapsed ? 'justify-center' : ''}`}
-            title={isSidebarCollapsed ? `Credits: ${currentOrg?.credits?.balance ?? 0}` : undefined}
-          >
-            <Zap className="w-4 h-4 text-indigo-400 shrink-0" />
-            {!isSidebarCollapsed && (
-              <div className="flex-1 text-left">
-                <p className="text-xs text-slate-500">Credits</p>
-                <p className="text-sm font-semibold text-white">{currentOrg?.credits?.balance ?? 0}</p>
-              </div>
-            )}
-          </button>
-
-          {/* User Account */}
-          <div className="relative">
-            <button
-              onClick={() => setShowUserMenu(!showUserMenu)}
-              className={`w-full flex items-center gap-3 p-3 hover:bg-slate-900 transition-colors border-t border-slate-800 ${isSidebarCollapsed ? 'justify-center' : ''}`}
-              title={isSidebarCollapsed ? user?.displayName : undefined}
-            >
-              <div className="w-8 h-8 bg-cyan-500/20 rounded-full flex items-center justify-center shrink-0">
-                {user?.photoURL ? (
-                  <img src={user.photoURL} alt="" className="w-full h-full rounded-full object-cover" />
-                ) : (
-                  <User className="w-4 h-4 text-cyan-400" />
+                {/* Project Dropdown */}
+                {showProjectMenu && (
+                  <>
+                    <div className="fixed inset-0 z-30" onClick={() => setShowProjectMenu(false)} />
+                    <div className="absolute top-full left-0 right-0 mt-1 bg-slate-900 border border-slate-700 shadow-xl z-40 max-h-64 overflow-y-auto">
+                      {projects.map((project) => (
+                        <button
+                          key={project.id}
+                          onClick={() => {
+                            setCurrentProject(project.id);
+                            setShowProjectMenu(false);
+                          }}
+                          className={`w-full px-3 py-2 text-left text-sm hover:bg-slate-800 transition-colors ${currentProject?.id === project.id ? 'bg-slate-800 text-cyan-400' : 'text-slate-200'
+                            }`}
+                        >
+                          {project.name}
+                        </button>
+                      ))}
+                      <div className="border-t border-slate-700 mt-1 pt-1">
+                        <button
+                          onClick={() => {
+                            navigate('/projects');
+                            setShowProjectMenu(false);
+                          }}
+                          className="w-full px-3 py-2 text-left text-xs text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex items-center gap-2"
+                        >
+                          <LayoutGrid size={14} />
+                          Manage All Projects
+                        </button>
+                      </div>
+                    </div>
+                  </>
                 )}
               </div>
-              {!isSidebarCollapsed && (
-                <div className="flex-1 text-left min-w-0">
-                  <p className="text-sm font-medium text-white truncate">{user?.displayName}</p>
-                  <p className="text-xs text-slate-500 truncate">{user?.email}</p>
-                </div>
-              )}
-            </button>
+            </div>
+          )}
 
-            {/* User Menu Dropdown */}
-            {showUserMenu && !isSidebarCollapsed && (
-              <>
-                <div className="fixed inset-0 z-30" onClick={() => setShowUserMenu(false)} />
-                <div className="absolute bottom-full left-0 right-0 mb-1 mx-3 bg-slate-900 border border-slate-700 rounded shadow-xl z-40">
-                  {isSystemAdmin && (
-                    <button
-                      onClick={() => { navigate('/admin'); setShowUserMenu(false); }}
-                      className="w-full px-3 py-2 text-left text-sm text-purple-400 hover:bg-slate-800 transition-colors flex items-center gap-2"
-                    >
-                      <Shield size={14} />
-                      Admin Panel
-                    </button>
-                  )}
-                  <button
-                    onClick={async () => {
-                      setShowUserMenu(false);
-                      navigate('/login');
-                      await signOut();
-                    }}
-                    className="w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-slate-800 transition-colors flex items-center gap-2"
-                  >
-                    <LogOut size={14} />
-                    Sign Out
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      </aside>
+          {/* Collapsed: Just show icon */}
+          {isSidebarCollapsed && (
+            <div className="p-3 flex justify-center border-b border-slate-800">
+              <button
+                onClick={() => setIsSidebarCollapsed(false)}
+                className="p-2 bg-slate-900 border border-slate-700"
+                title={`${currentProject?.name} - ${currentOrg?.name}`}
+              >
+                <Building2 className="w-4 h-4 text-cyan-400" />
+              </button>
+            </div>
+          )}
+
+          {/* Main Navigation */}
+          <nav className="flex-1 py-4 overflow-y-auto">
+            <NavButton
+              active={currentScreen === Screen.CATEGORIES}
+              onClick={() => setCurrentScreen(Screen.CATEGORIES)}
+              icon={<FolderTree />}
+              label="Categories"
+              collapsed={isSidebarCollapsed}
+            />
+            <NavButton
+              active={currentScreen === Screen.POSTS}
+              onClick={() => setCurrentScreen(Screen.POSTS)}
+              icon={<FileText />}
+              label="Posts"
+              badge={
+                activeTaskCount > 0
+                  ? activeTaskCount
+                  : reviewCount > 0
+                    ? reviewCount
+                    : undefined
+              }
+              badgeColor={activeTaskCount > 0 ? 'bg-cyan-500' : 'bg-emerald-500'}
+              collapsed={isSidebarCollapsed}
+            />
+            <NavButton
+              active={currentScreen === Screen.PUBLISHING}
+              onClick={() => setCurrentScreen(Screen.PUBLISHING)}
+              icon={<Rocket />}
+              label="Publishing"
+              collapsed={isSidebarCollapsed}
+            />
+            <div className="my-2 mx-4 border-b border-slate-800" />
+            <NavButton
+              active={currentScreen === Screen.SETTINGS}
+              onClick={() => setCurrentScreen(Screen.SETTINGS)}
+              icon={<Settings />}
+              label="Project Settings"
+              collapsed={isSidebarCollapsed}
+            />
+          </nav>
+        </aside>
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col h-full overflow-hidden bg-[#0f172a] relative">
+        {/* Credit Modal (for insufficient credits) */}
         <CreditManagementModal
           isOpen={isCreditModalOpen}
           onClose={() => setIsCreditModalOpen(false)}
@@ -926,9 +837,7 @@ export const MainWorkspace: React.FC = () => {
           </div>
         )}
       </main>
-
-      {/* Debug Footer for System Admins */}
-      <DebugFooter />
+      </div>
     </div>
   );
 };

@@ -1,12 +1,13 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Category, Post, PostStatus, GenerationTask, TaskStatus, TaskType } from '../types';
+import { Category, Post, PostStatus, GenerationTask, TaskStatus, TaskType, CategoryResearch, TIER_FEATURES, SubscriptionTier } from '../types';
 import {
     Plus, ChevronRight, Sparkles, Search, Wand2,
     X, Check, Play, Trash2, Loader2, FileText, AlertTriangle,
-    GripVertical, ArrowRight, Tag, User, Edit2, RefreshCw, Info
+    GripVertical, ArrowRight, Tag, User, Edit2, RefreshCw, Info, Target, TrendingUp
 } from 'lucide-react';
 import { suggestCategories, CategorySuggestion } from '../services/geminiService';
+import { researchService, getExistingResearch, isResearchStale } from '../services/researchService';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     DndContext,
@@ -942,14 +943,149 @@ const CategoryCreator: React.FC<{
 // ============================================================================
 // SINGLE CATEGORY GENERATE MODAL
 // ============================================================================
-const GenModal: React.FC<{ category: Category, onClose: () => void, onConfirm: (n: number, c: string) => void }> = ({ category, onClose, onConfirm }) => {
+const GenModal: React.FC<{
+    category: Category,
+    onClose: () => void,
+    onConfirm: (n: number, c: string) => void,
+    organizationId?: string,
+    projectId?: string
+}> = ({ category, onClose, onConfirm, organizationId, projectId }) => {
     const [count, setCount] = useState(5);
     const [context, setContext] = useState(category.description || '');
+    const [research, setResearch] = useState<CategoryResearch | null>(null);
+    const [loadingResearch, setLoadingResearch] = useState(false);
+    const [generatingResearch, setGeneratingResearch] = useState(false);
+    const [showResearchPanel, setShowResearchPanel] = useState(false);
+
+    // Load existing research on mount
+    useEffect(() => {
+        const loadResearch = async () => {
+            if (!category.id) return;
+            setLoadingResearch(true);
+            try {
+                const existingResearch = await getExistingResearch(category.id);
+                setResearch(existingResearch);
+            } catch (err) {
+                console.warn('Could not load research:', err);
+            } finally {
+                setLoadingResearch(false);
+            }
+        };
+        loadResearch();
+    }, [category.id]);
+
+    const handleGenerateResearch = async () => {
+        if (!organizationId || !projectId) return;
+        setGeneratingResearch(true);
+        try {
+            const newResearch = await researchService.getOrCreateResearch(
+                category.id,
+                organizationId,
+                projectId,
+                true // Force refresh
+            );
+            setResearch(newResearch);
+        } catch (err) {
+            console.error('Research generation failed:', err);
+            alert('Failed to generate research. Please try again.');
+        } finally {
+            setGeneratingResearch(false);
+        }
+    };
+
+    const researchStatus = research
+        ? isResearchStale(research)
+            ? 'stale'
+            : research.researchType === 'deep' ? 'deep' : 'shallow'
+        : 'none';
 
     return (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50">
-            <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="bg-slate-900 border border-slate-700 p-8 w-full max-w-md shadow-2xl">
-                <h2 className="text-2xl font-bold text-white mb-6">Generate Titles</h2>
+            <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="bg-slate-900 border border-slate-700 p-8 w-full max-w-lg shadow-2xl">
+                <h2 className="text-2xl font-bold text-white mb-2">Generate Titles</h2>
+                <p className="text-sm text-slate-500 mb-6">Category: {category.name}</p>
+
+                {/* Research Status Card */}
+                <div className="mb-6 p-4 bg-slate-950 border border-slate-800">
+                    <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                            <Target size={16} className={
+                                researchStatus === 'deep' ? 'text-green-400' :
+                                researchStatus === 'shallow' ? 'text-yellow-400' :
+                                researchStatus === 'stale' ? 'text-orange-400' :
+                                'text-slate-600'
+                            } />
+                            <span className="text-xs font-bold text-slate-400 uppercase">Keyword Research</span>
+                        </div>
+                        {loadingResearch ? (
+                            <Loader2 size={14} className="animate-spin text-slate-500" />
+                        ) : (
+                            <span className={`text-xs font-bold uppercase ${
+                                researchStatus === 'deep' ? 'text-green-400' :
+                                researchStatus === 'shallow' ? 'text-yellow-400' :
+                                researchStatus === 'stale' ? 'text-orange-400' :
+                                'text-slate-600'
+                            }`}>
+                                {researchStatus === 'deep' ? 'SEO Data' :
+                                 researchStatus === 'shallow' ? 'AI Estimated' :
+                                 researchStatus === 'stale' ? 'Outdated' :
+                                 'Not Generated'}
+                            </span>
+                        )}
+                    </div>
+
+                    {research && !isResearchStale(research) ? (
+                        <>
+                            <div className="text-xs text-slate-500 mb-3">
+                                {research.primaryKeywords.length} keywords • {research.questionsToAnswer.length} questions • {research.contentGaps.length} opportunities
+                            </div>
+                            <button
+                                onClick={() => setShowResearchPanel(!showResearchPanel)}
+                                className="text-xs text-cyan-400 hover:text-cyan-300"
+                            >
+                                {showResearchPanel ? 'Hide Details' : 'Show Details'}
+                            </button>
+
+                            {showResearchPanel && (
+                                <div className="mt-3 pt-3 border-t border-slate-800 space-y-2">
+                                    <div>
+                                        <span className="text-xs text-slate-500">Top Keywords:</span>
+                                        <p className="text-xs text-slate-300">
+                                            {research.primaryKeywords.slice(0, 5).map(k => k.keyword).join(', ')}
+                                        </p>
+                                    </div>
+                                    {research.questionsToAnswer.length > 0 && (
+                                        <div>
+                                            <span className="text-xs text-slate-500">Questions to Answer:</span>
+                                            <ul className="text-xs text-slate-300 list-disc list-inside">
+                                                {research.questionsToAnswer.slice(0, 3).map((q, i) => (
+                                                    <li key={i} className="truncate">{q}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </>
+                    ) : (
+                        <div className="flex items-center gap-3">
+                            <p className="text-xs text-slate-500 flex-1">
+                                Generate research for better, keyword-focused titles
+                            </p>
+                            <button
+                                onClick={handleGenerateResearch}
+                                disabled={generatingResearch || !organizationId}
+                                className="flex items-center gap-2 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-slate-700 text-white text-xs font-bold uppercase transition-colors"
+                            >
+                                {generatingResearch ? (
+                                    <><Loader2 size={12} className="animate-spin" /> Generating...</>
+                                ) : (
+                                    <><TrendingUp size={12} /> Research</>
+                                )}
+                            </button>
+                        </div>
+                    )}
+                </div>
 
                 <div className="mb-6">
                     <div className="flex justify-between items-center mb-3">
@@ -1531,6 +1667,8 @@ export const CategoryWorkspace: React.FC<Props> = ({
                             onQueueTitles(genCategory.id, count, context);
                             setIsGenModalOpen(false);
                         }}
+                        organizationId={organizationId}
+                        projectId={projectId}
                     />
                 )}
 

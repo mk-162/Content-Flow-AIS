@@ -15,6 +15,7 @@ import { AccountCreationStep } from '../components/onboarding/AccountCreationSte
 import { SubcategoryGenerationStep } from '../components/onboarding/SubcategoryGenerationStep';
 import { WorkspaceIntroStep } from '../components/onboarding/WorkspaceIntroStep';
 import { OnboardingStep } from '../types';
+import MissionLogo from '../Mission.svg';
 
 // ============================================================================
 // STEP COMPONENTS MAP
@@ -294,10 +295,7 @@ const OnboardingContent: React.FC = () => {
       <header className="flex-shrink-0 border-b border-slate-800 bg-slate-900/80 backdrop-blur-sm">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-gradient-to-br from-cyan-500 to-cyan-600 flex items-center justify-center">
-              <span className="text-white font-bold text-sm">CF</span>
-            </div>
-            <span className="font-bold text-lg text-white">ContentFlow AI</span>
+            <img src={MissionLogo} alt="MissionContent" className="h-10" />
           </div>
           <div className="flex items-center gap-4">
             {user ? (
@@ -417,7 +415,7 @@ const OnboardingContent: React.FC = () => {
       {/* Footer */}
       <footer className="flex-shrink-0 border-t border-slate-800 bg-slate-900/80 backdrop-blur-sm">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between text-xs text-slate-500">
-          <span>ContentFlow AI - AI-Powered Content Strategy</span>
+          <span>MissionContent - AI-Powered Content Strategy</span>
           <div className="flex items-center gap-4">
             <a href="#" className="hover:text-slate-300 transition-colors">Privacy</a>
             <a href="#" className="hover:text-slate-300 transition-colors">Terms</a>

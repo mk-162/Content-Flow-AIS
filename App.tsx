@@ -11,12 +11,11 @@ import { SignUpPage } from './pages/SignUpPage';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
 import { ProjectDashboard } from './pages/ProjectDashboard';
 import { MainWorkspace } from './pages/MainWorkspace';
-import { OrganizationSettings } from './pages/OrganizationSettings';
+import { Settings } from './pages/Settings';
 import { AdminPrompts } from './pages/AdminPrompts';
 import { OnboardingFlow } from './pages/OnboardingFlow';
 import { ProjectOnboardingFlow } from './pages/ProjectOnboardingFlow';
-import { AdminDashboard, AdminOverview, AdminUsers, AdminOrganizations } from './pages/admin';
-import { ImpersonationBanner } from './components/ImpersonationBanner';
+import { AdminDashboard, AdminOverview, AdminUsers, AdminOrganizations, AdminSettings } from './pages/admin';
 import { GlobalRole } from './types';
 
 const App: React.FC = () => {
@@ -35,7 +34,6 @@ const App: React.FC = () => {
           <ImpersonationProvider>
             <OrganizationProvider>
               <ProjectProvider>
-                <ImpersonationBanner />
                 <Routes>
                 {/* Public Routes */}
                 <Route path="/login" element={<LoginPage />} />
@@ -69,12 +67,17 @@ const App: React.FC = () => {
                   }
                 />
                 <Route
-                  path="/settings/organization"
+                  path="/settings"
                   element={
                     <ProtectedRoute>
-                      <OrganizationSettings />
+                      <Settings />
                     </ProtectedRoute>
                   }
+                />
+                {/* Redirect old organization settings URL */}
+                <Route
+                  path="/settings/organization"
+                  element={<Navigate to="/settings" replace />}
                 />
                 {/* Admin Routes - requires SYSTEM_ADMIN role */}
                 <Route
@@ -89,6 +92,7 @@ const App: React.FC = () => {
                   <Route path="users" element={<AdminUsers />} />
                   <Route path="organizations" element={<AdminOrganizations />} />
                   <Route path="prompts" element={<AdminPrompts />} />
+                  <Route path="settings" element={<AdminSettings />} />
                 </Route>
 
                 {/* Catch all - redirect to login */}

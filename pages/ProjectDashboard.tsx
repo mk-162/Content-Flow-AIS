@@ -7,28 +7,21 @@ import {
   Users,
   FileText,
   Calendar,
-  MoreVertical,
-  UserPlus,
   Settings,
-  Trash2,
-  Shield,
-  LogOut,
   Info,
-  Layers,
-  ChevronLeft,
   ChevronRight,
   Zap,
+  X,
 } from 'lucide-react';
 import { useOrganization } from '../contexts/OrganizationContext';
 import { useProject } from '../contexts/ProjectContext';
 import { useAuth } from '../contexts/AuthContext';
 import { collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { GlobalRole } from '../types';
 import { QuickCreateProjectModal } from '../components/QuickCreateProjectModal';
 import { ProjectCreationHub } from '../components/project/ProjectCreationHub';
 import { CloneProjectModal, CloneOptions } from '../components/project/CloneProjectModal';
-import { DebugFooter } from '../components/DebugFooter';
+import { AppShell } from '../components/layout';
 
 interface ProjectStats {
   memberCount: number;
@@ -46,20 +39,18 @@ export const ProjectDashboard: React.FC = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showCreationHub, setShowCreationHub] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
+  const [showProjectInfo, setShowProjectInfo] = useState(true);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
   const [projectStats, setProjectStats] = useState<Record<string, ProjectStats>>({});
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   // Organization creation state
   const [showOrgCreateModal, setShowOrgCreateModal] = useState(false);
   const [newOrgName, setNewOrgName] = useState('');
   const [orgCreating, setOrgCreating] = useState(false);
   const [orgError, setOrgError] = useState('');
-
-  const isSystemAdmin = user?.globalRole === GlobalRole.SYSTEM_ADMIN;
 
   // Fetch stats for each project
   useEffect(() => {
@@ -169,34 +160,12 @@ export const ProjectDashboard: React.FC = () => {
 
   if (!currentOrg) {
     return (
-      <div className="min-h-screen bg-[#0f172a] flex flex-col">
-        {/* Top bar with sign out */}
-        <div className="border-b border-slate-800 bg-slate-950">
-          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <FileText className="w-5 h-5 text-cyan-400" />
-              <span className="text-slate-200 font-bold text-sm">ContentFlow AI</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-slate-500 text-xs">{user?.email}</span>
-              <button
-                onClick={async () => {
-                  await signOut();
-                  navigate('/login');
-                }}
-                className="text-slate-500 hover:text-white text-xs uppercase tracking-wider font-medium transition-colors"
-              >
-                Sign out
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Main content */}
+      <AppShell showProject={false}>
+        {/* Main content - no org */}
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center max-w-md">
             <Folder className="w-16 h-16 text-slate-700 mx-auto mb-4" />
-            <h2 className="text-xl font-bold text-white mb-2">Welcome to ContentFlow AI!</h2>
+            <h2 className="text-xl font-bold text-white mb-2">Welcome to MissionContent!</h2>
             <p className="text-slate-500 text-sm mb-6">
               Get started by creating your first organization
             </p>
@@ -215,7 +184,7 @@ export const ProjectDashboard: React.FC = () => {
         {showOrgCreateModal && (
           <>
             <div
-              className="fixed inset-0 bg-black/60 z-40"
+              className="fixed inset-0 bg-black/80 backdrop-blur-sm z-40"
               onClick={() => !orgCreating && setShowOrgCreateModal(false)}
             />
             <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
@@ -228,7 +197,7 @@ export const ProjectDashboard: React.FC = () => {
 
                 <form onSubmit={handleCreateOrganization} className="space-y-4">
                   <div>
-                    <label htmlFor="orgName" className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
+                    <label htmlFor="orgName" className="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-2">
                       Organization Name
                     </label>
                     <input
@@ -275,106 +244,42 @@ export const ProjectDashboard: React.FC = () => {
             </div>
           </>
         )}
-      </div>
+      </AppShell>
     );
   }
 
   return (
-    <div className="flex h-screen bg-[#0f172a] text-slate-200">
-      {/* SIDEBAR */}
-      <aside
-        className={`
-          ${isSidebarCollapsed ? 'w-16' : 'w-64'}
-          bg-slate-950 border-r border-slate-800 flex flex-col justify-between shrink-0 transition-all duration-300 ease-in-out relative
-        `}
-      >
-        {/* Collapse Toggle */}
-        <button
-          onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-          className="absolute -right-3 top-6 w-6 h-6 bg-slate-800 border border-slate-700 rounded-full flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-700 transition-colors z-10 shadow-lg"
-          title={isSidebarCollapsed ? 'Expand menu' : 'Collapse menu'}
-        >
-          {isSidebarCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
-        </button>
-
-        {/* Top Section */}
-        <div className="flex flex-col">
-          {/* Logo */}
-          <div className={`p-4 border-b border-slate-800 ${isSidebarCollapsed ? 'px-3' : ''}`}>
-            <div className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3'}`}>
-              <div className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-lg flex items-center justify-center shrink-0">
-                <Layers className="text-white w-5 h-5" />
-              </div>
-              {!isSidebarCollapsed && (
-                <div>
-                  <h1 className="text-sm font-bold text-white">ContentFlow AI</h1>
-                  <p className="text-[10px] text-slate-500 uppercase tracking-wider">Projects</p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Navigation */}
-          <nav className="flex-1 p-2">
-            <div className="space-y-1">
-              <div
-                className="flex items-center gap-3 px-3 py-2.5 bg-cyan-500/10 text-cyan-400 cursor-pointer"
-                title="Projects"
-              >
-                <Folder className="w-5 h-5 shrink-0" />
-                {!isSidebarCollapsed && <span className="text-sm font-medium">Projects</span>}
-              </div>
-
-              {isSystemAdmin && (
-                <button
-                  onClick={() => navigate('/admin')}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 text-slate-400 hover:bg-slate-800 hover:text-purple-400 transition-colors"
-                  title="Admin Panel"
-                >
-                  <Shield className="w-5 h-5 shrink-0" />
-                  {!isSidebarCollapsed && <span className="text-sm font-medium">Admin Panel</span>}
-                </button>
-              )}
-            </div>
-          </nav>
-        </div>
-
-        {/* Bottom Section - Logout */}
-        <div className="border-t border-slate-800 p-2">
-          <button
-            onClick={async () => {
-              await signOut();
-              navigate('/login');
-            }}
-            className="w-full flex items-center gap-3 px-3 py-2.5 text-red-400 hover:bg-slate-800 transition-colors"
-            title="Sign Out"
-          >
-            <LogOut className="w-5 h-5 shrink-0" />
-            {!isSidebarCollapsed && <span className="text-sm font-medium">Sign Out</span>}
-          </button>
-        </div>
-      </aside>
-
+    <AppShell showProject={false}>
       {/* MAIN CONTENT */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-7xl mx-auto p-8">
           {/* Explainer Widget */}
-          <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mb-6 p-4 bg-cyan-500/10 border border-cyan-500/30 rounded-lg"
-          >
-            <div className="flex items-start gap-3">
-              <Info className="w-5 h-5 text-cyan-400 shrink-0 mt-0.5" />
-              <div>
-                <h3 className="text-sm font-bold text-cyan-400 mb-1">What is a Project?</h3>
-                <p className="text-xs text-slate-300">
-                  A project is a collection of content organized by categories. Each project can have its own team members,
-                  content categories, and posts. Use projects to separate different websites, brands, or content initiatives.
-                </p>
+          {showProjectInfo && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="mb-6 p-4 bg-cyan-500/10 border border-cyan-500/30 rounded-lg relative"
+            >
+              <button
+                onClick={() => setShowProjectInfo(false)}
+                className="absolute top-2 right-2 p-1 text-slate-400 hover:text-white hover:bg-slate-700/50 rounded transition-colors"
+                title="Dismiss"
+              >
+                <X className="w-4 h-4" />
+              </button>
+              <div className="flex items-start gap-3 pr-6">
+                <Info className="w-5 h-5 text-cyan-400 shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-sm font-bold text-cyan-400 mb-1">What is a Project?</h3>
+                  <p className="text-xs text-slate-300">
+                    A project is a collection of content organized by categories. Each project can have its own team members,
+                    content categories, and posts. Use projects to separate different websites, brands, or content initiatives.
+                  </p>
+                </div>
               </div>
-            </div>
-          </motion.div>
+            </motion.div>
+          )}
 
           {/* Header */}
           <div className="flex items-center justify-between mb-8">
@@ -674,9 +579,6 @@ export const ProjectDashboard: React.FC = () => {
           navigate('/');
         }}
       />
-
-      {/* Debug Footer */}
-      <DebugFooter />
-    </div>
+    </AppShell>
   );
 };
