@@ -87,10 +87,16 @@ service cloud.firestore {
       allow read: if isAuthenticated() &&
         (request.auth.uid == userId || isSystemAdmin());
 
+      // Users can create their own document (signup), OR system admin can create for others
       allow create: if isAuthenticated() &&
-        request.auth.uid == userId &&
-        request.resource.data.keys().hasAll(['email', 'displayName', 'globalRole', 'createdAt', 'updatedAt']) &&
-        request.resource.data.globalRole == 'USER'; // Users can only create with USER role
+        (
+          // Self-registration: user creates own doc with USER role
+          (request.auth.uid == userId &&
+           request.resource.data.keys().hasAll(['email', 'displayName', 'globalRole', 'createdAt', 'updatedAt']) &&
+           request.resource.data.globalRole == 'USER') ||
+          // Admin creation: system admin can create any user with any role
+          isSystemAdmin()
+        );
 
       allow update: if isAuthenticated() &&
         (request.auth.uid == userId || isSystemAdmin()) &&
