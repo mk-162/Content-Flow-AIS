@@ -38,7 +38,7 @@ export const DeploymentConfigModal: React.FC<Props> = ({ project, onClose, onSav
   const handleSave = async () => {
     setSaving(true);
     try {
-      await updateDeploymentConfig(project.id, {
+      await updateDeploymentConfig(project.organizationId, project.id, {
         theme: theme.trim() || undefined,
         webhookUrl: webhookUrl.trim() || undefined,
         customDomain: customDomain.trim() || undefined,
@@ -78,7 +78,7 @@ export const DeploymentConfigModal: React.FC<Props> = ({ project, onClose, onSav
     setBuildResult(null);
 
     try {
-      const result = await triggerBuild(project.id, user.id);
+      const result = await triggerBuild(project.organizationId, project.id, user.id);
       setBuildResult({
         success: result.success,
         message: result.success ? 'Build triggered successfully!' : result.error || 'Failed to trigger build'

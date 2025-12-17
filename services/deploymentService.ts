@@ -17,10 +17,11 @@ export interface DeploymentConfig {
  * Update deployment configuration for a project
  */
 export async function updateDeploymentConfig(
+  organizationId: string,
   projectId: string,
   config: DeploymentConfig
 ): Promise<void> {
-  const projectRef = doc(db, 'projects', projectId);
+  const projectRef = doc(db, 'organizations', organizationId, 'projects', projectId);
 
   await updateDoc(projectRef, {
     'settings.deployment.theme': config.theme || null,
@@ -35,11 +36,12 @@ export async function updateDeploymentConfig(
  * Returns true if successful, false otherwise
  */
 export async function triggerBuild(
+  organizationId: string,
   projectId: string,
   userId: string
 ): Promise<{ success: boolean; error?: string }> {
   // Get the project to find the webhook URL
-  const projectRef = doc(db, 'projects', projectId);
+  const projectRef = doc(db, 'organizations', organizationId, 'projects', projectId);
   const projectSnap = await getDoc(projectRef);
 
   if (!projectSnap.exists()) {
@@ -125,9 +127,10 @@ export async function testWebhook(
  * Get deployment configuration for a project
  */
 export async function getDeploymentConfig(
+  organizationId: string,
   projectId: string
 ): Promise<DeploymentConfig | null> {
-  const projectRef = doc(db, 'projects', projectId);
+  const projectRef = doc(db, 'organizations', organizationId, 'projects', projectId);
   const projectSnap = await getDoc(projectRef);
 
   if (!projectSnap.exists()) {

@@ -44,26 +44,43 @@ export const AdminDeployments: React.FC = () => {
         orgsMap.set(doc.id, { id: doc.id, ...doc.data() } as Organization);
       });
 
-      // Fetch all projects
-      const projectsSnap = await getDocs(collection(db, 'projects'));
-      const projectsData = projectsSnap.docs
-        .map(doc => ({
-          id: doc.id,
-          ...doc.data(),
-          orgName: orgsMap.get((doc.data() as Project).organizationId)?.name || 'Unknown'
-        })) as ProjectWithOrg[];
+      // Fetch projects from each organization's subcollection
+      const allProjects: ProjectWithOrg[] = [];
 
-      // Sort: configured first, then by name
-      projectsData.sort((a, b) => {
+      for (const org of orgsMap.values()) {
+        try {
+          const projectsSnap = await getDocs(collection(db, `organizations/${org.id}/projects`));
+          projectsSnap.docs.forEach(doc => {
+            const projectData = doc.data() as Project;
+            // Skip archived projects
+            if (!projectData.isArchived) {
+              allProjects.push({
+                id: doc.id,
+                ...projectData,
+                orgName: org.name
+              });
+            }
+          });
+        } catch (err) {
+          console.error(`Error fetching projects for org ${org.id}:`, err);
+        }
+      }
+
+      // Sort: configured first, then by org name, then by project name
+      allProjects.sort((a, b) => {
         const aConfigured = !!a.settings?.deployment?.webhookUrl;
         const bConfigured = !!b.settings?.deployment?.webhookUrl;
         if (aConfigured && !bConfigured) return -1;
         if (!aConfigured && bConfigured) return 1;
+        // Then by org name
+        const orgCompare = (a.orgName || '').localeCompare(b.orgName || '');
+        if (orgCompare !== 0) return orgCompare;
+        // Then by project name
         return a.name.localeCompare(b.name);
       });
 
-      setProjects(projectsData);
-      setFilteredProjects(projectsData);
+      setProjects(allProjects);
+      setFilteredProjects(allProjects);
     } catch (error) {
       console.error('Error fetching projects:', error);
     } finally {
@@ -105,7 +122,7 @@ export const AdminDeployments: React.FC = () => {
     setBuildResult(null);
 
     try {
-      const result = await triggerBuild(project.id, user.id);
+      const result = await triggerBuild(project.organizationId, project.id, user.id);
       setBuildResult({
         projectId: project.id,
         success: result.success,
