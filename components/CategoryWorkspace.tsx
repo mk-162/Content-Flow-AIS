@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { usePaneWidth } from '../hooks/usePaneWidth';
 import { Category, Post, PostStatus, GenerationTask, TaskStatus, TaskType, CategoryResearch, TIER_FEATURES, SubscriptionTier } from '../types';
 import {
     Plus, ChevronRight, Sparkles, Search, Wand2,
@@ -276,14 +277,19 @@ const SortableCategoryRow: React.FC<{
             opacity: isDragging ? 0.5 : 1,
         };
 
-        const indentPadding = depth * 24;
+        const indentPadding = depth * 12;
 
         return (
-            <div
+            <motion.div
                 ref={setNodeRef}
                 style={style}
+                layout={!isDragging}
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.2, ease: 'easeOut' }}
                 className={`
-                border-b border-slate-800/50 last:border-none transition-colors
+                border-b border-slate-800/50 last:border-none transition-colors overflow-hidden
                 ${isSelected ? 'bg-slate-800' : 'hover:bg-slate-900/50'}
                 ${isDragging ? 'z-50' : ''}
             `}
@@ -295,13 +301,28 @@ const SortableCategoryRow: React.FC<{
                 `}
                     style={{ paddingLeft: `${16 + indentPadding}px` }}
                 >
-                    {/* Hierarchy Line */}
+                    {/* Indent Background */}
                     {depth > 0 && (
                         <div
-                            className="absolute top-0 bottom-0 border-l border-slate-700/50"
-                            style={{ left: `${indentPadding - 8}px` }}
+                            className="absolute top-0 bottom-0 left-0"
+                            style={{ width: `${indentPadding}px`, backgroundColor: '#0d364c' }}
                         />
                     )}
+
+                    {/* Expand/Collapse Arrow */}
+                    <button
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleExpand();
+                        }}
+                        className={`shrink-0 mr-1 transition-colors ${hasChildren ? 'text-slate-500 hover:text-white' : 'text-transparent'}`}
+                        disabled={!hasChildren}
+                    >
+                        <ChevronRight
+                            size={14}
+                            className={`transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}
+                        />
+                    </button>
 
                     {/* Drag Handle */}
                     <div
@@ -323,21 +344,6 @@ const SortableCategoryRow: React.FC<{
                         onClick={(e) => e.stopPropagation()}
                         className="appearance-none w-4 h-4 border border-slate-600 bg-slate-800 checked:bg-cyan-500 checked:border-cyan-500 cursor-pointer mr-3 shrink-0"
                     />
-
-                    {/* Expand/Collapse Arrow */}
-                    <button
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onToggleExpand();
-                        }}
-                        className={`shrink-0 mr-2 transition-colors ${hasChildren ? 'text-slate-500 hover:text-white' : 'text-transparent'}`}
-                        disabled={!hasChildren}
-                    >
-                        <ChevronRight
-                            size={14}
-                            className={`transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}
-                        />
-                    </button>
 
                     {/* Category Name */}
                     <div className="flex-1 min-w-0" onClick={onSelect}>
@@ -362,7 +368,7 @@ const SortableCategoryRow: React.FC<{
                     )}
 
                     {/* Action Buttons - Always Visible */}
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex items-center gap-1 shrink-0">
                         <button
                             onClick={(e) => {
                                 e.stopPropagation();
@@ -378,19 +384,35 @@ const SortableCategoryRow: React.FC<{
                                 e.stopPropagation();
                                 onAddSub();
                             }}
-                            className="w-7 h-7 flex items-center justify-center text-slate-500 hover:text-white hover:bg-slate-800 transition-colors"
+                            className="w-7 h-7 flex items-center justify-center border border-slate-700 text-slate-500 hover:text-white hover:bg-slate-800 hover:border-slate-500 transition-colors"
                             title="Add Subcategory"
                         >
                             <Plus size={14} />
                         </button>
-                    </div>
-
-                    {/* Article Count Badge */}
-                    <div className={`ml-3 px-2 py-0.5 text-[10px] font-bold ${articleCount > 0 ? (isSelected ? 'bg-cyan-500 text-black' : 'bg-slate-800 text-slate-400') : 'bg-slate-900 text-slate-600'}`}>
-                        {articleCount}
+                        {/* Article Count - Clickable to open category */}
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onSelect();
+                                // Also expand if has children
+                                if (hasChildren && !isExpanded) {
+                                    onToggleExpand();
+                                }
+                            }}
+                            className={`w-7 h-7 flex items-center justify-center border text-[10px] font-bold transition-colors ${
+                                articleCount > 0
+                                    ? (isSelected
+                                        ? 'bg-cyan-500 border-cyan-500 text-black'
+                                        : 'border-slate-700 bg-slate-800 text-slate-400 hover:border-cyan-500 hover:text-cyan-400')
+                                    : 'border-slate-800 bg-slate-900 text-slate-600'
+                            }`}
+                            title={`${articleCount} articles - Click to view`}
+                        >
+                            {articleCount}
+                        </button>
                     </div>
                 </div>
-            </div>
+            </motion.div>
         );
     };
 
@@ -410,7 +432,7 @@ const CategoryTree: React.FC<{
     onGenerate: (cat: Category) => void;
     onReorder: (activeId: string, overId: string, newParentId: string | null, reorderedSiblings: { id: string; order: number }[]) => void;
 }> = ({ categories, tasks, posts, selectedId, checkedIds, onSelect, onCheck, onCheckAll, onAddSub, onGenerate, onReorder }) => {
-    const roots = categories.filter(c => c.parentId === null);
+    const roots = categories.filter(c => c.parentId === null).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set(roots.map(r => r.id)));
     const [activeId, setActiveId] = useState<string | null>(null);
 
@@ -426,14 +448,19 @@ const CategoryTree: React.FC<{
     );
 
     // Calculate total article count including all descendants
+    // Only count posts still in category workflow (not approved/published)
     const getArticleCountWithChildren = useMemo(() => {
         const countMap = new Map<string, number>();
+        // Only count stubs (PENDING) - once generation starts, posts disappear from this view
+        const categoryStatuses = [PostStatus.PENDING];
 
         const calculateCount = (catId: string): number => {
             if (countMap.has(catId)) return countMap.get(catId)!;
 
-            // Only count direct posts for this category, NOT subcategory posts
-            const directCount = posts.filter(p => p.categoryId === catId).length;
+            // Only count posts that are still in category workflow
+            const directCount = posts.filter(p =>
+                p.categoryId === catId && categoryStatuses.includes(p.status)
+            ).length;
             countMap.set(catId, directCount);
             return directCount;
         };
@@ -468,17 +495,21 @@ const CategoryTree: React.FC<{
 
             const targetParentId = overCategory.parentId;
 
-            // Get all siblings at the target level (excluding the dragged item if it's from same level)
-            const siblings = categories
-                .filter(c => c.parentId === targetParentId && c.id !== active.id)
+            // Get all siblings at the target level including both items, sorted by order
+            const allSiblings = categories
+                .filter(c => c.parentId === targetParentId)
                 .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
-            // Find where to insert the dragged item
-            const overIndex = siblings.findIndex(c => c.id === over.id);
+            // Find current positions
+            const activeIndex = allSiblings.findIndex(c => c.id === active.id);
+            const overIndex = allSiblings.findIndex(c => c.id === over.id);
 
-            // Insert the dragged item at the correct position
-            const newSiblings = [...siblings];
-            newSiblings.splice(overIndex, 0, activeCategory);
+            if (activeIndex === -1 || overIndex === -1) return;
+
+            // Reorder the array
+            const newSiblings = [...allSiblings];
+            const [removed] = newSiblings.splice(activeIndex, 1);
+            newSiblings.splice(overIndex, 0, removed);
 
             // Create reordered siblings with new order values
             const reorderedSiblings = newSiblings.map((cat, index) => ({
@@ -497,7 +528,9 @@ const CategoryTree: React.FC<{
         cats.forEach(cat => {
             flattenedCategories.push({ category: cat, depth });
             if (expandedIds.has(cat.id)) {
-                const children = categories.filter(c => c.parentId === cat.id);
+                const children = categories
+                    .filter(c => c.parentId === cat.id)
+                    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
                 flattenTree(children, depth + 1);
             }
         });
@@ -520,6 +553,7 @@ const CategoryTree: React.FC<{
             <div className="border-t border-slate-800">
                 {/* Select All Header */}
                 <div className="flex items-center py-2 px-4 bg-slate-950 border-b border-slate-800 sticky top-0 z-10">
+                    <div className="w-[14px] mr-1" /> {/* Spacer for chevron */}
                     <div className="w-[14px] mr-2" /> {/* Spacer for drag handle */}
                     <input
                         type="checkbox"
@@ -539,6 +573,7 @@ const CategoryTree: React.FC<{
                     items={flattenedCategories.map(f => f.category.id)}
                     strategy={verticalListSortingStrategy}
                 >
+                    <AnimatePresence initial={false}>
                     {flattenedCategories.map(({ category: cat, depth }) => {
                         const children = categories.filter(c => c.parentId === cat.id);
                         const isExpanded = expandedIds.has(cat.id);
@@ -570,6 +605,7 @@ const CategoryTree: React.FC<{
                             />
                         );
                     })}
+                    </AnimatePresence>
                 </SortableContext>
             </div>
 
@@ -1155,35 +1191,14 @@ export const CategoryWorkspace: React.FC<Props> = ({
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [showBulkGenerateModal, setShowBulkGenerateModal] = useState(false);
 
-    // Animation state
-    const [movingPostId, setMovingPostId] = useState<string | null>(null);
-    const [deletingPostId, setDeletingPostId] = useState<string | null>(null);
-
-    // Layout Resizing - default to 33% of window width
-    const [leftPaneWidth, setLeftPaneWidth] = useState(() => Math.floor(window.innerWidth * 0.33));
+    // Layout Resizing - shared across workspaces
+    const [leftPaneWidth, setLeftPaneWidth] = usePaneWidth('leftPane');
 
     // Search state
     const [searchQuery, setSearchQuery] = useState('');
     const [isSearchExpanded, setIsSearchExpanded] = useState(false);
     const [isResizing, setIsResizing] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
-
-    const handleGenerateWithAnimation = (post: Post) => {
-        setMovingPostId(post.id);
-        // Slower animation (3 seconds) so user can see what's happening
-        setTimeout(() => {
-            onQueueContent(post);
-            setMovingPostId(null);
-        }, 3000);
-    };
-
-    const handleDeleteWithAnimation = (postId: string) => {
-        setDeletingPostId(postId);
-        setTimeout(() => {
-            onDeletePost(postId);
-            setDeletingPostId(null);
-        }, 2000);
-    };
 
     const handleMouseMove = (e: React.MouseEvent) => {
         if (isResizing && containerRef.current) {
@@ -1273,12 +1288,15 @@ export const CategoryWorkspace: React.FC<Props> = ({
         onMoveCategory(activeId, newParentId, reorderedSiblings);
     };
 
+    // Show only stubs (PENDING) - clicking Generate removes them with animation
+    const categoryWorkflowStatuses = [PostStatus.PENDING];
+
     const filteredPosts = posts.filter(p => {
         const matchesCategory = selectedCategoryId ? p.categoryId === selectedCategoryId : true;
         const matchesSearch = !searchQuery ||
             p.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
             (p.teaser || '').toLowerCase().includes(searchQuery.toLowerCase());
-        return matchesCategory && matchesSearch && p.status === PostStatus.PENDING;
+        return matchesCategory && matchesSearch && categoryWorkflowStatuses.includes(p.status);
     });
 
     const selectedCategory = categories.find(c => c.id === selectedCategoryId);
@@ -1421,16 +1439,16 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                         .map(id => posts.find(p => p.id === id))
                                         .filter(p => p?.status === PostStatus.PENDING) as Post[];
 
-                                    selectedPosts.forEach((post, index) => {
-                                        setTimeout(() => handleGenerateWithAnimation(post), index * 150);
+                                    selectedPosts.forEach((post) => {
+                                        onQueueContent(post);
                                     });
                                     setSelectedPostIds(new Set());
                                 }} className="text-xs font-bold text-white hover:text-cyan-400 flex items-center uppercase">
                                     <Sparkles size={14} className="mr-2" /> Generate All
                                 </button>
                                 <button onClick={() => {
-                                    Array.from(selectedPostIds).forEach((id, index) => {
-                                        setTimeout(() => handleDeleteWithAnimation(id), index * 150);
+                                    Array.from(selectedPostIds).forEach((id) => {
+                                        onDeletePost(id);
                                     });
                                     setSelectedPostIds(new Set());
                                 }} className="text-xs font-bold text-white hover:text-red-400 flex items-center uppercase">
@@ -1516,50 +1534,16 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-800 text-sm text-slate-300 font-mono">
-                                    {filteredPosts.map(post => {
-                                        const isMoving = movingPostId === post.id;
-                                        const isDeleting = deletingPostId === post.id;
-                                        const isAnimating = isMoving || isDeleting;
-
-                                        if (isAnimating) {
-                                            return (
-                                                <tr
-                                                    key={post.id}
-                                                    className={`transition-all duration-[2500ms] ease-out ${isMoving ? 'translate-x-full opacity-0 scale-95' : '-translate-x-full opacity-0 scale-95'}`}
-                                                >
-                                                    <td colSpan={3} className="p-0 border-b border-slate-800">
-                                                        <div className={`h-40 flex flex-col items-center justify-center gap-3 ${isMoving ? 'bg-cyan-950/40 border-l-4 border-cyan-500' : 'bg-red-950/40 border-l-4 border-red-500'}`}>
-                                                            {isMoving ? (
-                                                                <>
-                                                                    <div className="flex items-center gap-3 text-xl font-bold text-cyan-400">
-                                                                        <Sparkles className="animate-pulse" size={28} />
-                                                                        <span>Generating Post...</span>
-                                                                    </div>
-                                                                    <p className="text-sm text-slate-400">Moving to Editorial Queue</p>
-                                                                    <div className="flex items-center gap-2 text-xs text-slate-500">
-                                                                        <ArrowRight className="animate-bounce" size={16} />
-                                                                        <span>Check the Posts tab to review</span>
-                                                                    </div>
-                                                                </>
-                                                            ) : (
-                                                                <>
-                                                                    <div className="flex items-center gap-3 text-xl font-bold text-red-400">
-                                                                        <Trash2 className="animate-pulse" size={28} />
-                                                                        <span>Deleted</span>
-                                                                    </div>
-                                                                </>
-                                                            )}
-                                                        </div>
-                                                    </td>
-                                                </tr>
-                                            );
-                                        }
-
-                                        return (
-                                            <tr
-                                                key={post.id}
-                                                className="hover:bg-slate-800/50 transition-colors group relative"
-                                            >
+                                    <AnimatePresence mode="popLayout">
+                                        {filteredPosts.map(post => (
+                                        <motion.tr
+                                            key={post.id}
+                                            layout
+                                            initial={{ opacity: 1 }}
+                                            exit={{ opacity: 0, height: 0 }}
+                                            transition={{ duration: 0.3, ease: "easeOut" }}
+                                            className="hover:bg-slate-800/50 transition-colors group relative"
+                                        >
                                                 <td className="p-4 text-center align-top pt-6">
                                                     <input
                                                         type="checkbox"
@@ -1605,14 +1589,14 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                                 <td className="p-4 align-top pt-6 text-right">
                                                     <div className="flex items-center justify-end gap-2">
                                                         <button
-                                                            onClick={() => handleGenerateWithAnimation(post)}
+                                                            onClick={() => onQueueContent(post)}
                                                             className="w-8 h-8 flex items-center justify-center border border-cyan-800 text-cyan-400 hover:bg-cyan-950 hover:border-cyan-500 transition-colors"
                                                             title="Generate Post"
                                                         >
                                                             <Sparkles size={16} />
                                                         </button>
                                                         <button
-                                                            onClick={() => handleDeleteWithAnimation(post.id)}
+                                                            onClick={() => onDeletePost(post.id)}
                                                             className="w-8 h-8 flex items-center justify-center text-slate-600 hover:text-red-500 hover:bg-red-950/30 transition-colors"
                                                             title="Delete"
                                                         >
@@ -1620,9 +1604,9 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                                         </button>
                                                     </div>
                                                 </td>
-                                            </tr>
-                                        );
-                                    })}
+                                            </motion.tr>
+                                        ))}
+                                    </AnimatePresence>
                                     {filteredPosts.length === 0 && isGeneratingTitles && (
                                         <tr>
                                             <td colSpan={3} className="p-12 text-center">
@@ -1660,7 +1644,7 @@ export const CategoryWorkspace: React.FC<Props> = ({
 
                 {isGenModalOpen && genCategory && (
                     <GenModal
-                        key={`gen-modal-${genCategory.id}-${Date.now()}`}
+                        key={`gen-modal-${genCategory.id}`}
                         category={genCategory}
                         onClose={() => setIsGenModalOpen(false)}
                         onConfirm={(count, context) => {
@@ -1684,7 +1668,6 @@ export const CategoryWorkspace: React.FC<Props> = ({
 
                 {showBulkGenerateModal && (
                     <BulkGenerateModal
-                        key={`bulk-gen-${Date.now()}`}
                         categories={categories}
                         selectedIds={checkedCategoryIds}
                         onConfirm={handleBulkGenerate}

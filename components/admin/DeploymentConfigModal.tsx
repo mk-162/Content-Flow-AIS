@@ -38,10 +38,12 @@ export const DeploymentConfigModal: React.FC<Props> = ({ project, onClose, onSav
   const handleSave = async () => {
     setSaving(true);
     try {
+      // Strip protocol from customDomain if present (we only want the domain)
+      const cleanDomain = customDomain.trim().replace(/^https?:\/\//, '');
       await updateDeploymentConfig(project.organizationId, project.id, {
         theme: theme.trim() || undefined,
         webhookUrl: webhookUrl.trim() || undefined,
-        customDomain: customDomain.trim() || undefined,
+        customDomain: cleanDomain || undefined,
       });
       onSave();
     } catch (error) {
@@ -78,7 +80,7 @@ export const DeploymentConfigModal: React.FC<Props> = ({ project, onClose, onSav
     setBuildResult(null);
 
     try {
-      const result = await triggerBuild(project.organizationId, project.id, user.id);
+      const result = await triggerBuild(project.organizationId, project.id, user.id, webhookUrl);
       setBuildResult({
         success: result.success,
         message: result.success ? 'Build triggered successfully!' : result.error || 'Failed to trigger build'

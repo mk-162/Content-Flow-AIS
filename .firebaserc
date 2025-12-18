@@ -1,5 +1,17 @@
 {
   "projects": {
     "default": "postbuilder-afefc"
+  },
+  "targets": {
+    "postbuilder-afefc": {
+      "hosting": {
+        "app": [
+          "postbuilder-afefc"
+        ],
+        "images": [
+          "postbuilder-afefc-images"
+        ]
+      }
+    }
   }
 }

@@ -1,18 +1,19 @@
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { usePaneWidth } from '../hooks/usePaneWidth';
 import { Post, Category, PostStatus, GenerationTask, TaskStatus, ContentType, Tone, Project, Organization } from '../types';
 import {
     Search, Filter, User, CheckCircle, XCircle, Edit3, UploadCloud, Trash2,
     Loader2, ArrowRight, RefreshCw, Clock, Archive, X, GripVertical,
-    Sparkles, Calendar, Hash, Type, AlignLeft, ChevronRight, Layout, Rocket, AlertTriangle, Globe
+    Sparkles, Hash, Type, AlignLeft, ChevronRight, Layout, Rocket, Globe
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import MDEditor from '@uiw/react-md-editor';
-import '@uiw/react-md-editor/markdown-editor.css';
-import '@uiw/react-markdown-preview/markdown.css';
+import { TiptapEditor, TiptapViewer } from './TiptapEditor';
 import { Timestamp } from 'firebase/firestore';
 import { ImageInspectorControl } from './ImageInspectorControl';
 import { exportToWordPress, WordPressConfig } from '../services/wordpressService';
+import { triggerBuild } from '../services/deploymentService';
+import { useAuth } from '../contexts/AuthContext';
 
 interface Props {
     posts: Post[];
@@ -26,7 +27,6 @@ interface Props {
 
 const PUBLISHING_FILTERS = [
     { label: 'Queued', value: 'QUEUED' },
-    { label: 'Exported', value: 'EXPORTED' },
     { label: 'Live', value: 'LIVE' },
     { label: 'Archived', value: 'ARCHIVED' },
 ];
@@ -36,24 +36,23 @@ export const PublishingWorkspace: React.FC<Props> = ({
     onUpdateStatus, onUpdatePost, onDeletePost,
     project, organization
 }) => {
+    const { user } = useAuth();
     const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
     const [statusFilter, setStatusFilter] = useState('QUEUED');
     const [searchQuery, setSearchQuery] = useState('');
     const [editMode, setEditMode] = useState(false);
     const [inspectorTab, setInspectorTab] = useState<'info' | 'history'>('info');
-    const [showScheduleModal, setShowScheduleModal] = useState(false);
-    const [scheduleDate, setScheduleDate] = useState<string>('');
-    const [scheduleTime, setScheduleTime] = useState<string>('09:00');
     const [isBuilding, setIsBuilding] = useState(false);
-    const [nextBuildTime, setNextBuildTime] = useState<Date>(new Date(Date.now() + 45 * 60000)); // Mock 45 mins from now
+    const [isLaunching, setIsLaunching] = useState(false);
+    const [successModal, setSuccessModal] = useState<{ show: boolean; published: number; updated: number } | null>(null);
 
     // WordPress export state
     const [isExporting, setIsExporting] = useState(false);
     const [exportResult, setExportResult] = useState<{ success: boolean; message: string } | null>(null);
 
-    // Layout resizing
-    const [leftPaneWidth, setLeftPaneWidth] = useState(320);
-    const [inspectorWidth, setInspectorWidth] = useState(350);
+    // Layout resizing - shared across workspaces
+    const [leftPaneWidth, setLeftPaneWidth] = usePaneWidth('leftPane');
+    const [inspectorWidth, setInspectorWidth] = usePaneWidth('inspector');
     const [isResizingLeft, setIsResizingLeft] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 
@@ -82,11 +81,7 @@ export const PublishingWorkspace: React.FC<Props> = ({
         return posts.filter(post => {
             let matchesStatus = false;
             if (statusFilter === 'QUEUED') {
-                // Exclude exported posts from queue
-                matchesStatus = (post.status === PostStatus.APPROVED || post.status === PostStatus.SCHEDULED) && !post.wordpressExportedAt;
-            } else if (statusFilter === 'EXPORTED') {
-                // Show only posts that have been exported to WordPress
-                matchesStatus = !!post.wordpressExportedAt;
+                matchesStatus = post.status === PostStatus.APPROVED;
             } else if (statusFilter === 'LIVE') {
                 matchesStatus = post.status === PostStatus.PUBLISHED;
             } else if (statusFilter === 'ARCHIVED') {
@@ -114,21 +109,88 @@ export const PublishingWorkspace: React.FC<Props> = ({
         }
     }, [filteredPosts, selectedPostId]);
 
-    const handleTriggerBuild = () => {
+    const handleTriggerBuild = async () => {
+        if (!organization || !project || !user) {
+            alert('Missing organization, project, or user context');
+            return;
+        }
+
+        // Check if webhook is configured
+        if (!project.settings?.deployment?.webhookUrl) {
+            alert('Your website has not yet been configured.\n\nEmail support@missioncontent.io for more information.');
+            return;
+        }
+
         setIsBuilding(true);
-        setTimeout(() => {
+        try {
+            const webhookUrl = project.settings?.deployment?.webhookUrl;
+            const result = await triggerBuild(organization.id, project.id, user.id, webhookUrl!);
+
+            if (result.success) {
+                // Update post statuses after successful build
+                const now = Timestamp.now();
+                let postsPublished = 0;
+                let postsUpdated = 0;
+
+                // Mark APPROVED posts as PUBLISHED
+                const approvedPosts = posts.filter(p => p.status === PostStatus.APPROVED);
+
+                // Trigger launch animation if there are posts to publish
+                if (approvedPosts.length > 0) {
+                    setIsLaunching(true);
+
+                    // Wait for animation to complete before updating statuses
+                    await new Promise(resolve => setTimeout(resolve, 2200));
+                }
+
+                for (const post of approvedPosts) {
+                    await onUpdatePost(post.id, {
+                        status: PostStatus.PUBLISHED,
+                        publishedAt: now
+                    });
+                    postsPublished++;
+                }
+
+                // Update publishedAt for PUBLISHED posts with pending changes
+                const publishedWithChanges = posts.filter(p =>
+                    p.status === PostStatus.PUBLISHED &&
+                    p.updatedAt && p.publishedAt &&
+                    p.updatedAt.toMillis() > p.publishedAt.toMillis()
+                );
+                for (const post of publishedWithChanges) {
+                    await onUpdatePost(post.id, {
+                        publishedAt: now
+                    });
+                    postsUpdated++;
+                }
+
+                // Reset launch animation and switch to Live view
+                setIsLaunching(false);
+                if (postsPublished > 0) {
+                    setStatusFilter('LIVE');
+                    setSelectedPostId(null);
+                }
+
+                // Show success modal
+                setSuccessModal({ show: true, published: postsPublished, updated: postsUpdated });
+            } else {
+                alert(`Build failed: ${result.error}`);
+            }
+        } catch (error) {
+            console.error('Error triggering build:', error);
+            alert('Failed to trigger build. Check console for details.');
+        } finally {
             setIsBuilding(false);
-            // In a real app, this would trigger a webhook
-            alert('Build triggered! Site will be updated in ~2 minutes.');
-        }, 2000);
+        }
     };
 
     const handleSave = async (content: string) => {
         if (!selectedPost) return;
 
         if (selectedPost.status === PostStatus.PUBLISHED) {
-            if (confirm("⚠️ You are editing a LIVE post.\n\nSaving this will update the content for the next build, but it won't be visible immediately until the site rebuilds.\n\nDo you want to proceed?")) {
+            if (confirm("⚠️ You are editing a LIVE post.\n\nThis will push the post back into the launch queue. Changes will go live on the next launch.\n\nDo you want to proceed?")) {
                 await onUpdatePost(selectedPost.id, { content });
+                await onUpdateStatus(selectedPost.id, PostStatus.APPROVED);
                 setEditMode(false);
             }
         } else {
@@ -204,30 +266,46 @@ export const PublishingWorkspace: React.FC<Props> = ({
             >
                 {/* Header */}
                 <div className="p-4 border-b border-slate-800 bg-slate-900/30">
-                    <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                            <Rocket size={16} className="text-purple-500" /> Publishing
-                        </h2>
-                        <div className="text-[10px] font-mono text-slate-500">
-                            Next Build: <span className="text-slate-300">{nextBuildTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                        </div>
+                    <div className="mb-4">
+                        <h1 className="text-2xl font-bold text-white tracking-tight mb-1">Launch Pad</h1>
+                        <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Publish Content</p>
                     </div>
 
-                    <button
-                        onClick={handleTriggerBuild}
-                        disabled={isBuilding}
-                        className="w-full mb-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all rounded-sm"
-                    >
-                        {isBuilding ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                        {isBuilding ? 'Building Site...' : 'Trigger Build Now'}
-                    </button>
+                    {project?.settings?.deployment?.webhookUrl ? (
+                        <div className="mb-4 space-y-2">
+                            <button
+                                onClick={handleTriggerBuild}
+                                disabled={isBuilding}
+                                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all"
+                            >
+                                {isBuilding ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} />}
+                                {isBuilding ? 'Launching...' : 'Launch All'}
+                            </button>
+                            {(() => {
+                                const queuedCount = posts.filter(p => p.status === PostStatus.APPROVED).length;
+                                if (queuedCount > 0) {
+                                    return (
+                                        <p className="text-[10px] text-slate-500 text-center">
+                                            {queuedCount} post{queuedCount !== 1 ? 's' : ''} ready to publish
+                                        </p>
+                                    );
+                                }
+                                return <p className="text-[10px] text-slate-500 text-center">All posts are up to date</p>;
+                            })()}
+                        </div>
+                    ) : (
+                        <div className="mb-4 py-3 px-3 bg-slate-800/50 border border-slate-700 text-center">
+                            <p className="text-xs text-slate-400">Deployment not configured</p>
+                            <p className="text-[10px] text-slate-500 mt-1">Contact admin to set up CloudFlare deployment</p>
+                        </div>
+                    )}
 
                     <div className="relative mb-3">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
                         <input
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            placeholder="Search published posts..."
+                            placeholder="Search pending posts..."
                             className="w-full bg-slate-900 border border-slate-800 pl-9 pr-3 py-2 text-sm text-slate-200 focus:border-purple-500 focus:outline-none transition-all"
                         />
                     </div>
@@ -250,50 +328,92 @@ export const PublishingWorkspace: React.FC<Props> = ({
                 </div>
 
                 {/* Post List */}
-                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                <div className="flex-1 overflow-y-auto custom-scrollbar relative overflow-x-hidden">
+                    {/* Launch Rocket Animation - follows behind the posts */}
+                    <AnimatePresence>
+                        {isLaunching && (
+                            <motion.div
+                                initial={{ y: 0, opacity: 1 }}
+                                animate={{ y: -1200 }}
+                                transition={{
+                                    duration: 1.8,
+                                    delay: (filteredPosts.length * 0.08) + 0.1,
+                                    ease: [0.4, 0, 0.2, 1]
+                                }}
+                                className="absolute left-1/2 -translate-x-1/2 z-50 pointer-events-none"
+                                style={{ top: filteredPosts.length * 100 }}
+                            >
+                                <div className="relative">
+                                    <Rocket size={64} className="text-purple-500 -rotate-45" />
+                                    {/* Flame trail */}
+                                    <motion.div
+                                        initial={{ height: 32, opacity: 0.7 }}
+                                        animate={{ height: 80, opacity: 0.95 }}
+                                        transition={{ duration: 0.15, repeat: Infinity, repeatType: "reverse" }}
+                                        className="absolute top-12 left-6 w-5 bg-gradient-to-b from-orange-500 via-yellow-400 to-transparent blur-sm rounded-full"
+                                    />
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+
                     {filteredPosts.length === 0 ? (
                         <div className="p-8 text-center text-slate-600 text-xs">
                             No posts found in {statusFilter.toLowerCase()}
                         </div>
                     ) : (
-                        filteredPosts.map(post => (
-                            <div
-                                key={post.id}
-                                onClick={() => setSelectedPostId(post.id)}
-                                className={`
-                            p-4 border-b border-slate-800/50 cursor-pointer transition-all hover:bg-slate-900/50
-                            ${selectedPostId === post.id ? 'bg-slate-900 border-l-2 border-l-purple-500' : 'border-l-2 border-l-transparent'}
-                        `}
-                            >
-                                <div className="flex justify-between items-start mb-1">
-                                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider truncate max-w-[120px]">
-                                        {getCategoryBreadcrumb(post.categoryId)}
-                                    </span>
-                                    <span className={`text-[10px] font-bold uppercase ${post.status === PostStatus.PUBLISHED ? 'text-emerald-500' :
-                                        post.status === PostStatus.SCHEDULED ? 'text-blue-500' :
-                                            post.status === PostStatus.APPROVED ? 'text-purple-400' :
-                                                'text-slate-500'
-                                        }`}>
-                                        {post.status === PostStatus.APPROVED ? 'QUEUED' : post.status}
-                                    </span>
-                                </div>
-                                <h3 className={`text-sm font-medium leading-snug mb-2 ${selectedPostId === post.id ? 'text-white' : 'text-slate-400'}`}>
-                                    {post.title}
-                                </h3>
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-5 h-5 bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-400">
-                                            {(post.editor || 'SJ').substring(0, 2).toUpperCase()}
-                                        </div>
-                                        <span className="text-xs text-slate-600">
-                                            {post.publishedAt ? `Live: ${post.publishedAt.toDate().toLocaleDateString()}` :
-                                                post.scheduledAt ? `Due: ${post.scheduledAt.toDate().toLocaleDateString()}` :
-                                                    `Approved: ${post.updatedAt?.toDate().toLocaleDateString()}`}
+                        <AnimatePresence>
+                            {filteredPosts.map((post, index) => (
+                                <motion.div
+                                    key={post.id}
+                                    initial={{ opacity: 1, y: 0 }}
+                                    animate={isLaunching ? {
+                                        y: -1000,
+                                        opacity: 0,
+                                        transition: {
+                                            duration: 1.8,
+                                            delay: index * 0.08,
+                                            ease: [0.4, 0, 0.2, 1]
+                                        }
+                                    } : {
+                                        y: 0,
+                                        opacity: 1
+                                    }}
+                                    onClick={() => !isLaunching && setSelectedPostId(post.id)}
+                                    className={`
+                                        p-4 border-b border-slate-800/50 cursor-pointer transition-colors hover:bg-slate-900/50
+                                        ${selectedPostId === post.id ? 'bg-slate-900 border-l-2 border-l-purple-500' : 'border-l-2 border-l-transparent'}
+                                        ${isLaunching ? 'pointer-events-none' : ''}
+                                    `}
+                                >
+                                    <div className="flex justify-between items-start mb-1">
+                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider truncate max-w-[120px]">
+                                            {getCategoryBreadcrumb(post.categoryId)}
+                                        </span>
+                                        <span className={`text-[10px] font-bold uppercase ${post.status === PostStatus.PUBLISHED ? 'text-emerald-500' :
+                                                post.status === PostStatus.APPROVED ? 'text-purple-400' :
+                                                    'text-slate-500'
+                                            }`}>
+                                            {post.status === PostStatus.APPROVED ? 'QUEUED' : post.status}
                                         </span>
                                     </div>
-                                </div>
-                            </div>
-                        ))
+                                    <h3 className={`text-sm font-medium leading-snug mb-2 ${selectedPostId === post.id ? 'text-white' : 'text-slate-400'}`}>
+                                        {post.title}
+                                    </h3>
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-5 h-5 bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-400">
+                                                {(post.editor || 'SJ').substring(0, 2).toUpperCase()}
+                                            </div>
+                                            <span className="text-xs text-slate-600">
+                                                {post.publishedAt ? `Updated: ${post.publishedAt.toDate().toLocaleDateString()}` :
+                                                        `Approved: ${post.updatedAt?.toDate().toLocaleDateString()}`}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </motion.div>
+                            ))}
+                        </AnimatePresence>
                     )}
                 </div>
             </div>
@@ -320,16 +440,6 @@ export const PublishingWorkspace: React.FC<Props> = ({
                                 >
                                     {/* Internal Header */}
                                     <div className="p-8 pb-4 relative">
-                                        <div className="flex justify-end items-start mb-4">
-                                            <button
-                                                onClick={() => setEditMode(!editMode)}
-                                                className={`p-2 transition-colors ${editMode ? 'bg-purple-500/10 text-purple-400' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}
-                                                title={editMode ? "Finish Editing" : "Edit Content"}
-                                            >
-                                                {editMode ? <CheckCircle size={20} /> : <Edit3 size={20} />}
-                                            </button>
-                                        </div>
-
                                         {selectedPost.status === PostStatus.PUBLISHED && (
                                             <div className="mb-4 flex items-center gap-2 p-2 bg-emerald-950/30 border border-emerald-900/50 rounded-sm">
                                                 <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
@@ -343,21 +453,63 @@ export const PublishingWorkspace: React.FC<Props> = ({
                                         <div className="text-xs text-slate-500 mb-4">
                                             {getCategoryBreadcrumb(selectedPost.categoryId)}
                                         </div>
+                                        <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 bg-purple-500/20 flex items-center justify-center text-purple-300 font-bold">
+                                                    {(selectedPost.editor || 'SJ').substring(0, 2).toUpperCase()}
+                                                </div>
+                                                <div>
+                                                    <div className="text-sm font-medium text-slate-300">
+                                                        By {selectedPost.editor || 'Sarah Jenkins'}
+                                                    </div>
+                                                    <div className="text-xs text-slate-500">
+                                                        {selectedPost.publishedAt ? selectedPost.publishedAt.toDate().toLocaleDateString() : selectedPost.updatedAt?.toDate().toLocaleDateString()}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    onClick={() => {
+                                                        if (editMode) {
+                                                            handleSave(selectedPost.content || '');
+                                                        } else {
+                                                            setEditMode(true);
+                                                        }
+                                                    }}
+                                                    className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-colors ${
+                                                        editMode
+                                                            ? 'bg-purple-600 hover:bg-purple-500 text-white'
+                                                            : 'bg-slate-700 hover:bg-slate-600 text-slate-200'
+                                                    }`}
+                                                >
+                                                    {editMode ? 'Save' : 'Edit'}
+                                                </button>
+                                                <button
+                                                    onClick={() => {
+                                                        if (confirm('Remove this post from the website? It will be queued for removal in the next launch.')) {
+                                                            onUpdateStatus(selectedPost.id, PostStatus.ARCHIVED);
+                                                        }
+                                                    }}
+                                                    className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider bg-slate-700 hover:bg-rose-600 text-slate-200 hover:text-white transition-colors"
+                                                >
+                                                    Remove Post
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div className="mt-3 text-[10px] text-slate-500 space-y-1">
+                                            <p><span className="text-slate-400 font-medium">Edit:</span> Changes push post back into launch queue and update the site on next launch.</p>
+                                            <p><span className="text-slate-400 font-medium">Remove:</span> Adds removal request to queue for action on next launch.</p>
+                                        </div>
                                     </div>
 
                                     {/* Body */}
                                     <div className="px-8 py-6">
                                         {editMode ? (
-                                            <div className="min-h-[500px]" data-color-mode="dark">
-                                                <MDEditor
-                                                    value={selectedPost.content || ''}
+                                            <div>
+                                                <TiptapEditor
+                                                    content={selectedPost.content || ''}
                                                     onChange={(val) => onUpdatePost(selectedPost.id, { content: val })}
-                                                    preview="edit"
-                                                    height={600}
-                                                    style={{ backgroundColor: '#0f172a', border: '1px solid #1e293b' }}
-                                                    textareaProps={{
-                                                        placeholder: 'Start writing your post...'
-                                                    }}
+                                                    placeholder="Start writing your post..."
                                                 />
                                                 <div className="mt-4 flex justify-end">
                                                     <button
@@ -369,9 +521,7 @@ export const PublishingWorkspace: React.FC<Props> = ({
                                                 </div>
                                             </div>
                                         ) : (
-                                            <div className="prose prose-invert prose-slate max-w-none prose-headings:font-serif prose-headings:font-bold prose-p:leading-relaxed prose-li:marker:text-indigo-400">
-                                                <MDEditor.Markdown source={selectedPost.content} style={{ backgroundColor: 'transparent', color: 'inherit' }} />
-                                            </div>
+                                            <TiptapViewer content={selectedPost.content || ''} />
                                         )}
                                     </div>
                                 </motion.div>
@@ -397,11 +547,10 @@ export const PublishingWorkspace: React.FC<Props> = ({
                             <span className={`
                                 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider
                                 ${selectedPost.status === PostStatus.PUBLISHED ? 'bg-emerald-500/10 text-emerald-500' :
-                                    selectedPost.status === PostStatus.SCHEDULED ? 'bg-blue-500/10 text-blue-500' :
                                         selectedPost.status === PostStatus.APPROVED ? 'bg-purple-500/10 text-purple-500' :
                                             'bg-slate-800 text-slate-400'}
                             `}>
-                                {selectedPost.status.replace('_', ' ')}
+                                {selectedPost.status === PostStatus.APPROVED ? 'READY TO PUBLISH' : selectedPost.status.replace('_', ' ')}
                             </span>
                             <div className="flex items-center gap-1">
                                 {selectedPost.status !== PostStatus.ARCHIVED && (
@@ -421,43 +570,16 @@ export const PublishingWorkspace: React.FC<Props> = ({
                             <div className="space-y-2">
                                 <div className="flex gap-2">
                                     <button
-                                        onClick={() => setShowScheduleModal(true)}
-                                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold uppercase tracking-wider transition-all"
-                                    >
-                                        <Calendar size={14} />
-                                        Schedule
-                                    </button>
-                                    <button
                                         onClick={() => onUpdateStatus(selectedPost.id, PostStatus.NEEDS_REVIEW)}
                                         className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold uppercase tracking-wider transition-all"
                                     >
                                         <RefreshCw size={14} />
-                                        Unapprove
+                                        Send Back to Review
                                     </button>
                                 </div>
-
-                                {/* WordPress Export Button */}
-                                {isWordPressConfigured && !selectedPost.wordpressExportedAt && (
-                                    <button
-                                        onClick={handleWordPressExport}
-                                        disabled={isExporting}
-                                        className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 text-white text-xs font-bold uppercase tracking-wider transition-all"
-                                    >
-                                        {isExporting ? <Loader2 size={14} className="animate-spin" /> : <Globe size={14} />}
-                                        {isExporting ? 'Exporting...' : 'Export to WordPress'}
-                                    </button>
-                                )}
-                                {selectedPost.wordpressExportedAt && (
-                                    <div className="flex items-center gap-2 px-3 py-2 bg-emerald-950/30 border border-emerald-900/50 text-emerald-400 text-xs">
-                                        <CheckCircle size={14} />
-                                        Exported {selectedPost.wordpressExportedAt.toDate().toLocaleDateString()}
-                                    </div>
-                                )}
-                                {exportResult && (
-                                    <div className={`px-3 py-2 text-xs ${exportResult.success ? 'bg-emerald-950/30 text-emerald-400' : 'bg-red-950/30 text-red-400'}`}>
-                                        {exportResult.message}
-                                    </div>
-                                )}
+                                <p className="text-xs text-slate-500 text-center">
+                                    This post will go live when you click "Publish All" above
+                                </p>
                             </div>
                         )}
 
@@ -558,6 +680,59 @@ export const PublishingWorkspace: React.FC<Props> = ({
                     )}
                 </div>
             </div >
+
+            {/* Success Modal */}
+            <AnimatePresence>
+                {successModal?.show && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
+                        onClick={() => setSuccessModal(null)}
+                    >
+                        <motion.div
+                            initial={{ scale: 0.9, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.9, opacity: 0 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="bg-slate-900 border border-slate-700 p-8 max-w-md w-full mx-4 text-center"
+                        >
+                            <div className="mb-6">
+                                <div className="w-20 h-20 mx-auto bg-purple-500/20 rounded-full flex items-center justify-center mb-4">
+                                    <Rocket size={40} className="text-purple-500" />
+                                </div>
+                                <h2 className="text-2xl font-bold text-white mb-2">Launch Successful!</h2>
+                                <p className="text-slate-400">
+                                    Your site will be updated in ~2 minutes.
+                                </p>
+                            </div>
+
+                            {(successModal.published > 0 || successModal.updated > 0) && (
+                                <div className="bg-slate-800/50 border border-slate-700 p-4 mb-6 space-y-2">
+                                    {successModal.published > 0 && (
+                                        <p className="text-sm text-emerald-400">
+                                            {successModal.published} post{successModal.published !== 1 ? 's' : ''} published
+                                        </p>
+                                    )}
+                                    {successModal.updated > 0 && (
+                                        <p className="text-sm text-blue-400">
+                                            {successModal.updated} post{successModal.updated !== 1 ? 's' : ''} updated
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+
+                            <button
+                                onClick={() => setSuccessModal(null)}
+                                className="px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white font-bold uppercase tracking-wider transition-colors"
+                            >
+                                Got it
+                            </button>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div >
     );
 };

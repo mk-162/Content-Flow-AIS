@@ -25,7 +25,22 @@
       "Bash(powershell.exe -Command \"Get-ChildItem -Path ''C:\\Users\\matty\\OneDrive\\AI_Project\\Content Flow AIS - partical copy'' -Recurse -File | Select-Object -ExpandProperty FullName\")",
       "Bash(powershell.exe -Command \"Get-ChildItem -Path ''C:\\Users\\matty\\OneDrive\\AI_Project\\Content Flow AIS - partical copy'' -Recurse -File | Where-Object { $_.FullName -notmatch ''node_modules'' -and $_.FullName -notmatch ''\\dist\\'' } | ForEach-Object { $_.FullName -replace [regex]::Escape(''C:\\Users\\matty\\OneDrive\\AI_Project\\Content Flow AIS - partical copy\\''), '''' } | Sort-Object\")",
       "Bash(powershell.exe -Command \"Get-ChildItem -Path ''C:\\AI_Project\\MissionContent'' -Recurse -File | Where-Object { $_.FullName -notmatch ''node_modules'' -and $_.FullName -notmatch ''\\dist\\'' } | ForEach-Object { $_.FullName -replace [regex]::Escape(''C:\\AI_Project\\MissionContent\\''), '''' } | Sort-Object\")",
-      "Bash(powershell.exe:*)"
+      "Bash(powershell.exe:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "WebFetch(domain:dataforseo.com)",
+      "Bash(dir /s \"C:\\AI_Project\\MissionContent\\components\")",
+      "Bash(findstr:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(dir /s /b C:AI_ProjectMissionContent)",
+      "WebSearch",
+      "Bash(npx kill-port:*)",
+      "Bash(dir C:AI_ProjectMissionContent*.css)",
+      "Bash(curl:*)",
+      "Bash(powershell -Command \"Invoke-WebRequest -Uri http://localhost:3000 -UseBasicParsing | Select-Object -ExpandProperty Content\")",
+      "WebFetch(domain:ai.google.dev)",
+      "Bash(firebase functions:delete:*)"
     ],
     "deny": [],
     "ask": []

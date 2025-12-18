@@ -15,10 +15,11 @@ service cloud.firestore {
     }
 
     function isSystemAdmin() {
-      // Simplified for debugging
+      // System admins can act on any org (for "view as client" support)
       return isAuthenticated() && (
-        request.auth.uid == '0DyQbInwUUb8tevT5PWR1FjrnZv1' || 
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        request.auth.uid == '0DyQbInwUUb8tevT5PWR1FjrnZv1' ||
+        request.auth.uid == 'OnUEO6ClcKg9CS0sowf3EDCwUKz2' ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.globalRole == 'SYSTEM_ADMIN')
       );
     }
@@ -154,7 +155,7 @@ service cloud.firestore {
             (isOrgMember(orgId) || isProjectMember(projectId) || isSystemAdmin());
 
           allow create: if isAuthenticated() &&
-            (isOrgMember(orgId) || canWriteToProject(projectId)) &&
+            (isOrgMember(orgId) || canWriteToProject(projectId) || isSystemAdmin()) &&
             request.resource.data.keys().hasAll(['projectId', 'organizationId', 'name', 'createdAt', 'updatedAt']) &&
             request.resource.data.projectId == projectId &&
             request.resource.data.organizationId == orgId;
@@ -177,7 +178,7 @@ service cloud.firestore {
             (isOrgMember(orgId) || isProjectMember(projectId) || isSystemAdmin());
 
           allow create: if isAuthenticated() &&
-            (isOrgMember(orgId) || canWriteToProject(projectId)) &&
+            (isOrgMember(orgId) || canWriteToProject(projectId) || isSystemAdmin()) &&
             request.resource.data.keys().hasAll(['projectId', 'organizationId', 'categoryId', 'title', 'status', 'createdBy', 'createdAt', 'updatedAt']) &&
             request.resource.data.projectId == projectId &&
             request.resource.data.organizationId == orgId &&
@@ -302,9 +303,11 @@ service cloud.firestore {
         (isOrgMember(resource.data.organizationId) || isSystemAdmin());
 
       // Users can create tasks for projects they have access to
+      // System admins can create tasks for any org (for "view as client" support)
       allow create: if isAuthenticated() &&
         (isOrgMember(request.resource.data.organizationId) ||
-         canWriteToProject(request.resource.data.projectId)) &&
+         canWriteToProject(request.resource.data.projectId) ||
+         isSystemAdmin()) &&
         request.resource.data.keys().hasAll(['type', 'organizationId', 'projectId', 'status', 'progress', 'createdBy', 'startedAt']) &&
         request.resource.data.createdBy == request.auth.uid &&
         request.resource.data.status == 'queued';

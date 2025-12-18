@@ -33,6 +33,7 @@ export const db = initializeFirestore(app, {
 
 export const storage = getStorage(app);
 export const functions = getFunctions(app, 'europe-west2');
+export const functionsUS = getFunctions(app, 'us-central1');  // US region for Gemini image gen
 
 console.log('✅ [Firestore] Multi-tab persistence enabled');
 

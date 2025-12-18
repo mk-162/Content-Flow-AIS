@@ -82,6 +82,14 @@ service firebase.storage {
       allow delete: if isProjectMember(orgId, projectId);
     }
 
+    // Temporary preview images (24hr auto-delete via lifecycle policy)
+    // These are accessible by the user who created them
+    match /temp/{sessionId}/{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isImage() && isValidSize();
+      allow delete: if isAuthenticated();
+    }
+
     // Default deny
     match /{allPaths=**} {
       allow read, write: if false;

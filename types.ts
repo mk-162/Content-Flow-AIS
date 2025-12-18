@@ -4,7 +4,7 @@ import { Timestamp } from 'firebase/firestore';
 export enum Screen {
   CATEGORIES = 'categories',
   POSTS = 'posts',
-  PUBLISHING = 'publishing',
+  LIVE_POSTS = 'live_posts',
   PROJECTS = 'projects',
   SETTINGS = 'settings',
   ADMIN = 'admin'
@@ -218,6 +218,7 @@ export interface AdminConfig {
 export interface Organization {
   id: string;
   name: string;
+  slug?: string; // URL-safe identifier (e.g., "acme-corp")
   ownerId: string;
   subscriptionTier: SubscriptionTier;
   settings: OrganizationSettings;
@@ -335,6 +336,7 @@ export interface Project {
   id: string;
   organizationId: string;
   name: string;
+  slug?: string; // URL-safe identifier (e.g., "main-blog")
   description: string;
   createdBy: string;
   createdAt: Timestamp;
@@ -399,8 +401,7 @@ export enum PostStatus {
   PENDING = 'pending',           // Idea only, no content yet
   GENERATING = 'generating',     // AI is writing content
   NEEDS_REVIEW = 'needs_review', // Content ready for human review
-  APPROVED = 'approved',         // Reviewed, ready to schedule
-  SCHEDULED = 'scheduled',       // Has future publish date
+  APPROVED = 'approved',         // Reviewed, ready to publish
   PUBLISHED = 'published',       // Live on site
   ARCHIVED = 'archived',         // Soft delete (recoverable)
   REJECTED = 'rejected'          // Rejected by editor
@@ -423,9 +424,7 @@ export interface Post {
   submittedAt?: Timestamp;
   approvedAt?: Timestamp;
   // Publishing fields
-  scheduledAt?: Timestamp;    // When to publish (for SCHEDULED posts)
-  publishedAt?: Timestamp;    // When actually went live
-  lastEditedAt?: Timestamp;   // Last edit after publishing
+  publishedAt?: Timestamp;    // When actually went live (set on build trigger)
   // SEO & metadata
   tags?: string[];
   metaKeywords?: string[];
@@ -552,19 +551,65 @@ export interface UsageRecord {
   model: string;
 }
 
-// Image Assets
+// Image Asset Variant URLs
+export interface ImageVariantUrls {
+  webp: string;
+  jpeg: string;
+}
+
+// Image Asset Original Info
+export interface ImageOriginalInfo {
+  url: string;
+  path: string;
+  width: number;
+  height: number;
+  size: number; // bytes
+}
+
+// Image Asset Variants
+export interface ImageVariants {
+  original: ImageOriginalInfo;
+  small: ImageVariantUrls;
+  large: ImageVariantUrls;
+}
+
+// Image Asset Status
+export type ImageAssetStatus = 'active' | 'deleted' | 'pending_deletion';
+
+// Image Assets - Enhanced with variants and lifecycle
 export interface ImageAsset {
   id: string;
   organizationId: string;
   projectId: string;
-  url: string;
-  path: string; // Storage path
-  prompt?: string;
-  altText?: string;
   createdAt: Timestamp;
   createdBy: string;
   type: 'generated' | 'uploaded';
   costInCredits: number;
+
+  // Short slug for public URLs (e.g., "x7Km9")
+  slug?: string;
+
+  // Primary URL (backward compatible - points to small WebP)
+  url: string;
+  publicUrl?: string; // Clean URL via custom domain (e.g., images.missioncontent.com/o/acme/p/blog/i/x7Km9.png)
+  path: string; // Storage path (to original)
+
+  // Multiple variants (new)
+  variants?: ImageVariants;
+
+  // Metadata
+  prompt?: string;
+  altText?: string;
+  originalDimensions?: { width: number; height: number };
+  originalSize?: number; // bytes
+  processingTimeMs?: number;
+
+  // Lifecycle management (new)
+  status?: ImageAssetStatus;
+  deletedAt?: Timestamp;
+  deletedBy?: string;
+  scheduledDeletionAt?: Timestamp;
+  replacedBy?: string; // ID of replacement image
 }
 
 // ============================================================================

@@ -62,7 +62,7 @@ const apiRequest = async (endpoint: string, data: any[]): Promise<any> => {
     throw new Error('DataForSEO API not configured. Please add credentials in Admin settings.');
   }
 
-  const authString = Buffer.from(`${credentials.login}:${credentials.password}`).toString('base64');
+  const authString = btoa(`${credentials.login}:${credentials.password}`);
 
   try {
     const response = await fetch(`https://api.dataforseo.com/v3${endpoint}`, {
@@ -238,7 +238,7 @@ export const testConnection = async (): Promise<{ success: boolean; message: str
     }
 
     // Try a simple API call to verify credentials
-    const authString = Buffer.from(`${credentials.login}:${credentials.password}`).toString('base64');
+    const authString = btoa(`${credentials.login}:${credentials.password}`);
 
     const response = await fetch('https://api.dataforseo.com/v3/appendix/user_data', {
       method: 'GET',

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
     Save,
     AlertTriangle,
@@ -15,7 +16,8 @@ import {
     Globe,
     Loader2,
     Building2,
-    ChevronDown
+    ChevronDown,
+    ArrowLeft
 } from 'lucide-react';
 import { Project, ContentType, PromptType, PromptOverrides, BusinessProfile } from '../types';
 import { doc, updateDoc, collection, getDocs, writeBatch, query, where } from 'firebase/firestore';
@@ -43,6 +45,7 @@ const updateNested = (obj: any, path: string, value: any): any => {
 };
 
 export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
+    const navigate = useNavigate();
     const { currentOrg } = useOrganization();
     const [loading, setLoading] = useState(false);
     const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -201,9 +204,18 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
 
                 {/* Header */}
                 <div className="flex items-center justify-between border-b border-slate-800 pb-6">
-                    <div>
-                        <h1 className="text-2xl font-bold text-slate-100 mb-2">Project Settings</h1>
-                        <p className="text-slate-400 text-sm">Manage configuration and rules for {project.name}</p>
+                    <div className="flex items-center gap-4">
+                        <button
+                            onClick={() => navigate('/projects')}
+                            className="flex items-center justify-center w-10 h-10 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-400 hover:text-white transition-colors"
+                            title="Back to Projects"
+                        >
+                            <ArrowLeft size={18} />
+                        </button>
+                        <div>
+                            <h1 className="text-2xl font-bold text-slate-100 mb-1">Project Settings</h1>
+                            <p className="text-slate-400 text-sm">Manage configuration and rules for {project.name}</p>
+                        </div>
                     </div>
                     <button
                         onClick={handleSave}

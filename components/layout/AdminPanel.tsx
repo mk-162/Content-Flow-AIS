@@ -73,7 +73,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       <div className="flex items-center justify-between gap-3 py-1.5 px-3 hover:bg-slate-800/50">
         <span className="text-slate-500 text-xs uppercase tracking-wider shrink-0">{label}</span>
         <div className="flex items-center gap-2">
-          <code className="text-cyan-400 text-xs font-mono bg-slate-800 px-2 py-0.5 max-w-[180px] truncate">
+          <code className="text-cyan-400 text-xs font-mono bg-slate-800 px-2 py-0.5">
             {value}
           </code>
           <button
@@ -132,7 +132,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               initial={{ opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="absolute top-full right-0 mt-2 w-80 bg-slate-900 border border-slate-700 shadow-xl z-50"
+              className="absolute top-full right-0 mt-2 w-[420px] bg-slate-900 border border-slate-700 shadow-xl z-50"
             >
               {/* Impersonation Section */}
               {isImpersonating && impersonatedOrg && (

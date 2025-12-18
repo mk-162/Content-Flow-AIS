@@ -6,6 +6,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ContentFlow AI</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            typography: {
+              invert: {
+                css: {
+                  '--tw-prose-body': '#cbd5e1',
+                  '--tw-prose-headings': '#f1f5f9',
+                  '--tw-prose-links': '#22d3ee',
+                  '--tw-prose-bold': '#f1f5f9',
+                  '--tw-prose-bullets': '#22d3ee',
+                  '--tw-prose-quotes': '#94a3b8',
+                  '--tw-prose-quote-borders': '#22d3ee',
+                  '--tw-prose-code': '#f472b6',
+                  '--tw-prose-pre-bg': '#1e293b',
+                }
+              }
+            }
+          }
+        }
+      }
+    </script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
@@ -46,22 +70,107 @@
         background-color: #334155;
         border: 3px solid #020617;
       }
+
+      /* Tiptap Editor Styles */
+      .ProseMirror {
+        outline: none;
+      }
+      .ProseMirror p {
+        margin: 1em 0;
+      }
+      .ProseMirror h1 {
+        font-size: 2em;
+        font-weight: 700;
+        margin: 1em 0 0.5em;
+        color: #f1f5f9;
+      }
+      .ProseMirror h2 {
+        font-size: 1.5em;
+        font-weight: 700;
+        margin: 1em 0 0.5em;
+        color: #f1f5f9;
+      }
+      .ProseMirror h3 {
+        font-size: 1.25em;
+        font-weight: 600;
+        margin: 1em 0 0.5em;
+        color: #f1f5f9;
+      }
+      .ProseMirror ul, .ProseMirror ol {
+        padding-left: 1.5em;
+        margin: 1em 0;
+      }
+      .ProseMirror ul {
+        list-style-type: disc;
+      }
+      .ProseMirror ol {
+        list-style-type: decimal;
+      }
+      .ProseMirror li {
+        margin: 0.5em 0;
+      }
+      .ProseMirror li::marker {
+        color: #22d3ee;
+      }
+      .ProseMirror blockquote {
+        border-left: 3px solid #22d3ee;
+        padding-left: 1em;
+        margin: 1em 0;
+        color: #94a3b8;
+        font-style: italic;
+      }
+      .ProseMirror code {
+        background: #1e293b;
+        color: #f472b6;
+        padding: 0.2em 0.4em;
+        border-radius: 4px;
+        font-family: var(--font-mono);
+        font-size: 0.9em;
+      }
+      .ProseMirror pre {
+        background: #1e293b;
+        padding: 1em;
+        border-radius: 8px;
+        overflow-x: auto;
+        margin: 1em 0;
+      }
+      .ProseMirror pre code {
+        background: none;
+        padding: 0;
+      }
+      .ProseMirror a {
+        color: #22d3ee;
+        text-decoration: underline;
+      }
+      .ProseMirror a:hover {
+        color: #67e8f9;
+      }
+      .ProseMirror strong {
+        font-weight: 700;
+        color: #f1f5f9;
+      }
+      .ProseMirror em {
+        font-style: italic;
+      }
+      .ProseMirror hr {
+        border: none;
+        border-top: 1px solid #334155;
+        margin: 2em 0;
+      }
+      .ProseMirror img {
+        max-width: 100%;
+        border-radius: 8px;
+        margin: 1em 0;
+      }
+      .ProseMirror p.is-editor-empty:first-child::before {
+        content: attr(data-placeholder);
+        float: left;
+        color: #475569;
+        pointer-events: none;
+        height: 0;
+      }
     </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "react-dom/client": "https://aistudiocdn.com/react-dom@^19.2.0/client",
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0",
-    "framer-motion": "https://aistudiocdn.com/framer-motion@^12.23.24",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/"
-  }
-}
-</script>
-<link rel="stylesheet" href="/index.css">
-</head>
+  </head>
   <body class="bg-slate-950 text-slate-100 h-screen overflow-hidden">
     <div id="root" class="h-full"></div>
     <script type="module" src="/index.tsx"></script>

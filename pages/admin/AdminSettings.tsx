@@ -41,10 +41,17 @@ export const AdminSettings: React.FC = () => {
     setSuccessMsg('');
     try {
       const docRef = doc(db, 'adminConfig', 'settings');
-      await setDoc(docRef, {
+      // Trim whitespace from credentials to prevent copy/paste issues
+      const cleanedSettings = {
         ...settings,
+        dataForSeoLogin: settings.dataForSeoLogin?.trim(),
+        dataForSeoPassword: settings.dataForSeoPassword?.trim(),
         updatedAt: Timestamp.now()
-      }, { merge: true });
+      };
+      await setDoc(docRef, cleanedSettings, { merge: true });
+
+      // Update local state with trimmed values
+      setSettings(cleanedSettings);
 
       // Clear the credentials cache
       dataForSeoService.clearCredentialsCache();

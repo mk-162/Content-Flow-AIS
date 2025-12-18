@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
     Image as ImageIcon,
     Wand2,
@@ -7,10 +7,13 @@ import {
     RefreshCw,
     UploadCloud,
     Check,
-    X
+    X,
+    Undo2
 } from 'lucide-react';
 import { ImageAsset } from '../types';
 import { imageGenerationService } from '../services/imageGenerationService';
+import { imageUploadService } from '../services/imageUploadService';
+import { imageService } from '../services/imageService';
 import { useOrganization } from '../contexts/OrganizationContext';
 import { useProject } from '../contexts/ProjectContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -39,15 +42,36 @@ export const ImageInspectorControl: React.FC<Props> = ({
     const [loading, setLoading] = useState(false);
     const [showLinkInput, setShowLinkInput] = useState(false);
     const [linkUrl, setLinkUrl] = useState('');
-    const [prompt, setPrompt] = useState(currentImage?.prompt || '');
-    const [showPrompt, setShowPrompt] = useState(false);
 
-    // Initialize prompt if empty and we have post data
+    // Check if prompt looks like base64 data (corrupted) and provide fallback
+    const isCorruptedPrompt = (p?: string) => {
+        if (!p) return false;
+        // Base64 data is usually long and contains only alphanumeric chars + /+=
+        return p.length > 100 && /^[A-Za-z0-9+/=]+$/.test(p.substring(0, 100));
+    };
+
+    const cleanPrompt = isCorruptedPrompt(currentImage?.prompt)
+        ? ''
+        : (currentImage?.prompt || '');
+
+    const [prompt, setPrompt] = useState(cleanPrompt);
+    const [showPrompt, setShowPrompt] = useState(false);
+    const [uploadError, setUploadError] = useState<string | null>(null);
+
+    // File input ref for uploads
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // Initialize/update prompt based on current image or post data
     React.useEffect(() => {
-        if (!prompt && postTitle && !currentImage) {
+        if (currentImage) {
+            // If we have an image, use its prompt (unless corrupted)
+            const imgPrompt = isCorruptedPrompt(currentImage.prompt) ? '' : currentImage.prompt;
+            setPrompt(imgPrompt || '');
+        } else if (postTitle) {
+            // No image - generate a default prompt from post title
             setPrompt(`A high-quality hero image for an article titled "${postTitle}"`);
         }
-    }, [postTitle, currentImage, prompt]);
+    }, [currentImage, postTitle]);
 
     const handleGenerate = async () => {
         if (!currentOrg || !currentProject || !user) return;
@@ -65,7 +89,9 @@ export const ImageInspectorControl: React.FC<Props> = ({
                 {
                     prompt: finalPrompt,
                     aspectRatio: '16:9', // Default for hero
-                    brandStyle: currentOrg.brandImageStyle
+                    brandStyle: currentOrg.brandImageStyle,
+                    orgSlug: currentOrg.slug,
+                    projectSlug: currentProject.slug
                 }
             );
 
@@ -104,9 +130,71 @@ export const ImageInspectorControl: React.FC<Props> = ({
         setLinkUrl('');
     };
 
-    const handleDelete = () => {
+    const handleDelete = async () => {
         if (confirm('Remove this image?')) {
+            // If we have an assetId (providerId), use soft delete
+            if (currentImage && (currentImage as any).providerId && currentOrg && currentProject && user) {
+                try {
+                    await imageService.softDelete(
+                        currentOrg.id,
+                        currentProject.id,
+                        (currentImage as any).providerId,
+                        user.id
+                    );
+                } catch (err) {
+                    console.error('Failed to soft delete:', err);
+                }
+            }
             onImageUpdate(undefined);
+        }
+    };
+
+    // Handle file upload
+    const handleUploadClick = () => {
+        setUploadError(null);
+        fileInputRef.current?.click();
+    };
+
+    const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file || !currentOrg || !currentProject || !user) return;
+
+        // Reset file input
+        e.target.value = '';
+
+        // Validate file
+        const validation = imageUploadService.validateFile(file);
+        if (!validation.valid) {
+            setUploadError(validation.error || 'Invalid file');
+            return;
+        }
+
+        setLoading(true);
+        setUploadError(null);
+
+        try {
+            const result = await imageUploadService.uploadImage(
+                file,
+                currentOrg.id,
+                currentProject.id,
+                user.id,
+                { altText: file.name.split('.')[0] }
+            );
+
+            onImageUpdate({
+                url: result.url,
+                prompt: `Uploaded: ${file.name}`,
+                altText: file.name.split('.')[0],
+                generatedAt: new Date(),
+                providerId: result.assetId,
+                aspectRatio: 'custom'
+            });
+
+        } catch (error: any) {
+            console.error('Upload failed:', error);
+            setUploadError(error.message || 'Failed to upload image');
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -210,13 +298,25 @@ export const ImageInspectorControl: React.FC<Props> = ({
                                 <LinkIcon size={16} />
                             </button>
                             <button
+                                onClick={handleUploadClick}
                                 className="p-2 hover:bg-slate-800 rounded-md text-slate-400 hover:text-white transition-colors"
-                                title="Upload (Coming Soon)"
-                                disabled
+                                title="Upload Image (1 credit)"
                             >
                                 <UploadCloud size={16} />
                             </button>
                         </div>
+                        {/* Hidden file input */}
+                        <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp,image/gif"
+                            onChange={handleFileSelect}
+                            className="hidden"
+                        />
+                        {/* Upload error message */}
+                        {uploadError && (
+                            <p className="text-rose-400 text-xs text-center mt-2">{uploadError}</p>
+                        )}
                     </div>
                 )}
             </div>
@@ -227,6 +327,11 @@ export const ImageInspectorControl: React.FC<Props> = ({
                     <label className="text-[10px] font-bold uppercase text-slate-500 tracking-wider">
                         Image Prompt
                     </label>
+                    {showPrompt && isCorruptedPrompt(currentImage?.prompt) && (
+                        <p className="text-xs text-amber-400 italic">
+                            Original prompt was corrupted. Enter a new prompt to regenerate.
+                        </p>
+                    )}
                     <textarea
                         value={prompt}
                         onChange={(e) => setPrompt(e.target.value)}

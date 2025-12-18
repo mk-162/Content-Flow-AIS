@@ -118,11 +118,22 @@ export const AdminDeployments: React.FC = () => {
 
   const handleTriggerBuild = async (project: ProjectWithOrg) => {
     if (!user) return;
+
+    const webhookUrl = project.settings?.deployment?.webhookUrl;
+    if (!webhookUrl) {
+      setBuildResult({
+        projectId: project.id,
+        success: false,
+        message: 'No webhook URL configured for this project'
+      });
+      return;
+    }
+
     setTriggeringBuild(project.id);
     setBuildResult(null);
 
     try {
-      const result = await triggerBuild(project.organizationId, project.id, user.id);
+      const result = await triggerBuild(project.organizationId, project.id, user.id, webhookUrl);
       setBuildResult({
         projectId: project.id,
         success: result.success,
@@ -306,16 +317,21 @@ export const AdminDeployments: React.FC = () => {
                     </td>
                     <td className="px-4 py-4">
                       {deployment?.customDomain ? (
-                        <a
-                          href={`https://${deployment.customDomain}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-2 text-cyan-400 hover:text-cyan-300 transition-colors"
-                        >
-                          <Globe className="w-4 h-4" />
-                          <span className="text-sm">{deployment.customDomain}</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
+                        (() => {
+                          const domain = deployment.customDomain.replace(/^https?:\/\//, '');
+                          return (
+                            <a
+                              href={`https://${domain}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-2 text-cyan-400 hover:text-cyan-300 transition-colors"
+                            >
+                              <Globe className="w-4 h-4" />
+                              <span className="text-sm">{domain}</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          );
+                        })()
                       ) : (
                         <span className="text-slate-600">—</span>
                       )}

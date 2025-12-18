@@ -72,7 +72,9 @@ export const ImageGeneratorModal: React.FC<ImageGeneratorModalProps> = ({
                 user.id,
                 {
                     prompt,
-                    aspectRatio
+                    aspectRatio,
+                    orgSlug: currentOrg.slug,
+                    projectSlug: currentProject.slug
                 }
             );
             setGeneratedImage(result);

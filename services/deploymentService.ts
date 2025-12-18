@@ -4,7 +4,8 @@
  */
 
 import { doc, updateDoc, Timestamp, getDoc } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../lib/firebase';
 import { Project } from '../types';
 
 export interface DeploymentConfig {
@@ -33,66 +34,43 @@ export async function updateDeploymentConfig(
 
 /**
  * Trigger a build via the CloudFlare webhook
- * Returns true if successful, false otherwise
+ * Uses Cloud Function to avoid CORS issues
  */
 export async function triggerBuild(
   organizationId: string,
   projectId: string,
-  userId: string
+  _userId: string,
+  webhookUrl: string
 ): Promise<{ success: boolean; error?: string }> {
-  // Get the project to find the webhook URL
-  const projectRef = doc(db, 'organizations', organizationId, 'projects', projectId);
-  const projectSnap = await getDoc(projectRef);
-
-  if (!projectSnap.exists()) {
-    return { success: false, error: 'Project not found' };
-  }
-
-  const project = projectSnap.data() as Project;
-  const webhookUrl = project.settings?.deployment?.webhookUrl;
-
-  if (!webhookUrl) {
-    return { success: false, error: 'No webhook URL configured' };
-  }
-
   try {
-    // Trigger the CloudFlare deploy hook
-    const response = await fetch(webhookUrl, {
-      method: 'POST',
-      body: '',
-    });
+    const triggerCloudFlareBuild = httpsCallable<
+      { webhookUrl: string },
+      { success: boolean; message: string }
+    >(functions, 'triggerCloudFlareBuild');
 
-    if (!response.ok) {
-      return {
-        success: false,
-        error: `Webhook returned ${response.status}: ${response.statusText}`
-      };
-    }
+    const result = await triggerCloudFlareBuild({ webhookUrl });
 
-    // Update last build timestamp
-    await updateDoc(projectRef, {
-      'settings.deployment.lastBuildTriggeredAt': Timestamp.now(),
-      'settings.deployment.lastBuildTriggeredBy': userId,
-    });
-
-    return { success: true };
-  } catch (error) {
+    return { success: result.data.success };
+  } catch (error: any) {
     console.error('[DeploymentService] Error triggering build:', error);
+
+    // Extract error message from Firebase function error
+    const errorMessage = error.message || error.details || 'Unknown error';
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: errorMessage
     };
   }
 }
 
 /**
- * Test if a webhook URL is valid and reachable
- * Note: This actually triggers a build, so use sparingly
+ * Validate webhook URL format
+ * Note: Actual testing requires triggering a build via Cloud Function
  */
 export async function testWebhook(
   webhookUrl: string
 ): Promise<{ success: boolean; error?: string }> {
-  // Validate URL format
+  // Validate URL format only (can't test from browser due to CORS)
   if (!webhookUrl.includes('api.cloudflare.com') || !webhookUrl.includes('deploy_hooks')) {
     return {
       success: false,
@@ -100,27 +78,11 @@ export async function testWebhook(
     };
   }
 
-  try {
-    const response = await fetch(webhookUrl, {
-      method: 'POST',
-      body: '',
-    });
-
-    if (!response.ok) {
-      return {
-        success: false,
-        error: `Webhook returned ${response.status}: ${response.statusText}`
-      };
-    }
-
-    return { success: true };
-  } catch (error) {
-    console.error('[DeploymentService] Error testing webhook:', error);
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Network error'
-    };
-  }
+  // URL format is valid
+  return {
+    success: true,
+    error: undefined
+  };
 }
 
 /**

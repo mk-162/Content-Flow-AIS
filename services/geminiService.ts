@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { doc, getDoc, addDoc, collection, Timestamp } from 'firebase/firestore';
+import { doc, getDoc, getDocs, addDoc, collection, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { ContentType, Tone, PromptType, AdminConfig, Project, TIER_FEATURES, SubscriptionTier, CategoryResearch, ContentFormat } from '../types';
 import { buildContentContext, buildPromptBlock } from './contextBuilder';
@@ -528,6 +528,32 @@ const stripPreamble = (content: string): string => {
   return cleaned;
 };
 
+// Helper to strip title headings from generated content
+// Title is stored separately in post.title, so we don't want it in the body
+const stripTitleHeading = (content: string, title: string): string => {
+  let cleaned = content.trim();
+
+  // Escape special regex characters in title
+  const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // Strip markdown H1: # Title (exact or close match)
+  cleaned = cleaned.replace(new RegExp(`^#\\s*${escapedTitle}\\s*\\n*`, 'im'), '');
+
+  // Strip markdown H2: ## Title (if it appears right at the start after H1 removal)
+  cleaned = cleaned.replace(new RegExp(`^##\\s*${escapedTitle}\\s*\\n*`, 'im'), '');
+
+  // Also strip any H1 at the very beginning (fallback - AI sometimes varies the title slightly)
+  cleaned = cleaned.replace(/^#\s+[^\n]+\n+/, '');
+
+  // If content now starts with ## that looks like a duplicate title (short, no period), strip it
+  const h2Match = cleaned.match(/^##\s+([^\n]+)\n/);
+  if (h2Match && h2Match[1].length < 100 && !h2Match[1].includes('.')) {
+    cleaned = cleaned.replace(/^##\s+[^\n]+\n+/, '');
+  }
+
+  return cleaned.trim();
+};
+
 // ============================================
 // CACHING LAYER - Reduces Firestore Reads by 90%+
 // ============================================
@@ -842,18 +868,21 @@ export const generatePostOutline = async (
       ${businessContextBlock}
 
       Write a detailed ${contentType.toLowerCase()} about: "${title}" in the category "${categoryName}".
-      
+
       ${categoryDescription ? `Category Context: ${categoryDescription}` : ''}
       Tone: ${tone}
       Target Geographic Location: ${geographic}
       ${teaser ? `**Specific Instructions/Focus:** ${teaser}` : ''}
       ${tags && tags.length > 0 ? `**Target Keywords to Include:** ${tags.join(', ')}` : ''}
-      
+
       ${orgData?.brandMessage ? `**Brand Message:** ${orgData.brandMessage}` : ''}
       ${orgData?.brandCompliance ? `**Compliance Guidelines:** ${orgData.brandCompliance}` : ''}
 
-      IMPORTANT: 
-      - Start directly with the markdown content. Do not include any preambles.
+      IMPORTANT:
+      - DO NOT include the title as a heading (H1 or H2). The title "${title}" will be added separately as front matter.
+      - Start directly with an engaging introduction paragraph.
+      - Use H2 (##) for section headings, H3 (###) for subsections.
+      - Do not include any preambles like "Here is..." or "Sure...".
       - Use spelling, terminology, and cultural references appropriate for ${geographic} audience.
       - Format in clean Markdown.`;
     }
@@ -873,8 +902,10 @@ export const generatePostOutline = async (
     console.log('[Gemini] ✅ API response received');
     const rawContent = response.text || "Could not generate content.";
     console.log('[Gemini] 📄 Content generated:', rawContent.length, 'chars');
-    const cleanedContent = stripPreamble(rawContent);
-    console.log('[Gemini] ✨ Content cleaned and ready');
+    let cleanedContent = stripPreamble(rawContent);
+    // Strip title heading - title is stored in post.title, not in content body
+    cleanedContent = stripTitleHeading(cleanedContent, title);
+    console.log('[Gemini] ✨ Content cleaned (title stripped from body)');
 
     // Track usage
     if (organizationId && projectId && userId) {
@@ -1012,18 +1043,34 @@ export const suggestCategories = async (
 
     // Build comprehensive business context from project
     let fullContext = '';
+    let existingCategoriesContext = '';
 
     if (organizationId && projectId) {
       try {
-        const projectDoc = await getDoc(doc(db, `organizations/${organizationId}/projects`, projectId));
+        // Fetch project AND existing categories for context
+        const [projectDoc, categoriesSnap] = await Promise.all([
+          getDoc(doc(db, `organizations/${organizationId}/projects`, projectId)),
+          getDocs(collection(db, `organizations/${organizationId}/projects/${projectId}/categories`))
+        ]);
+
         if (projectDoc.exists()) {
           const projectData = projectDoc.data();
           const bp = projectData.businessProfile;
+          const contextParts: string[] = [];
 
+          // ALWAYS include project name and description
+          contextParts.push('**PROJECT CONTEXT**');
+          contextParts.push(`Project Name: ${projectData.name}`);
+          if (projectData.description) {
+            contextParts.push(`Project Focus: ${projectData.description}`);
+          }
+          if (projectData.websiteUrl) {
+            contextParts.push(`Website: ${projectData.websiteUrl}`);
+          }
+
+          // Add business profile if available
           if (bp) {
-            const contextParts: string[] = [];
-
-            // Business Identity
+            contextParts.push('');
             contextParts.push('**BUSINESS CONTEXT**');
             if (bp.businessName) contextParts.push(`Business: ${bp.businessName}`);
             if (bp.businessSummary) contextParts.push(`About: ${bp.businessSummary}`);
@@ -1067,13 +1114,24 @@ export const suggestCategories = async (
               if (bp.brandVoice?.tone?.length) contextParts.push(`Tone: ${bp.brandVoice.tone.join(', ')}`);
               if (bp.contentStyle?.types?.length) contextParts.push(`Content Types: ${bp.contentStyle.types.join(', ')}`);
             }
+          }
 
-            fullContext = contextParts.join('\n');
-          } else {
-            // Minimal context from project name/description
-            fullContext = `Project: ${projectData.name}${projectData.description ? ` - ${projectData.description}` : ''}`;
+          fullContext = contextParts.join('\n');
+
+          // Build existing categories context
+          if (!categoriesSnap.empty) {
+            const categories = categoriesSnap.docs.map(d => {
+              const data = d.data();
+              return `- ${data.name}${data.description ? `: ${data.description}` : ''}`;
+            });
+            if (categories.length > 0) {
+              existingCategoriesContext = `\n**EXISTING CATEGORIES (for reference, don't duplicate):**\n${categories.slice(0, 10).join('\n')}`;
+            }
           }
         }
+
+        console.log('[Gemini] Category suggestion context:', fullContext.substring(0, 200) + '...');
+
       } catch (err) {
         console.warn('[Gemini] Could not fetch project context for categories:', err);
       }

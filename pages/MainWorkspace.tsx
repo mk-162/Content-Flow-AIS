@@ -5,15 +5,12 @@ import {
   FileText,
   ChevronLeft,
   ChevronRight,
-  ChevronDown,
-  Building2,
   Settings,
-  Rocket,
-  LayoutGrid,
+  Globe,
 } from 'lucide-react';
 import { CategoryWorkspace } from '../components/CategoryWorkspace';
 import { PostsWorkspace } from '../components/PostsWorkspace';
-import { PublishingWorkspace } from '../components/PublishingWorkspace';
+import { LivePostsWorkspace } from '../components/LivePostsWorkspace';
 import { useAuth } from '../contexts/AuthContext';
 import { useOrganization } from '../contexts/OrganizationContext';
 import { useProject } from '../contexts/ProjectContext';
@@ -36,9 +33,10 @@ import {
   deleteDoc,
   doc,
   Timestamp,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { generateCategoryTitles, generatePostOutline, GeneratedTitleData } from '../services/geminiService';
+// Note: Content generation now handled by Cloud Function (processGenerationQueue)
 import { ProjectSettings } from '../components/ProjectSettings';
 import { TopBar } from '../components/layout';
 import { creditService, CREDIT_COSTS } from '../services/creditService';
@@ -55,7 +53,7 @@ export const MainWorkspace: React.FC = () => {
   const location = useLocation();
   const { user } = useAuth();
   const { currentOrg } = useOrganization();
-  const { currentProject, projects, setCurrentProject } = useProject();
+  const { currentProject } = useProject();
 
   const [currentScreen, setCurrentScreen] = useState<Screen>(
     (location.state as any)?.initialScreen || Screen.CATEGORIES
@@ -66,9 +64,7 @@ export const MainWorkspace: React.FC = () => {
   const [notifications, setNotifications] = useState<{ id: string; msg: string; type: 'success' | 'info' }[]>([]);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [showProjectMenu, setShowProjectMenu] = useState(false);
   const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
-  const isProcessingRef = React.useRef(false);
 
   const notify = (msg: string, type: 'success' | 'info' = 'info') => {
     const id = Math.random().toString(36);
@@ -86,6 +82,13 @@ export const MainWorkspace: React.FC = () => {
       setLoading(false);
     }
   }, [currentOrg, currentProject, navigate]);
+
+  // Clear data when org/project changes to prevent stale data from other projects
+  useEffect(() => {
+    setCategories([]);
+    setPosts([]);
+    setTasks([]);
+  }, [currentOrg?.id, currentProject?.id]);
 
   // Real-time listener for categories
   useEffect(() => {
@@ -169,227 +172,71 @@ export const MainWorkspace: React.FC = () => {
     return unsubscribe;
   }, [currentOrg, currentProject]);
 
-  // Queue Processor - Process tasks client-side for now (will move to Cloud Functions)
+  // Cleanup: Reset orphaned posts and stale tasks
   useEffect(() => {
-    if (!currentOrg || !currentProject || !user) return;
+    if (!currentOrg || !currentProject || !user || !posts.length || !tasks) return;
 
-    const activeTask = tasks.find((t) => t.status === TaskStatus.PROCESSING);
-    if (activeTask) return;
-    const nextTask = tasks.find((t) => t.status === TaskStatus.QUEUED);
-    if (!nextTask) return;
+    const cleanupStaleItems = async () => {
+      // 1. Reset stale PROCESSING tasks (older than 5 minutes)
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+      const staleTasks = tasks.filter(t =>
+        t.status === TaskStatus.PROCESSING &&
+        t.startedAt.toDate() < fiveMinutesAgo
+      );
 
-    // Fix: Use ref to lock processing to prevent parallel execution during status updates
-    if (isProcessingRef.current) return;
-
-    const processTask = async () => {
-      isProcessingRef.current = true;
-      console.log(`[Queue] Processing task:`, nextTask);
-
-
-      const taskRef = doc(db, 'generationQueue', nextTask.id);
-      console.log(`[Queue] Setting status to PROCESSING...`);
-      await updateDoc(taskRef, {
-        status: TaskStatus.PROCESSING,
-        progress: 10,
-      });
-
-      try {
-        if (nextTask.type === TaskType.GENERATE_TITLES) {
-          console.log(`[Queue] Processing GENERATE_TITLES for category:`, nextTask.categoryId);
-
-          await new Promise((r) => setTimeout(r, 1000));
-          await updateDoc(taskRef, { progress: 40 });
-
-          const category = categories.find((c) => c.id === nextTask.categoryId);
-          if (category) {
-            console.log(`[Queue] Found category:`, category.name);
-            const descriptionContext = nextTask.contextOverride || category.description;
-            const count = nextTask.requestedCount || 5;
-
-            console.log(`[Queue] Calling generateCategoryTitles...`);
-            const generatedData: GeneratedTitleData[] = await generateCategoryTitles(
-              category.name,
-              descriptionContext,
-              count,
-              currentOrg.id,
-              currentProject.id,
-              user.id
-            );
-
-            console.log(`[Queue] Generated ${generatedData.length} titles, saving to Firestore...`);
-            await updateDoc(taskRef, { progress: 80 });
-
-            const postsRef = collection(
-              db,
-              `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`
-            );
-
-            for (const item of generatedData) {
-              console.log(`[Queue] Adding post:`, item.title);
-              const newPostRef = await addDoc(postsRef, {
-                projectId: currentProject.id,
-                organizationId: currentOrg.id,
-                categoryId: category.id,
-                title: item.title,
-                teaser: item.teaser,
-                metaDescription: item.teaser,
-                tags: item.keywords,
-                metaKeywords: item.keywords,
-                status: PostStatus.PENDING,
-                createdBy: user.id,
-                createdAt: Timestamp.now(),
-                updatedAt: Timestamp.now(),
-              });
-
-              // Auto-Generate Image if enabled
-              if (currentProject.settings?.imageGeneration?.autoGenerate) {
-                console.log(`[Queue] Queuing auto-image generation for:`, item.title);
-                await addDoc(collection(db, 'generationQueue'), {
-                  type: TaskType.GENERATE_IMAGE,
-                  organizationId: currentOrg.id,
-                  projectId: currentProject.id,
-                  categoryId: category.id,
-                  categoryName: category.name,
-                  targetPostId: newPostRef.id,
-                  status: TaskStatus.QUEUED,
-                  progress: 0,
-                  createdBy: user.id,
-                  startedAt: Timestamp.now(),
-                });
-              }
-            }
-
-            console.log(`[Queue] ✅ Successfully saved all titles`);
-            notify(`Generated ${generatedData.length} ideas for ${category.name}`, 'success');
-          } else {
-            console.error(`[Queue] ❌ Category not found:`, nextTask.categoryId);
-          }
-
-
-          // ...
-
-        } else if (nextTask.type === TaskType.GENERATE_CONTENT) {
-          const post = posts.find((p) => p.id === nextTask.targetPostId);
-          if (post) {
-            // Deduct credits
-            await creditService.deductCredits(
-              currentOrg.id,
-              user.id,
-              CREDIT_COSTS.ARTICLE_GENERATION,
-              `Generated Article: ${post.title}`,
-              { projectId: currentProject.id, postId: post.id }
-            );
-
-            const content = await generatePostOutline(
-              post.title,
-              nextTask.categoryName,
-              post.teaser,
-              post.tags,
-              currentOrg.id,
-              currentProject.id,
-              user.id,
-              categories.find(c => c.id === post.categoryId)?.description,
-              post.contentType,
-              post.tone
-            );
-            await updateDoc(taskRef, { progress: 80 });
-
-            const postRef = doc(
-              db,
-              `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`,
-              post.id
-            );
-            await updateDoc(postRef, {
-              content,
-              status: PostStatus.NEEDS_REVIEW,
-              generatedAt: Timestamp.now(),
-              submittedAt: Timestamp.now(),
-              updatedAt: Timestamp.now(),
-              // Backfill meta data if missing
-              ...(!post.metaDescription ? { metaDescription: post.teaser } : {}),
-              ...(!post.metaKeywords && post.tags ? { metaKeywords: post.tags } : {}),
-            });
-
-
-            notify(`Content ready for: ${post.title}`, 'success');
-          }
-        } else if (nextTask.type === TaskType.GENERATE_IMAGE) {
-          const post = posts.find((p) => p.id === nextTask.targetPostId);
-          if (post) {
-            console.log(`[Queue] Generating image for: ${post.title}`);
-            await updateDoc(taskRef, { progress: 20 });
-
-            // Generate Prompt
-            const prompt = await imageGenerationService.generateImagePrompt(post.title, post.teaser || '');
-            await updateDoc(taskRef, { progress: 40 });
-
-            // Generate Image
-            const result = await imageGenerationService.generateImage(
-              currentOrg.id,
-              currentProject.id,
-              user.id,
-              {
-                prompt,
-                aspectRatio: '16:9',
-                brandStyle: currentOrg.brandImageStyle
-              }
-            );
-            await updateDoc(taskRef, { progress: 80 });
-
-            // Update Post
-            const postRef = doc(
-              db,
-              `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`,
-              post.id
-            );
-            await updateDoc(postRef, {
-              heroImage: {
-                url: result.url,
-                prompt: result.assetId,
-                altText: prompt,
-                generatedAt: Timestamp.now(),
-                providerId: result.assetId,
-                aspectRatio: '16:9'
-              },
-              updatedAt: Timestamp.now(),
-            });
-
-            notify(`Image generated for: ${post.title}`, 'success');
-          }
-        }
-
-        console.log(`[Queue] Task completed successfully`);
-        await updateDoc(taskRef, {
-          status: TaskStatus.COMPLETED,
-          progress: 100,
-          completedAt: Timestamp.now(),
-        });
-      } catch (err) {
-        console.error('❌ [Queue] Task Failed:', err);
-        console.error('Error stack:', err instanceof Error ? err.stack : 'No stack trace');
+      for (const task of staleTasks) {
+        console.log(`[Cleanup] Resetting stale PROCESSING task: ${task.id}`);
+        const taskRef = doc(db, 'generationQueue', task.id);
         await updateDoc(taskRef, {
           status: TaskStatus.FAILED,
-          progress: 0,
-          error: err instanceof Error ? err.message : 'Unknown error',
+          error: 'Task timed out (stale)',
         });
 
-        if (nextTask.type === TaskType.GENERATE_CONTENT && nextTask.targetPostId) {
+        // Reset associated post if it's a content generation task
+        if (task.type === TaskType.GENERATE_CONTENT && task.targetPostId) {
           const postRef = doc(
             db,
             `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`,
-            nextTask.targetPostId
+            task.targetPostId
           );
           await updateDoc(postRef, {
             status: PostStatus.PENDING,
             updatedAt: Timestamp.now(),
           });
-          notify('Generation failed - Try again', 'info');
         }
-      } finally {
-        isProcessingRef.current = false;
       }
-    }; processTask();
-  }, [tasks, categories, posts, currentOrg, currentProject, user]);
+
+      // 2. Reset orphaned posts stuck in GENERATING with no active task
+      const generatingPosts = posts.filter(p => p.status === PostStatus.GENERATING);
+
+      for (const post of generatingPosts) {
+        const hasActiveTask = tasks.some(
+          t => t.targetPostId === post.id &&
+          (t.status === TaskStatus.QUEUED || t.status === TaskStatus.PROCESSING)
+        );
+
+        if (!hasActiveTask) {
+          console.log(`[Cleanup] Resetting orphaned post: ${post.title}`);
+          const postRef = doc(
+            db,
+            `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`,
+            post.id
+          );
+          await updateDoc(postRef, {
+            status: PostStatus.PENDING,
+            updatedAt: Timestamp.now(),
+          });
+        }
+      }
+    };
+
+    // Run cleanup after a short delay to ensure tasks have loaded
+    const timeout = setTimeout(cleanupStaleItems, 2000);
+    return () => clearTimeout(timeout);
+  }, [currentOrg, currentProject, user, posts, tasks]);
+
+  // Queue Processing now happens server-side via Cloud Function (processGenerationQueue)
+  // The client just displays task status from Firestore real-time updates
 
   // Actions
   const addCategory = async (name: string, parentId: string | null, description?: string) => {
@@ -455,9 +302,35 @@ export const MainWorkspace: React.FC = () => {
   };
 
   const moveCategory = async (id: string, newParentId: string | null, reorderedSiblings: { id: string; order: number; }[]) => {
-    // Placeholder for drag and drop reordering
-    console.log('Move category:', id, newParentId, reorderedSiblings);
-    notify('Reordering not yet implemented', 'info');
+    console.log('moveCategory called:', { id, newParentId, reorderedSiblings });
+
+    if (!currentOrg || !currentProject) {
+      console.log('No org or project');
+      return;
+    }
+
+    try {
+      // Update parent if changed
+      const category = categories.find(c => c.id === id);
+      if (category && category.parentId !== newParentId) {
+        console.log('Updating parent');
+        const catRef = doc(db, 'organizations', currentOrg.id, 'projects', currentProject.id, 'categories', id);
+        await updateDoc(catRef, { parentId: newParentId });
+      }
+
+      // Update order for all siblings
+      console.log('Updating order for', reorderedSiblings.length, 'siblings');
+      const batch = writeBatch(db);
+      for (const sibling of reorderedSiblings) {
+        const siblingRef = doc(db, 'organizations', currentOrg.id, 'projects', currentProject.id, 'categories', sibling.id);
+        batch.update(siblingRef, { order: sibling.order });
+      }
+      await batch.commit();
+      console.log('Batch committed successfully');
+    } catch (error) {
+      console.error('Failed to reorder categories:', error);
+      notify('Failed to reorder categories', 'info');
+    }
   };
 
   const queueTitleGeneration = async (
@@ -546,9 +419,14 @@ export const MainWorkspace: React.FC = () => {
         postId
       );
 
+      // Don't update updatedAt when only changing publishedAt (publishing action)
+      // This prevents false "has changes" indicators
+      const shouldUpdateTimestamp = !('publishedAt' in updates) ||
+        Object.keys(updates).some(k => !['publishedAt', 'status'].includes(k));
+
       await updateDoc(postRef, {
         ...updates,
-        updatedAt: Timestamp.now(),
+        ...(shouldUpdateTimestamp && { updatedAt: Timestamp.now() }),
       });
     } catch (error) {
       console.error('Error updating post:', error);
@@ -652,71 +530,6 @@ export const MainWorkspace: React.FC = () => {
             </button>
           </div>
 
-          {/* Project Selector (when expanded) */}
-          {!isSidebarCollapsed && (
-            <div className="p-4 border-b border-slate-800">
-              <div className="relative">
-                <button
-                  onClick={() => setShowProjectMenu(!showProjectMenu)}
-                  className="w-full flex items-center justify-between p-3 bg-slate-900 border border-slate-700 hover:border-slate-600 transition-colors text-left"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-white truncate">{currentProject?.name || 'Select Project'}</p>
-                    <p className="text-xs text-slate-500 truncate">{currentOrg?.name || 'No Organization'}</p>
-                  </div>
-                  <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${showProjectMenu ? 'rotate-180' : ''}`} />
-                </button>
-
-                {/* Project Dropdown */}
-                {showProjectMenu && (
-                  <>
-                    <div className="fixed inset-0 z-30" onClick={() => setShowProjectMenu(false)} />
-                    <div className="absolute top-full left-0 right-0 mt-1 bg-slate-900 border border-slate-700 shadow-xl z-40 max-h-64 overflow-y-auto">
-                      {projects.map((project) => (
-                        <button
-                          key={project.id}
-                          onClick={() => {
-                            setCurrentProject(project.id);
-                            setShowProjectMenu(false);
-                          }}
-                          className={`w-full px-3 py-2 text-left text-sm hover:bg-slate-800 transition-colors ${currentProject?.id === project.id ? 'bg-slate-800 text-cyan-400' : 'text-slate-200'
-                            }`}
-                        >
-                          {project.name}
-                        </button>
-                      ))}
-                      <div className="border-t border-slate-700 mt-1 pt-1">
-                        <button
-                          onClick={() => {
-                            navigate('/projects');
-                            setShowProjectMenu(false);
-                          }}
-                          className="w-full px-3 py-2 text-left text-xs text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex items-center gap-2"
-                        >
-                          <LayoutGrid size={14} />
-                          Manage All Projects
-                        </button>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Collapsed: Just show icon */}
-          {isSidebarCollapsed && (
-            <div className="p-3 flex justify-center border-b border-slate-800">
-              <button
-                onClick={() => setIsSidebarCollapsed(false)}
-                className="p-2 bg-slate-900 border border-slate-700"
-                title={`${currentProject?.name} - ${currentOrg?.name}`}
-              >
-                <Building2 className="w-4 h-4 text-cyan-400" />
-              </button>
-            </div>
-          )}
-
           {/* Main Navigation */}
           <nav className="flex-1 py-4 overflow-y-auto">
             <NavButton
@@ -742,10 +555,12 @@ export const MainWorkspace: React.FC = () => {
               collapsed={isSidebarCollapsed}
             />
             <NavButton
-              active={currentScreen === Screen.PUBLISHING}
-              onClick={() => setCurrentScreen(Screen.PUBLISHING)}
-              icon={<Rocket />}
-              label="Publishing"
+              active={currentScreen === Screen.LIVE_POSTS}
+              onClick={() => setCurrentScreen(Screen.LIVE_POSTS)}
+              icon={<Globe />}
+              label="Live Posts"
+              badge={posts.filter(p => p.status === PostStatus.PUBLISHED).length || undefined}
+              badgeColor="bg-emerald-500"
               collapsed={isSidebarCollapsed}
             />
             <div className="my-2 mx-4 border-b border-slate-800" />
@@ -767,15 +582,15 @@ export const MainWorkspace: React.FC = () => {
           onClose={() => setIsCreditModalOpen(false)}
         />
         {/* Notifications */}
-        <div className="absolute top-0 right-0 z-50 p-6 flex flex-col items-end gap-2 pointer-events-none">
+        <div className="fixed top-0 left-0 right-0 z-50 flex flex-col items-center gap-2 pointer-events-none">
           {notifications.map((n) => (
             <div
               key={n.id}
               className={`
-                    pointer-events-auto flex items-center p-4 border-l-4 shadow-2xl min-w-[300px] animate-in slide-in-from-right-10
+                    pointer-events-auto flex items-center justify-center px-6 py-3 shadow-2xl min-w-[300px] animate-in slide-in-from-top-5 duration-200
                     ${n.type === 'success'
-                  ? 'bg-[#020617] border-emerald-500 text-emerald-500'
-                  : 'bg-[#020617] border-cyan-500 text-cyan-500'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-slate-800 text-cyan-400 border-b border-cyan-500'
                 }
                 `}
             >
@@ -798,6 +613,8 @@ export const MainWorkspace: React.FC = () => {
               onQueueContent={queueContentGeneration}
               onUpdatePost={updatePostFields}
               onDeletePost={deletePost}
+              organizationId={currentOrg?.id}
+              projectId={currentProject?.id}
             />
           </div>
         )}
@@ -811,11 +628,13 @@ export const MainWorkspace: React.FC = () => {
             onUpdatePost={updatePostFields}
             onDeletePost={deletePost}
             onQueueContent={queueContentGeneration}
+            project={currentProject}
+            organization={currentOrg}
           />
         )}
 
-        {currentScreen === Screen.PUBLISHING && (
-          <PublishingWorkspace
+        {currentScreen === Screen.LIVE_POSTS && (
+          <LivePostsWorkspace
             posts={posts}
             categories={categories}
             onUpdateStatus={updatePostStatus}
