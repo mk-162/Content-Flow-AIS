@@ -1338,7 +1338,7 @@ ${categoryDesc ? `Description: ${categoryDesc}` : ''}
 **ARTICLE BRIEF**
 Title: "${post.title}"
 ${post.teaser ? `Angle/Focus: ${post.teaser}` : ''}
-${post.tags?.length ? `Target Keywords: ${post.tags.join(', ')}` : ''}
+${Array.isArray(post.tags) && post.tags.length ? `Target Keywords: ${post.tags.join(', ')}` : ''}
 Search Intent: ${post.searchIntent || 'informational'}
 Target Word Count: 1,200-1,800 words
 
