@@ -1577,7 +1577,7 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                                             <div className="flex items-center gap-2 flex-1">
                                                                 <Tag size={14} className="text-slate-600 shrink-0" />
                                                                 <input
-                                                                    value={post.tags?.join(', ') || ''}
+                                                                    value={Array.isArray(post.tags) ? post.tags.join(', ') : ''}
                                                                     onChange={(e) => onUpdatePost(post.id, { tags: e.target.value.split(',').map(s => s.trim()) })}
                                                                     className="w-full bg-transparent text-slate-400 focus:text-cyan-400 outline-none border-b border-slate-800 focus:border-cyan-500 pb-1 placeholder-slate-700"
                                                                     placeholder="comma, separated, tags"
