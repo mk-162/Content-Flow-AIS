@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Terminal, Cpu, AlertTriangle, FileText, Share2, Mail, BookOpen, Lightbulb, FolderTree, Globe, HelpCircle, X } from 'lucide-react';
+import { useNavigate, Link } from 'react-router-dom';
+import { ArrowLeft, Save, Terminal, Cpu, AlertTriangle, FileText, Share2, Mail, BookOpen, Lightbulb, FolderTree, Globe, HelpCircle, X, ExternalLink, Code, RotateCcw } from 'lucide-react';
 import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
 import { AdminConfig, ContentType, PromptType } from '../types';
@@ -168,36 +168,55 @@ For each idea, provide:
 
 Return as JSON: { ideas: [{ title, teaser, keywords, searchIntent, contentFormat }] }`,
 
-    [PromptType.CATEGORY_SUGGESTIONS]: `You are an expert Content Strategist.
+    [PromptType.CATEGORY_SUGGESTIONS]: `You are an Editorial Director creating compelling content categories.
 
 Analyze the content category: "{{categoryName}}"
 
-Task: Suggest 3 actionable improvements or sub-niches to make this category more specific, engaging, and valuable to the target audience.
+Task: Suggest 3 powerful ways to expand or refine this category into more specific, reader-captivating content territories.
 
-Consider:
-- Current trends
-- Audience pain points
-- Content gaps
-- SEO opportunities
+For each suggestion, think editorially:
+- What would make someone EXCITED to dive into this category?
+- What specific stories, guides, or experiences could live here?
+- What transformation will readers experience?
 
-Return as JSON array of strings.`,
+Return as JSON array of strings (each string is a specific category angle or sub-niche).`,
 
-    [PromptType.CATEGORY_BREAKDOWN]: `You are an expert Content Strategist.
+    [PromptType.CATEGORY_BREAKDOWN]: `You are an Editorial Director creating compelling content categories for a media brand.
 
 {{#if parentCategory}}
-Parent Category: "{{parentCategory}}"
-Task: Break this down into 6 logical, distinct subcategories or sub-niches.
-{{#if query}}Focus on: "{{query}}"{{/if}}
+**PARENT CATEGORY TO EXPAND**
+└─ "{{parentCategory}}"
+
+**TASK:** Create 6 distinct subcategories that bring "{{parentCategory}}" to life.
+{{#if query}}Focus specifically on: "{{query}}"{{/if}}
 {{else}}
-Task: Suggest 5 distinct, high-value top-level content categories related to: "{{query}}"
+**TASK:** Create 6 distinct, high-value content categories related to: "{{query}}"
 {{/if}}
 
-For each suggestion, provide:
-- **name**: Category name (2-4 words)
-- **description**: Brief description (1 sentence)
-- **reason**: Why this category is valuable (1 sentence)
+**CATEGORY REQUIREMENTS:**
+1. Each category should feel like a gateway to exploration - not just a filing system
+2. Categories must be specific - no generic "Tips & Tricks" or "Industry Basics"
+3. Think editorially: what would make someone EXCITED to dive into this category?
+4. Mix practical utility with storytelling potential
 
-Return as JSON array of objects.`,
+**DESCRIPTION REQUIREMENTS - THIS IS CRITICAL:**
+Each description must be a compelling EDITORIAL BRIEF (3-4 sentences) that:
+- Paints a vivid picture of what content belongs here
+- Uses evocative, magazine-quality language that SELLS the category
+- Includes specific content angles, themes, and story hooks
+- Describes the reader transformation - what they'll discover or experience
+- Makes someone WANT to explore this category
+
+**EXAMPLE GOOD DESCRIPTION:**
+"Epic multi-day routes and weekend escapes across dramatic landscapes. From coastal cliff paths to moorland climbs—each route framed as an experience, not just a ride. Features terrain insights, elevation profiles, seasonal timing, café stops, and the 'type of rider' each adventure suits. Where exploration meets storytelling."
+
+**EXAMPLE BAD DESCRIPTION:**
+"Content about cycling routes." (too generic, no editorial vision, doesn't inspire)
+
+Return as JSON array of objects with:
+- "name": Category name (2-4 words, evocative and specific)
+- "description": Rich editorial brief (3-4 sentences - make it COMPELLING)
+- "reason": Why this category will captivate the target audience`,
 
     [PromptType.BRAND_RESEARCH]: `You are a Brand Analyst specializing in digital marketing.
 
@@ -320,6 +339,26 @@ export const AdminPrompts: React.FC = () => {
         });
     };
 
+    // Reset a single prompt to its default value
+    const handleResetToDefault = (key: string) => {
+        if (!config) return;
+        const defaultValue =
+            DEFAULT_CONTENT_PROMPTS[key as ContentType] ||
+            DEFAULT_SYSTEM_PROMPTS[key as PromptType] ||
+            (key === 'summaryPrompt' ? DEFAULT_SUMMARY_PROMPT : '') ||
+            (key === 'imageGenerationPrompt' ? DEFAULT_IMAGE_GENERATION_PROMPT : '');
+
+        if (defaultValue) {
+            setConfig({
+                ...config,
+                prompts: {
+                    ...config.prompts,
+                    [key]: defaultValue
+                }
+            });
+        }
+    };
+
     const handleSave = async () => {
         if (!config) return;
         setSaving(true);
@@ -400,6 +439,31 @@ export const AdminPrompts: React.FC = () => {
                         {successMsg}
                     </div>
                 )}
+
+                {/* Warning Banner - Prompts Not Active */}
+                <div className="mb-6 p-5 bg-orange-500/10 border border-orange-500/30 rounded-lg">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="w-6 h-6 text-orange-400 shrink-0 mt-0.5" />
+                        <div className="flex-1">
+                            <h3 className="text-orange-400 font-bold text-sm mb-2">These Prompts Are Not Currently Active</h3>
+                            <p className="text-orange-300/80 text-sm mb-3">
+                                Title generation and article generation are handled by Cloud Functions with hardcoded prompts.
+                                Editing prompts here will <strong>not</strong> affect those generations until we connect them.
+                            </p>
+                            <p className="text-orange-300/80 text-sm mb-4">
+                                Currently, only <strong>Category Suggestions</strong> and <strong>Category Breakdown</strong> use these admin prompts.
+                            </p>
+                            <Link
+                                to="/admin/prompts-reference"
+                                className="inline-flex items-center gap-2 px-4 py-2 bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/40 text-orange-300 text-xs font-bold uppercase tracking-wider transition-colors"
+                            >
+                                <Code size={14} />
+                                View Active Cloud Function Prompts
+                                <ExternalLink size={12} />
+                            </Link>
+                        </div>
+                    </div>
+                </div>
 
                 <div className="grid gap-6">
                     {/* Model Info */}
@@ -496,6 +560,13 @@ export const AdminPrompts: React.FC = () => {
                                             rows={20}
                                             className="w-full bg-slate-950 border border-slate-700 p-4 text-slate-300 font-mono text-sm focus:outline-none focus:border-cyan-500 leading-relaxed"
                                         />
+                                        <button
+                                            onClick={() => handleResetToDefault(activeContentTab)}
+                                            className="mt-2 flex items-center gap-2 px-3 py-1.5 text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 border border-amber-500/30 transition-colors"
+                                        >
+                                            <RotateCcw size={12} />
+                                            Reset to Default
+                                        </button>
 
                                         {/* Variable Documentation */}
                                         <div className="mt-4 p-4 bg-slate-950 border border-slate-700">
@@ -564,6 +635,13 @@ export const AdminPrompts: React.FC = () => {
                                             rows={20}
                                             className="w-full bg-slate-950 border border-slate-700 p-4 text-slate-300 font-mono text-sm focus:outline-none focus:border-purple-500 leading-relaxed"
                                         />
+                                        <button
+                                            onClick={() => handleResetToDefault(activeSystemTab)}
+                                            className="mt-2 flex items-center gap-2 px-3 py-1.5 text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 border border-amber-500/30 transition-colors"
+                                        >
+                                            <RotateCcw size={12} />
+                                            Reset to Default
+                                        </button>
 
                                         {/* Variable Documentation for System Prompts */}
                                         <div className="mt-4 p-4 bg-slate-950 border border-slate-700">

@@ -975,43 +975,160 @@ async function processGenerateTitles(
 
   console.log(`[GenerateTitles] Category: ${categoryName}, Count: ${requestedCount}`);
 
-  // Get category description
-  const categoryDoc = await admin.firestore()
-    .doc(`organizations/${organizationId}/projects/${projectId}/categories/${categoryId}`)
-    .get();
+  // Fetch all context in parallel: category, project, research, existing posts
+  const [categoryDoc, projectDoc, researchDoc, existingPostsSnap] = await Promise.all([
+    admin.firestore().doc(`organizations/${organizationId}/projects/${projectId}/categories/${categoryId}`).get(),
+    admin.firestore().doc(`organizations/${organizationId}/projects/${projectId}`).get(),
+    admin.firestore().doc(`categoryResearch/${categoryId}`).get(),
+    admin.firestore().collection(`organizations/${organizationId}/projects/${projectId}/posts`)
+      .where('categoryId', '==', categoryId).limit(50).get()
+  ]);
 
-  const categoryDescription = contextOverride || categoryDoc.data()?.description || '';
+  const categoryData = categoryDoc.data();
+  const categoryDescription = contextOverride || categoryData?.description || '';
+  const project = projectDoc.data();
+
+  await taskRef.update({ progress: 20 });
+
+  // Build business context
+  let businessContext = '';
+  const contextParts: string[] = [];
+
+  // Always include project info
+  if (project) {
+    contextParts.push('**PROJECT**');
+    contextParts.push(`Name: ${project.name}`);
+    if (project.description) contextParts.push(`Focus: ${project.description}`);
+
+    // Add business profile if available
+    const bp = project.businessProfile;
+    if (bp) {
+      if (bp.businessName) contextParts.push(`Business: ${bp.businessName}`);
+      if (bp.businessSummary) contextParts.push(`About: ${bp.businessSummary}`);
+
+      let industryStr = bp.industry?.primary || '';
+      if (bp.industry?.secondary) industryStr += ` / ${bp.industry.secondary}`;
+      if (industryStr) contextParts.push(`Industry: ${industryStr}`);
+
+      if (bp.offerings?.categories?.length) {
+        contextParts.push(`Products/Services: ${bp.offerings.categories.join(', ')}`);
+      }
+
+      if (bp.targetAudience?.primary) {
+        contextParts.push(`\n**TARGET AUDIENCE**`);
+        contextParts.push(`Primary: ${bp.targetAudience.primary}`);
+        if (bp.targetAudience.painPoints?.length) {
+          contextParts.push(`Pain Points: ${bp.targetAudience.painPoints.join('; ')}`);
+        }
+      }
+    }
+  }
+  businessContext = contextParts.join('\n');
 
   await taskRef.update({ progress: 30 });
 
-  // Get existing titles for deduplication
-  const existingPostsSnap = await admin.firestore()
-    .collection(`organizations/${organizationId}/projects/${projectId}/posts`)
-    .where('categoryId', '==', categoryId)
-    .limit(50)
-    .get();
+  // Build keyword research context
+  let keywordContext = '';
+  if (researchDoc.exists) {
+    const research = researchDoc.data() || {};
+    const keywordParts: string[] = [];
+    keywordParts.push('**KEYWORD RESEARCH**');
 
-  const existingTitles = existingPostsSnap.docs.map(d => d.data().title).filter(Boolean);
-  const existingTitlesContext = existingTitles.length > 0
-    ? `\n\nEXISTING TITLES (do not duplicate):\n${existingTitles.map((t, i) => `${i + 1}. ${t}`).join('\n')}`
-    : '';
+    // Primary keywords sorted by search volume
+    const primaryKeywords = research.primaryKeywords || [];
+    if (primaryKeywords.length > 0) {
+      const sorted = [...primaryKeywords].sort((a: any, b: any) => (b.searchVolume || 0) - (a.searchVolume || 0));
+      keywordParts.push('Top Keywords (prioritize these in titles):');
+      sorted.slice(0, 8).forEach((k: any, i: number) => {
+        const vol = k.searchVolume ? `${k.searchVolume.toLocaleString()}/mo` : '';
+        keywordParts.push(`${i + 1}. "${k.keyword}"${vol ? ` - ${vol}` : ''}`);
+      });
+    }
+
+    // Long-tail keywords
+    const relatedKeywords = research.relatedKeywords || [];
+    if (relatedKeywords.length > 0) {
+      keywordParts.push('\nLong-tail Keywords:');
+      relatedKeywords.slice(0, 8).forEach((k: any) => {
+        keywordParts.push(`- ${k.keyword}`);
+      });
+    }
+
+    // Questions people ask
+    const questionsToAnswer = research.questionsToAnswer || [];
+    if (questionsToAnswer.length > 0) {
+      keywordParts.push('\nQuestions People Search:');
+      questionsToAnswer.slice(0, 5).forEach((q: string) => {
+        keywordParts.push(`- ${q}`);
+      });
+    }
+
+    keywordContext = keywordParts.join('\n');
+    console.log(`[GenerateTitles] Using keyword research with ${primaryKeywords.length} keywords`);
+  }
 
   await taskRef.update({ progress: 40 });
+
+  // Build existing titles context for deduplication
+  const existingTitles = existingPostsSnap.docs.map(d => d.data().title).filter(Boolean);
+  const existingTitlesContext = existingTitles.length > 0
+    ? `\n**EXISTING TITLES (do not duplicate or create similar):**\n${existingTitles.map((t, i) => `${i + 1}. ${t}`).join('\n')}`
+    : '';
+
+  await taskRef.update({ progress: 50 });
 
   // Generate titles with Gemini
   const ai = getGeminiClient();
 
-  const prompt = `Generate ${requestedCount} unique blog post ideas for the category "${categoryName}".
+  const prompt = `You are an expert SEO Content Strategist creating blog post titles that drive traffic and conversions.
 
-${categoryDescription ? `Category Description: ${categoryDescription}` : ''}
+${businessContext}
+
+**CATEGORY**
+Name: ${categoryName}
+${categoryDescription ? `Description: ${categoryDescription}` : ''}
+
+${keywordContext}
 ${existingTitlesContext}
 
-For each idea, provide:
-1. A compelling, SEO-friendly title
-2. A brief teaser (1-2 sentences)
-3. 3-5 relevant keywords
+---
 
-Return as JSON array with objects containing: title, teaser, keywords (array)`;
+**TASK:** Generate ${requestedCount} highly specific, click-worthy blog post titles for the "${categoryName}" category.
+
+**STRICT TITLE REQUIREMENTS:**
+1. Every title MUST directly relate to the business's products/services
+2. Include specific outcomes, numbers, or timeframes where relevant (e.g., "5 Ways...", "...in 30 Days", "...40% Faster")
+3. Use power words strategically: Best, Proven, Complete, Step-by-Step, Essential, How to
+4. Target search intent explicitly - what would someone type into Google?
+5. Keep titles 50-60 characters maximum for optimal SERP display
+6. DO NOT use colons with catchy prefixes (BAD: "Power Up: Best Meals")
+7. DO NOT use vague clickbait (BAD: "Everything You Need to Know")
+
+**TITLE FORMULAS THAT WORK:**
+- "How to [Achieve Result] + [Specific Benefit]"
+- "Best [Product/Method] for [Specific Use Case]"
+- "[Number] [Adjective] [Things] for [Specific Audience]"
+- "[Topic] vs [Topic]: Which is Better for [Use Case]"
+- "Why [Common Belief] is Wrong (And What to Do Instead)"
+
+**GOOD TITLE EXAMPLES:**
+- "Best Carbohydrate Sources for Endurance Cycling"
+- "How to Calculate Protein Needs Based on Training Volume"
+- "5 Pre-Race Breakfast Ideas That Won't Cause GI Issues"
+- "Hydration Calculator: How Much Water Cyclists Really Need"
+
+**BAD TITLE EXAMPLES:**
+- "Fuel Your Ride: The Complete Guide to Cycling Nutrition" (colon pattern)
+- "10 Amazing Tips for Better Performance" (generic, no specificity)
+- "Everything You Need to Know About Eating" (too vague, no value)
+
+For each title, provide:
+1. title: A specific, SEO-optimized title following the rules above
+2. teaser: 2 sentences explaining the article angle and specific value to the reader
+3. keywords: 3-5 long-tail SEO keywords this article should rank for
+4. searchIntent: "informational" | "commercial" | "transactional"
+
+Return as JSON array.`;
 
   const response = await withRetry(async () => {
     return ai.models.generateContent({
@@ -1026,10 +1143,24 @@ Return as JSON array with objects containing: title, teaser, keywords (array)`;
   await taskRef.update({ progress: 70 });
 
   // Parse response
-  let generatedTitles: Array<{ title: string; teaser: string; keywords: string[] }> = [];
+  let generatedTitles: Array<{ title: string; teaser: string; keywords: string[]; searchIntent?: string }> = [];
   try {
     const responseText = response.text || '[]';
     generatedTitles = JSON.parse(responseText);
+
+    // Post-process: remove any titles that still have colons (AI sometimes ignores instructions)
+    generatedTitles = generatedTitles.map(item => {
+      let title = item.title;
+      // If title has a colon in the first half, remove the prefix
+      const colonIndex = title.indexOf(':');
+      if (colonIndex > 0 && colonIndex < title.length / 2) {
+        title = title.substring(colonIndex + 1).trim();
+        // Capitalize first letter
+        title = title.charAt(0).toUpperCase() + title.slice(1);
+      }
+      return { ...item, title };
+    });
+
   } catch (parseError) {
     console.error('[GenerateTitles] Failed to parse response:', response.text);
     throw new Error('Failed to parse AI response');
@@ -1056,6 +1187,7 @@ Return as JSON array with objects containing: title, teaser, keywords (array)`;
       metaDescription: item.teaser,
       tags: item.keywords || [],
       metaKeywords: item.keywords || [],
+      searchIntent: item.searchIntent || 'informational',
       status: PostStatus.PENDING,
       createdBy,
       createdAt: now,
@@ -1064,7 +1196,7 @@ Return as JSON array with objects containing: title, teaser, keywords (array)`;
   }
 
   await batch.commit();
-  console.log(`[GenerateTitles] Created ${generatedTitles.length} posts`);
+  console.log(`[GenerateTitles] Created ${generatedTitles.length} posts for category: ${categoryName}`);
 }
 
 /**
@@ -1074,7 +1206,7 @@ async function processGenerateContent(
   taskRef: admin.firestore.DocumentReference,
   taskData: any
 ) {
-  const { organizationId, projectId, targetPostId, categoryName } = taskData;
+  const { organizationId, projectId, targetPostId, categoryName, categoryId } = taskData;
 
   // Get post data
   const postRef = admin.firestore().doc(
@@ -1089,48 +1221,178 @@ async function processGenerateContent(
   const post = postDoc.data()!;
   console.log(`[GenerateContent] Post: ${post.title}`);
 
+  await taskRef.update({ progress: 10 });
+
+  // Fetch all context in parallel
+  const catId = categoryId || post.categoryId;
+  const [projectDoc, categoryDoc, researchDoc] = await Promise.all([
+    admin.firestore().doc(`organizations/${organizationId}/projects/${projectId}`).get(),
+    catId ? admin.firestore().doc(`organizations/${organizationId}/projects/${projectId}/categories/${catId}`).get() : Promise.resolve(null),
+    catId ? admin.firestore().doc(`categoryResearch/${catId}`).get() : Promise.resolve(null)
+  ]);
+
+  const project = projectDoc.data();
+  const category = categoryDoc?.data?.() || null;
+
   await taskRef.update({ progress: 20 });
 
-  // Get project for business context
-  const projectDoc = await admin.firestore()
-    .doc(`organizations/${organizationId}/projects/${projectId}`)
-    .get();
-  const project = projectDoc.data();
+  // Build comprehensive business context
+  const contextParts: string[] = [];
 
-  // Build business context
-  let businessContext = '';
-  if (project?.businessProfile) {
+  // Project info
+  if (project) {
+    contextParts.push('**BUSINESS CONTEXT**');
+    contextParts.push(`Project: ${project.name}`);
+    if (project.description) contextParts.push(`Focus: ${project.description}`);
+
     const bp = project.businessProfile;
-    const parts: string[] = [];
-    if (bp.businessName) parts.push(`Business: ${bp.businessName}`);
-    if (bp.businessSummary) parts.push(`About: ${bp.businessSummary}`);
-    if (bp.industry?.primary) parts.push(`Industry: ${bp.industry.primary}`);
-    if (bp.targetAudience?.primary) parts.push(`Target Audience: ${bp.targetAudience.primary}`);
-    businessContext = parts.join('\n');
+    if (bp) {
+      if (bp.businessName) contextParts.push(`Business: ${bp.businessName}`);
+      if (bp.businessSummary) contextParts.push(`About: ${bp.businessSummary}`);
+
+      let industryStr = bp.industry?.primary || '';
+      if (bp.industry?.secondary) industryStr += ` / ${bp.industry.secondary}`;
+      if (industryStr) contextParts.push(`Industry: ${industryStr}`);
+
+      if (bp.offerings?.categories?.length) {
+        const label = bp.offerings.type === 'products' ? 'Products' : bp.offerings.type === 'services' ? 'Services' : 'Offerings';
+        contextParts.push(`${label}: ${bp.offerings.categories.join(', ')}`);
+      }
+
+      if (bp.targetAudience?.primary) {
+        contextParts.push(`\n**TARGET AUDIENCE**`);
+        contextParts.push(`Primary: ${bp.targetAudience.primary}`);
+        if (bp.targetAudience.painPoints?.length) {
+          contextParts.push(`Pain Points: ${bp.targetAudience.painPoints.join('; ')}`);
+        }
+      }
+
+      if (bp.brandVoice?.tone?.length) {
+        contextParts.push(`\n**BRAND VOICE**`);
+        contextParts.push(`Tone: ${bp.brandVoice.tone.join(', ')}`);
+        if (bp.brandVoice.avoidPhrases?.length) {
+          contextParts.push(`Avoid: ${bp.brandVoice.avoidPhrases.join(', ')}`);
+        }
+      }
+    }
+  }
+
+  const businessContext = contextParts.join('\n');
+
+  await taskRef.update({ progress: 30 });
+
+  // Build keyword research context
+  let keywordContext = '';
+  if (researchDoc?.exists) {
+    const research = researchDoc.data() || {};
+    const keywordParts: string[] = [];
+    keywordParts.push('**KEYWORD RESEARCH (incorporate naturally)**');
+
+    const primaryKeywords = research.primaryKeywords || [];
+    if (primaryKeywords.length > 0) {
+      const sorted = [...primaryKeywords].sort((a: any, b: any) => (b.searchVolume || 0) - (a.searchVolume || 0));
+      keywordParts.push('Primary Keywords to include:');
+      sorted.slice(0, 5).forEach((k: any) => {
+        keywordParts.push(`- "${k.keyword}"`);
+      });
+    }
+
+    const relatedKeywords = research.relatedKeywords || [];
+    if (relatedKeywords.length > 0) {
+      keywordParts.push('\nSecondary Keywords:');
+      relatedKeywords.slice(0, 8).forEach((k: any) => {
+        keywordParts.push(`- ${k.keyword}`);
+      });
+    }
+
+    const questionsToAnswer = research.questionsToAnswer || [];
+    if (questionsToAnswer.length > 0) {
+      keywordParts.push('\nQuestions to Address:');
+      questionsToAnswer.slice(0, 4).forEach((q: string) => {
+        keywordParts.push(`- ${q}`);
+      });
+    }
+
+    keywordContext = keywordParts.join('\n');
+    console.log(`[GenerateContent] Using keyword research with ${primaryKeywords.length} keywords`);
   }
 
   await taskRef.update({ progress: 40 });
 
+  // Determine content parameters
+  const contentType = post.contentType || 'article';
+  const tone = post.tone || project?.businessProfile?.brandVoice?.tone?.[0] || 'professional';
+  const categoryDesc = category?.description || '';
+
   // Generate content
   const ai = getGeminiClient();
-  const contentType = post.contentType || 'article';
-  const tone = post.tone || 'professional';
 
-  const prompt = `${businessContext ? `**BUSINESS CONTEXT**\n${businessContext}\n\n` : ''}
-Write a detailed ${contentType} about: "${post.title}" in the category "${categoryName}".
+  const prompt = `You are an expert content writer for a specific business. Write content that ranks AND converts.
 
-${post.teaser ? `**Focus/Angle:** ${post.teaser}` : ''}
-${post.tags?.length ? `**Target Keywords:** ${post.tags.join(', ')}` : ''}
+${businessContext}
 
-Tone: ${tone}
+**CATEGORY**
+Name: ${categoryName}
+${categoryDesc ? `Description: ${categoryDesc}` : ''}
 
-IMPORTANT:
-- DO NOT include the title as a heading. The title will be added separately.
-- Start directly with an engaging introduction paragraph.
-- Use H2 (##) for section headings, H3 (###) for subsections.
-- Do not include preambles like "Here is..." or "Sure...".
-- Format in clean Markdown.
-- Aim for 800-1200 words.`;
+**ARTICLE BRIEF**
+Title: "${post.title}"
+${post.teaser ? `Angle/Focus: ${post.teaser}` : ''}
+${post.tags?.length ? `Target Keywords: ${post.tags.join(', ')}` : ''}
+Search Intent: ${post.searchIntent || 'informational'}
+Target Word Count: 1,200-1,800 words
+
+${keywordContext}
+
+---
+
+**CONTENT STRUCTURE (follow this exactly):**
+
+1. **Hook** (50-100 words)
+   - Start with a compelling statistic, question, or pain point
+   - Include the primary keyword in the first sentence
+   - Establish why this matters NOW to the reader
+
+2. **Context** (100-150 words)
+   - What the reader will learn from this article
+   - Why this business/brand is qualified to teach this
+   - Brief overview of what's covered
+
+3. **Main Content** (800-1,200 words)
+   - 3-5 H2 sections with descriptive, keyword-rich headings
+   - Each section follows: Problem → Solution → Example
+   - Include specific examples from the ${categoryName} industry
+   - Use bullet points for lists of 3+ items
+   - Add H3 subsections where needed for depth
+
+4. **Expert Insight** (100-150 words)
+   - Share a unique perspective or insider knowledge
+   - Address what most people get wrong about this topic
+   - Build credibility and trust
+
+5. **Action Steps** (100-150 words)
+   - 3-5 specific, actionable next steps
+   - Make them immediately implementable
+   - Include one soft CTA related to the business's services
+
+**FORMATTING RULES:**
+- Use ## for H2 headings, ### for H3
+- Bold key phrases and important terms
+- Use bullet lists for scanability
+- No fluff - every sentence must add value
+
+**TONE:** ${tone}
+**FORMAT:** ${contentType}
+
+**CRITICAL - DO NOT:**
+- Start with "Here is..." or any preamble - dive straight into the hook
+- Use excessive exclamation points or hype language
+- Write generic advice that ignores the business context
+- Use placeholder text like [insert X here]
+- Use colon-style subheadings like "Tip 1: Do This"
+- Include the title in the content (it's added separately)
+
+Write the article now in clean Markdown format. Start directly with the hook.`;
 
   const response = await withRetry(async () => {
     return ai.models.generateContent({
@@ -1152,7 +1414,7 @@ IMPORTANT:
     updatedAt: admin.firestore.FieldValue.serverTimestamp()
   });
 
-  console.log(`[GenerateContent] Content generated: ${content.length} chars`);
+  console.log(`[GenerateContent] Content generated: ${content.length} chars for "${post.title}"`);
 }
 
 /**

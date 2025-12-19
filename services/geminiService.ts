@@ -1169,57 +1169,87 @@ export const suggestCategories = async (
 
       // Append context if available
       if (fullContext) {
-        prompt = `${fullContext}\n\n${prompt}`;
+        prompt = `${fullContext}${existingCategoriesContext}\n\n${prompt}`;
       }
 
       // Force description requirement even for admin prompts
-      prompt += "\n\nIMPORTANT: You must provide a clear, specific description for each category explaining what content belongs in it.";
+      prompt += "\n\nIMPORTANT: You must provide a clear, specific description for each category explaining WHAT content belongs, WHO it helps, and WHY it matters to them.";
     } else {
       // Fallback prompt with comprehensive context
       if (parentCategoryName) {
-        prompt = `You are an expert Content Strategist specializing in AI-optimized content.
+        prompt = `You are an Editorial Director breaking down a content category into compelling subcategories.
 
-${fullContext || 'No business context available.'}
+${fullContext || 'No business context available - use the parent category name to infer the business domain.'}
+${existingCategoriesContext}
 
-**PARENT CATEGORY CONTEXT**
-└─ Category: "${parentCategoryName}"
-${parentCategoryDescription ? `   Description: "${parentCategoryDescription}"` : ''}
+**PARENT CATEGORY TO EXPAND**
+└─ "${parentCategoryName}"
+${parentCategoryDescription ? `   Vision: "${parentCategoryDescription}"` : ''}
 
 ---
 
-**TASK:** Break down the parent category above into 6 highly specific sub-categories.
+**TASK:** Create 6 distinct subcategories that bring "${parentCategoryName}" to life.
+${query ? `Focus specifically on: "${query}"` : ''}
 
-CRITICAL REQUIREMENTS:
-1. Subcategories MUST be directly relevant to both the parent category AND the business context above
-2. Subcategories should be specific enough to generate focused articles
-3. Each subcategory should address a distinct aspect of the parent topic
-4. Focus on topics that AI assistants frequently answer questions about
-${query ? `5. Focus specifically on areas related to: "${query}"` : ''}
+**SUBCATEGORY REQUIREMENTS:**
+1. Each subcategory must feel like a natural, exciting extension of the parent
+2. Subcategories should address DISTINCT aspects - no overlap
+3. Think: What specific content would make someone's eyes light up?
+4. Mix practical guides with inspirational/storytelling angles
 
-IMPORTANT: Return a JSON array of objects. Each object MUST have:
-- "name": The subcategory name (2-4 words)
-- "description": A specific description of what content belongs here (2-3 sentences)
-- "reason": Why this fits the parent category and business`;
+**DESCRIPTION REQUIREMENTS - THIS IS CRITICAL:**
+Each description must be a compelling EDITORIAL BRIEF (3-4 sentences) that:
+- Paints a vivid picture of what content belongs here
+- Uses evocative, magazine-quality language that SELLS the category
+- Includes specific content hooks, themes, and story angles
+- Describes the reader transformation - what they'll discover, learn, or experience
+- Makes a content creator EXCITED to write for this subcategory
+
+**EXAMPLE GOOD DESCRIPTION:**
+"Pre-ride fueling strategies and meal planning for peak performance. From race-day breakfast rituals to carb-loading timelines, this is the science of eating for endurance—made practical. Covers glycogen optimization, gut-friendly foods, hydration timing, and the meals elite cyclists swear by. For riders who want to start strong and finish stronger."
+
+**EXAMPLE BAD DESCRIPTION:**
+"Content about nutrition before rides." (too generic, no vision, doesn't inspire)
+
+**RETURN FORMAT:** JSON array with:
+- "name": Subcategory name (2-4 words, evocative)
+- "description": Rich editorial brief (3-4 sentences - make it COMPELLING)
+- "reason": Why this subcategory will captivate readers`;
       } else {
-        prompt = `You are an expert Content Strategist specializing in AI-optimized content.
+        prompt = `You are an Editorial Director creating compelling content categories for a media brand.
 
-${fullContext || 'No business context available.'}
+${fullContext || 'No business context available - ask for clarification about the business.'}
+${existingCategoriesContext}
 
 ---
 
-**TASK:** Suggest 6 distinct, high-value content categories for this business.
+**TASK:** Create 6 distinct content categories that will excite readers and inspire great content.
 ${query ? `Focus on topics related to: "${query}"` : ''}
 
-CRITICAL REQUIREMENTS:
-1. Categories MUST be directly relevant to the business's products/services
-2. Categories should address the target audience's needs and pain points
-3. Focus on topics that AI assistants frequently answer questions about
-4. Categories should be specific enough to generate focused articles
+**CATEGORY REQUIREMENTS:**
+1. Each category should feel like a gateway to exploration - not just a filing system
+2. Categories must be specific to this business's world - no generic "Tips & Tricks"
+3. Think editorially: what would make someone EXCITED to dive into this category?
+4. Mix practical utility with storytelling potential
 
-IMPORTANT: Return a JSON array of objects. Each object MUST have:
-- "name": The category name (2-4 words)
-- "description": A specific description of what content belongs here (2-3 sentences)
-- "reason": Why this fits the business`;
+**DESCRIPTION REQUIREMENTS - THIS IS CRITICAL:**
+Each description must be a compelling EDITORIAL BRIEF (3-4 sentences) that:
+- Paints a vivid picture of what content belongs here
+- Uses evocative, magazine-quality language
+- Includes specific content angles, themes, and story hooks
+- Mentions the TYPE of reader this serves and what transformation they'll experience
+- Makes someone WANT to explore this category
+
+**EXAMPLE GOOD DESCRIPTION:**
+"Epic multi-day routes and weekend escapes across Britain's most dramatic landscapes. From coastal cliff paths to moorland climbs, canal towpaths to forest singletrack—each route framed as an experience, not just a ride. Features terrain insights, elevation profiles, seasonal timing, café stops, wild camping spots, and the 'type of rider' each adventure suits. Where bikepacking meets storytelling."
+
+**EXAMPLE BAD DESCRIPTION:**
+"Content about cycling routes in the UK." (too generic, no editorial vision, doesn't inspire)
+
+**RETURN FORMAT:** JSON array of objects with:
+- "name": Category name (2-4 words, evocative and specific)
+- "description": Rich editorial brief (3-4 sentences - make it INSPIRING)
+- "reason": Why this category will captivate the target audience`;
       }
     }
 
@@ -1246,19 +1276,30 @@ IMPORTANT: Return a JSON array of objects. Each object MUST have:
     ));
 
     // Handle potentially malformed JSON
+    console.log('[Gemini] Category suggestion raw response:', response.text?.substring(0, 500));
     try {
       const results = JSON.parse(response.text || '[]');
+      console.log('[Gemini] Parsed categories:', results.length, 'items');
       return results.map((r: any) => ({
         name: r.name || 'Untitled Category',
         description: r.description || `Content related to ${r.name}`,
         reason: r.reason || 'Relevant to business context'
       }));
-    } catch {
+    } catch (parseError) {
+      console.error('[Gemini] JSON parse error:', parseError);
       const text = response.text || '';
       const match = text.match(/\[[\s\S]*\]/);
       if (match) {
-        try { return JSON.parse(match[0]); } catch { return []; }
+        try {
+          const fallbackResults = JSON.parse(match[0]);
+          console.log('[Gemini] Fallback parsed:', fallbackResults.length, 'items');
+          return fallbackResults;
+        } catch {
+          console.error('[Gemini] Fallback parse also failed');
+          return [];
+        }
       }
+      console.error('[Gemini] No JSON array found in response');
       return [];
     }
   } catch (error: any) {

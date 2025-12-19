@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Settings,
   Globe,
+  Zap,
 } from 'lucide-react';
 import { CategoryWorkspace } from '../components/CategoryWorkspace';
 import { PostsWorkspace } from '../components/PostsWorkspace';
@@ -572,6 +573,29 @@ export const MainWorkspace: React.FC = () => {
               collapsed={isSidebarCollapsed}
             />
           </nav>
+
+          {/* Credits Button - Bottom Left */}
+          <div className="border-t border-slate-800 p-2">
+            <button
+              onClick={() => setIsCreditModalOpen(true)}
+              className={`
+                w-full flex items-center gap-2 px-3 py-2.5
+                bg-indigo-500/10 hover:bg-indigo-500/20
+                border border-indigo-500/20 hover:border-indigo-500/40
+                text-indigo-400 transition-all group
+                ${isSidebarCollapsed ? 'justify-center' : ''}
+              `}
+              title="Manage credits"
+            >
+              <Zap size={16} className="shrink-0" />
+              {!isSidebarCollapsed && (
+                <div className="flex flex-col items-start min-w-0">
+                  <span className="text-sm font-bold">{currentOrg?.credits?.balance ?? 0}</span>
+                  <span className="text-[10px] text-indigo-400/60 uppercase tracking-wider">Credits</span>
+                </div>
+              )}
+            </button>
+          </div>
         </aside>
 
       {/* Main Content */}

@@ -27,6 +27,13 @@ export interface User {
   lastActiveAt?: Timestamp; // Track last activity
   createdAt: Timestamp;
   updatedAt: Timestamp;
+  // Usage tracking for free tier limits
+  usageStats?: {
+    articlesGenerated: number;
+    categoriesCreated: number;
+    titlesGenerated: number;
+    lastGeneratedAt?: Timestamp;
+  };
 }
 
 // Organizations
@@ -240,6 +247,10 @@ export interface Organization {
     lastRefillAt: Timestamp;
     nextRefillAt: Timestamp;
   };
+  // Demo Account Flags
+  isDemo?: boolean;           // True for accounts created via onboarding demo flow
+  freeCredits?: number;       // Initial free credits given (e.g., 50)
+  creditsUsed?: number;       // Track how many free credits have been used
   // Brand Settings
   website?: string;
   customBranding?: {
@@ -270,6 +281,8 @@ export interface Organization {
   // Archive (soft delete)
   isArchived?: boolean;
   archivedAt?: Timestamp;
+  // Channel recommendations from onboarding (for upsell)
+  channelRecommendations?: ChannelRecommendation[];
 }
 
 // Credit Transaction
@@ -375,6 +388,12 @@ export interface Project {
     };
   };
   businessProfile?: BusinessProfile;
+  // Channel/Content type (from onboarding)
+  channelType?: ChannelType;
+  // Saved channel recommendations from onboarding
+  channelRecommendations?: ChannelRecommendation[];
+  // Suggested categories from selected channel
+  suggestedCategories?: string[];
   // Hierarchical Prompt Overrides
   promptOverrides?: PromptOverrides;
 }
@@ -620,6 +639,7 @@ export type OnboardingStep =
   | 'url_input'
   | 'analyzing'
   | 'profile_review'
+  | 'channel_recommendations'  // NEW: Select a channel before categories
   | 'demo_output'
   | 'project_selection'
   | 'category_generation'
@@ -627,6 +647,52 @@ export type OnboardingStep =
   | 'subcategory_generation'
   | 'workspace_intro'
   | 'complete';
+
+// ============================================================================
+// CHANNEL TYPES (for onboarding channel-first approach)
+// ============================================================================
+
+export type ChannelType =
+  | 'blog'
+  | 'knowledge_base'
+  | 'guides'
+  | 'archive'
+  | 'industry_vertical';
+
+export const CHANNEL_TYPE_LABELS: Record<ChannelType, string> = {
+  blog: 'Blog',
+  knowledge_base: 'Knowledge Base',
+  guides: 'Guides',
+  archive: 'Archive',
+  industry_vertical: 'Industry Vertical'
+};
+
+export const CHANNEL_TYPE_DESCRIPTIONS: Record<ChannelType, string> = {
+  blog: 'Editorial content, thought leadership, and industry news',
+  knowledge_base: 'Self-service support and product documentation',
+  guides: 'Educational tutorials, how-tos, and learning resources',
+  archive: 'Organized historical and reference content',
+  industry_vertical: 'Niche expertise content for specific markets'
+};
+
+export interface ChannelKeyword {
+  keyword: string;
+  searchVolume: number;
+  difficulty?: number;
+}
+
+export interface ChannelRecommendation {
+  id: string;
+  channelType: ChannelType;
+  title: string;
+  description: string;              // Why this channel helps the customer
+  suggestedCategories: string[];    // Brief list of 3-5 category names
+  targetKeywords: ChannelKeyword[]; // Keywords with demand data
+  selected: boolean;
+  // Metrics for display
+  totalMonthlySearches?: number;    // Sum of keyword volumes
+  estimatedTraffic?: number;        // Potential monthly traffic
+}
 
 export type DemandLevel = 'Low' | 'Medium' | 'Medium-High' | 'High' | 'Very High';
 
@@ -687,6 +753,28 @@ export interface BusinessProfile {
     potentialTraffic: string; // e.g. "5,000-10,000 monthly visits"
   };
 
+  // Top keywords with volume data (for profile review display)
+  topKeywords?: {
+    keyword: string;
+    searchVolume: number;
+    difficulty: number; // 0-100
+    intent: 'informational' | 'commercial' | 'transactional' | 'navigational';
+  }[];
+
+  // Content angles - strategic content opportunities
+  contentAngles?: {
+    angle: string;
+    description: string;
+    priority: 'high' | 'medium' | 'low';
+  }[];
+
+  // Competitor insights
+  competitorInsights?: {
+    topCompetitors: string[];
+    contentGapsVsCompetitors: string[];
+    differentiators: string[];
+  };
+
   // Compliance requirements (NEW)
   compliance?: string;
 
@@ -729,6 +817,13 @@ export interface CategorySuggestion {
   selected: boolean;
   isUserAdded?: boolean;
   estimatedArticles?: number;
+  // New SEO metrics for enhanced display
+  searchVolume?: number | null;       // Monthly searches
+  difficulty?: number | null;          // 0-100 keyword difficulty
+  trend?: 'rising' | 'stable' | 'declining';
+  dataSource?: 'dataforseo' | 'estimated';
+  competitorCount?: number;            // Articles in top 10 SERP
+  trafficPotential?: number;           // Estimated monthly traffic
 }
 
 export interface SubcategorySuggestion {
@@ -743,7 +838,10 @@ export interface SubcategorySuggestion {
   estimatedArticles?: number;
 }
 
-export type OnboardingMode = 'client' | 'project';
+// 'client' = new user signup flow
+// 'project' = existing org creating new project via wizard
+// 'existing' = logged-in user creating project (skip URL analysis, use existing profile)
+export type OnboardingMode = 'client' | 'project' | 'existing';
 
 export interface OnboardingSession {
   sessionId: string;
@@ -751,6 +849,10 @@ export interface OnboardingSession {
   organizationId?: string; // For project mode
   websiteUrl: string;
   businessProfile: BusinessProfile | null;
+  // Channel recommendations (new channel-first approach)
+  channelRecommendations: ChannelRecommendation[];
+  selectedChannel: ChannelRecommendation | null;
+  // Legacy project selection (may be deprecated)
   selectedProject: ProjectSuggestion | null;
   suggestedProjects: ProjectSuggestion[];
   categories: CategorySuggestion[];
@@ -776,6 +878,7 @@ export interface AuthContextType {
   signUp: (email: string, password: string, displayName: string) => Promise<User>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
+  signInWithGoogle: () => Promise<User>;
 }
 
 export interface OrganizationContextType {
@@ -823,11 +926,16 @@ export interface OnboardingContextType {
   analysisProgress: number; // 0-100
 
   // Analysis Actions
-  startAnalysis: (url: string) => Promise<void>;
+  startAnalysis: (url: string, demo?: boolean) => Promise<void>;
+  initializeWithExistingProfile: (profile: BusinessProfile, orgId: string, channelRecs?: ChannelRecommendation[]) => void;
   updateProfile: (updates: Partial<BusinessProfile>) => void;
   regenerateProfileSection: (section: keyof BusinessProfile) => Promise<void>;
 
-  // Project Actions
+  // Channel Actions (new channel-first approach)
+  selectChannel: (id: string) => void;
+  generateChannelRecommendations: () => Promise<void>;
+
+  // Project Actions (legacy - may be deprecated)
   selectProject: (id: string) => void;
   createCustomProject: (name: string, description: string) => void;
   updateProject: (id: string, updates: Partial<ProjectSuggestion>) => void;

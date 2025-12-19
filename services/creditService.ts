@@ -10,6 +10,7 @@ import { db } from '../lib/firebase';
 import { CreditTransaction, Organization, SubscriptionTier, TIER_LIMITS } from '../types';
 
 export const CREDIT_COSTS = {
+    TITLE_GENERATION: 1,   // Per batch of titles
     ARTICLE_GENERATION: 1,
     IMAGE_GENERATION: 5,
     SHALLOW_RESEARCH: 2,   // AI-estimated keyword research

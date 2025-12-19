@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { Timestamp } from 'firebase/firestore';
 import {
   OnboardingContextType,
   OnboardingSession,
@@ -8,6 +9,8 @@ import {
   ProjectSuggestion,
   CategorySuggestion,
   SubcategorySuggestion,
+  ChannelRecommendation,
+  ChannelType,
 } from '../types';
 import {
   analyzeWebsite,
@@ -25,17 +28,28 @@ import { suggestCategories as suggestSubcategories } from '../services/geminiSer
 const STORAGE_KEY = 'missioncontent_onboarding_session';
 const SESSION_EXPIRY_HOURS = 24;
 
-const STEP_ORDER: OnboardingStep[] = [
+// Step order for new users (not logged in)
+const NEW_USER_STEP_ORDER: OnboardingStep[] = [
   'url_input',
   'analyzing',
   'profile_review',
-  'project_selection',
-  'category_generation',
-  'subcategory_generation', // Moved before account_creation so subcategories are saved
+  'channel_recommendations',
   'account_creation',
-  'workspace_intro',
   'complete',
 ];
+
+// Step order for existing users (logged in, creating new project)
+// Skips URL analysis (uses existing profile) and account creation
+const EXISTING_USER_STEP_ORDER: OnboardingStep[] = [
+  'profile_review',         // Review/edit existing business profile
+  'channel_recommendations', // Select channel for new project
+  'complete',               // Create project and redirect
+];
+
+// Get step order based on mode
+const getStepOrder = (mode: OnboardingMode): OnboardingStep[] => {
+  return mode === 'existing' ? EXISTING_USER_STEP_ORDER : NEW_USER_STEP_ORDER;
+};
 
 // ============================================================================
 // CONTEXT
@@ -62,6 +76,7 @@ const generateSessionId = (): string => {
 const createEmptySession = (mode: OnboardingMode = 'client', organizationId?: string): OnboardingSession => {
   const now = new Date();
   const expiry = new Date(now.getTime() + SESSION_EXPIRY_HOURS * 60 * 60 * 1000);
+  const stepOrder = getStepOrder(mode);
 
   return {
     sessionId: generateSessionId(),
@@ -69,11 +84,13 @@ const createEmptySession = (mode: OnboardingMode = 'client', organizationId?: st
     organizationId,
     websiteUrl: '',
     businessProfile: null,
+    channelRecommendations: [],
+    selectedChannel: null,
     selectedProject: null,
     suggestedProjects: [],
     categories: [],
     subcategories: {},
-    currentStep: 'url_input',
+    currentStep: stepOrder[0], // First step depends on mode
     createdAt: now,
     expiresAt: expiry,
   };
@@ -153,7 +170,7 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
   // ANALYSIS ACTIONS
   // ============================================================================
 
-  const startAnalysis = useCallback(async (url: string) => {
+  const startAnalysis = useCallback(async (url: string, demo: boolean = false) => {
     setLoading(true);
     setError(null);
     setAnalysisProgress(0);
@@ -162,31 +179,201 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
       // Update session with URL and move to analyzing step
       setSession(prev => prev ? {
         ...prev,
-        websiteUrl: url,
+        websiteUrl: url || 'demo.example.com',
         currentStep: 'analyzing',
       } : null);
 
-      // Run the analysis with progress updates
-      // We map the analysis progress (which is 0-100 of the analysis phase)
-      // to 0-80% of the TOTAL loading time, leaving 20% for the subsequent generation steps
-      const profile = await analyzeWebsite(url, (stage, percent) => {
-        // Cap analysis phase at 80%
-        const mappedPercent = Math.floor(percent * 0.8);
-        setAnalysisProgress(mappedPercent);
-        console.log(`[Onboarding] Analysis: ${stage} (${percent}% -> ${mappedPercent}%)`);
-      });
+      let profile: BusinessProfile;
+      let projects: ProjectSuggestion[];
+      let demoArticle: DemoArticle | undefined;
 
-      // Analysis complete, now moving to project suggestions
-      setAnalysisProgress(85);
+      if (demo || !url) {
+        // DEMO MODE: Simulate analysis with placeholder data
+        console.log('[Onboarding] Running demo analysis...');
 
-      // Generate project suggestions
-      const projects = await generateProjectSuggestions(profile);
+        // Simulate progress over ~4 seconds
+        const stages = [
+          { progress: 15, delay: 400 },
+          { progress: 30, delay: 600 },
+          { progress: 45, delay: 500 },
+          { progress: 60, delay: 700 },
+          { progress: 75, delay: 500 },
+          { progress: 85, delay: 400 },
+          { progress: 95, delay: 300 },
+        ];
 
-      // Projects generated, now moving to demo article
-      setAnalysisProgress(95);
+        for (const stage of stages) {
+          await new Promise(resolve => setTimeout(resolve, stage.delay));
+          setAnalysisProgress(stage.progress);
+        }
 
-      // Generate demo article
-      const demoArticle = await generateDemoArticle(profile);
+        // Generate demo business profile (must match BusinessProfile type)
+        // This is rich, compelling demo data that shows the value of the analysis
+        profile = {
+          id: `demo_${Date.now()}`,
+          websiteUrl: url || 'demo.example.com',
+          analyzedAt: Timestamp.now(),
+          businessName: 'TechFlow Solutions',
+          businessSummary: 'TechFlow helps mid-market companies modernize their tech stack without the enterprise price tag. Founded by ex-AWS engineers, they specialize in cloud migrations that actually finish on time and on budget.',
+          industry: {
+            primary: 'Cloud Infrastructure & DevOps Consulting',
+            secondary: 'Software Development Services',
+            tertiary: 'IT Managed Services',
+            confidence: 92,
+          },
+          offerings: {
+            type: 'services',
+            categories: [
+              'Cloud Migration (AWS, Azure, GCP)',
+              'DevOps Implementation & CI/CD',
+              'Infrastructure as Code (Terraform)',
+              'Kubernetes & Container Orchestration',
+              '24/7 Managed Cloud Support',
+            ],
+          },
+          targetAudience: {
+            primary: 'CTOs and VP of Engineering at mid-market companies ($10M-$500M revenue) struggling with legacy infrastructure, slow deployments, or cloud cost overruns',
+            secondary: 'IT Directors managing hybrid cloud environments who need to reduce operational overhead',
+            demographics: {
+              ageRange: '35-50',
+              income: '$150K-$300K decision makers',
+              geographic: ['United States', 'Canada', 'United Kingdom'],
+            },
+            painPoints: [
+              'Cloud bills spiraling out of control (avg 40% overspend)',
+              'Deployments taking days instead of minutes',
+              'On-call burnout causing engineer turnover',
+              'Security compliance gaps (SOC2, HIPAA)',
+              'Vendor lock-in fears preventing cloud adoption',
+            ],
+          },
+          brandVoice: {
+            tone: ['Technical but accessible', 'Confident without arrogance', 'Results-focused'],
+            style: 'Engineer-to-engineer conversations backed by real metrics and case studies',
+            personality: ['Pragmatic problem-solvers', 'Cloud-native advocates', 'Cost-conscious'],
+            uniqueSellingPoints: [
+              'Average 47% cloud cost reduction in first 90 days',
+              'Ex-FAANG engineering team (AWS, Google, Netflix)',
+              'Fixed-price migrations with money-back guarantee',
+              'SOC2 Type II certified with HIPAA expertise',
+            ],
+          },
+          contentStyle: {
+            types: ['Technical deep-dives', 'ROI calculators', 'Migration playbooks', 'Architecture reviews'],
+            averageLength: 'long',
+            technicalLevel: 'advanced',
+          },
+          opportunityScore: {
+            overall: 34,
+            contentGaps: 127,
+            potentialTraffic: '15,000-28,000 monthly visits',
+          },
+          // Top keywords with real-looking volume data
+          topKeywords: [
+            { keyword: 'cloud migration services', searchVolume: 8100, difficulty: 67, intent: 'commercial' },
+            { keyword: 'aws cost optimization', searchVolume: 6600, difficulty: 58, intent: 'informational' },
+            { keyword: 'kubernetes consulting', searchVolume: 4400, difficulty: 52, intent: 'commercial' },
+            { keyword: 'devops implementation cost', searchVolume: 2900, difficulty: 45, intent: 'commercial' },
+            { keyword: 'terraform vs cloudformation', searchVolume: 5400, difficulty: 38, intent: 'informational' },
+            { keyword: 'cloud migration checklist', searchVolume: 3600, difficulty: 41, intent: 'informational' },
+            { keyword: 'reduce aws bill', searchVolume: 4100, difficulty: 55, intent: 'informational' },
+            { keyword: 'soc2 compliance for startups', searchVolume: 2400, difficulty: 48, intent: 'informational' },
+          ],
+          // Strategic content angles that show real insight
+          contentAngles: [
+            {
+              angle: 'Cloud Cost Horror Stories & Fixes',
+              description: 'Document real examples of cloud cost disasters and step-by-step fixes. High search intent from panicked CTOs.',
+              priority: 'high',
+            },
+            {
+              angle: 'Migration Timelines & What Actually Happens',
+              description: 'Honest content about migration phases, common delays, and how to avoid them. Builds trust through transparency.',
+              priority: 'high',
+            },
+            {
+              angle: 'Build vs Buy Decision Frameworks',
+              description: 'Help prospects decide when to use managed services vs self-host. Positions you as advisor, not vendor.',
+              priority: 'medium',
+            },
+            {
+              angle: 'On-Call Burnout & Platform Engineering',
+              description: 'Address the human cost of poor infrastructure. Resonates emotionally with engineering leaders.',
+              priority: 'medium',
+            },
+          ],
+          // Competitor insights
+          competitorInsights: {
+            topCompetitors: ['Accenture Cloud', 'Slalom', 'Contino', '2nd Watch'],
+            contentGapsVsCompetitors: [
+              'No competitors have ROI calculators for cloud migration',
+              'Limited technical deep-dives on Kubernetes cost optimization',
+              'No one addressing mid-market specifically (all enterprise-focused)',
+            ],
+            differentiators: [
+              'Fixed-price model vs time & materials',
+              'Smaller team = faster decisions, senior engineers on every project',
+              'Public case studies with actual metrics (competitors hide numbers)',
+            ],
+          },
+        };
+
+        // Generate demo projects
+        projects = [
+          {
+            id: 'demo_proj_1',
+            name: 'Technology Insights Blog',
+            icon: '📝',
+            description: 'Share industry expertise and thought leadership to establish authority in the technology space.',
+            coverage: 'Blog content strategy',
+            estimatedOpportunities: 45,
+            selected: true,
+          },
+          {
+            id: 'demo_proj_2',
+            name: 'Product Knowledge Base',
+            icon: '📚',
+            description: 'Self-service documentation to help customers succeed and reduce support burden.',
+            coverage: 'Help center content',
+            estimatedOpportunities: 32,
+            selected: false,
+          },
+        ];
+
+        demoArticle = {
+          title: 'The Future of Digital Transformation: Trends to Watch',
+          preview: 'Discover the key trends shaping digital transformation in 2025 and how businesses can stay ahead of the curve.',
+          outline: [
+            'Introduction to Digital Transformation',
+            'Key Trends for 2025',
+            'AI and Automation',
+            'Cloud-First Strategies',
+            'Implementation Best Practices',
+            'Conclusion',
+          ],
+          topicSuggestions: [
+            'How to Build a Digital-First Culture',
+            'ROI of Digital Transformation Initiatives',
+            'Common Digital Transformation Mistakes to Avoid',
+          ],
+        };
+
+      } else {
+        // REAL MODE: Run actual analysis
+        const analysisProfile = await analyzeWebsite(url, (stage, percent) => {
+          const mappedPercent = Math.floor(percent * 0.8);
+          setAnalysisProgress(mappedPercent);
+          console.log(`[Onboarding] Analysis: ${stage} (${percent}% -> ${mappedPercent}%)`);
+        });
+
+        profile = analysisProfile;
+        setAnalysisProgress(85);
+
+        projects = await generateProjectSuggestions(profile);
+        setAnalysisProgress(95);
+
+        demoArticle = await generateDemoArticle(profile);
+      }
 
       // Update session with results
       setSession(prev => prev ? {
@@ -212,6 +399,39 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
     }
   }, []);
 
+  // Initialize session with existing profile (for logged-in users creating new projects)
+  const initializeWithExistingProfile = useCallback((
+    profile: BusinessProfile,
+    orgId: string,
+    channelRecs?: ChannelRecommendation[]
+  ) => {
+    console.log('[Onboarding] Initializing with existing profile for org:', orgId);
+
+    const now = new Date();
+    const expiry = new Date(now.getTime() + SESSION_EXPIRY_HOURS * 60 * 60 * 1000);
+
+    const newSession: OnboardingSession = {
+      sessionId: generateSessionId(),
+      mode: 'existing',
+      organizationId: orgId,
+      websiteUrl: profile.websiteUrl || '',
+      businessProfile: profile,
+      channelRecommendations: channelRecs || [],
+      selectedChannel: null,
+      selectedProject: null,
+      suggestedProjects: [],
+      categories: [],
+      subcategories: {},
+      currentStep: 'profile_review', // Start at profile review for existing users
+      createdAt: now,
+      expiresAt: expiry,
+    };
+
+    setSession(newSession);
+    saveSessionToStorage(newSession);
+    setError(null);
+  }, []);
+
   const updateProfile = useCallback((updates: Partial<BusinessProfile>) => {
     setSession(prev => {
       if (!prev || !prev.businessProfile) return prev;
@@ -229,6 +449,164 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
     // TODO: Implement regeneration of specific profile sections
     console.log('[Onboarding] Regenerating section:', section);
     setError('Regeneration not yet implemented');
+  }, []);
+
+  // ============================================================================
+  // CHANNEL ACTIONS (new channel-first approach)
+  // ============================================================================
+
+  // Generate placeholder channel recommendations based on business profile
+  const generateChannelRecommendations = useCallback(async () => {
+    if (!session?.businessProfile) {
+      setError('Please complete profile review first');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const profile = session.businessProfile;
+      const industry = profile.industry.primary || 'Business';
+      const businessName = profile.businessName || 'your company';
+
+      // Generate placeholder channel recommendations based on business profile
+      // In production, this would call an AI service
+      const seed = industry.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+      const seededRandom = (min: number, max: number, offset: number = 0) => {
+        const val = ((seed + offset) * 9301 + 49297) % 233280;
+        return Math.floor(min + (val / 233280) * (max - min));
+      };
+
+      // Knowledge Base first - key for Answer Engine Optimization (AEO)
+      const channels: ChannelRecommendation[] = [
+        {
+          id: 'channel_kb',
+          channelType: 'knowledge_base' as ChannelType,
+          title: `${industry} Answer Hub`,
+          description: `The foundation of Answer Engine Optimization. When AI assistants like ChatGPT, Claude, or Google's AI answer questions about ${industry.toLowerCase()}, YOUR content becomes the source. Build a comprehensive library answering every question your customers ask—from basics to edge cases. This is how you get cited by AI.`,
+          suggestedCategories: [
+            'Common Questions',
+            'How It Works',
+            'Troubleshooting',
+            'Comparisons',
+            'Getting Started'
+          ],
+          targetKeywords: [
+            { keyword: `what is ${industry.toLowerCase()}`, searchVolume: seededRandom(5000, 20000, 1) },
+            { keyword: `how does ${industry.toLowerCase()} work`, searchVolume: seededRandom(3000, 12000, 2) },
+            { keyword: `${industry.toLowerCase()} vs`, searchVolume: seededRandom(4000, 15000, 3) },
+          ],
+          selected: false,
+          totalMonthlySearches: seededRandom(15000, 50000, 10),
+        },
+        {
+          id: 'channel_blog',
+          channelType: 'blog' as ChannelType,
+          title: `${industry} Insights Blog`,
+          description: `Establish thought leadership and capture search traffic. Share expert perspectives on ${industry.toLowerCase()} trends, publish original research, and create the definitive takes that journalists and AI models reference when covering your space.`,
+          suggestedCategories: [
+            'Industry Trends',
+            'Expert Analysis',
+            'Original Research',
+            'Opinion & Commentary',
+            'News & Updates'
+          ],
+          targetKeywords: [
+            { keyword: `${industry.toLowerCase()} trends 2025`, searchVolume: seededRandom(2000, 8000, 4) },
+            { keyword: `${industry.toLowerCase()} best practices`, searchVolume: seededRandom(1500, 5000, 5) },
+            { keyword: `future of ${industry.toLowerCase()}`, searchVolume: seededRandom(2000, 10000, 6) },
+          ],
+          selected: false,
+          totalMonthlySearches: seededRandom(8000, 25000, 11),
+        },
+        {
+          id: 'channel_guides',
+          channelType: 'guides' as ChannelType,
+          title: `${industry} Learning Center`,
+          description: `Comprehensive tutorials and step-by-step guides that rank for "how to" searches. When someone asks an AI "how do I..." in your space, these guides become the answer. Educational content that builds trust and captures high-intent traffic.`,
+          suggestedCategories: [
+            'Beginner Guides',
+            'Step-by-Step Tutorials',
+            'Advanced Techniques',
+            'Best Practices',
+            'Quick Tips'
+          ],
+          targetKeywords: [
+            { keyword: `how to ${industry.toLowerCase()}`, searchVolume: seededRandom(4000, 18000, 7) },
+            { keyword: `${industry.toLowerCase()} tutorial`, searchVolume: seededRandom(2500, 10000, 8) },
+            { keyword: `${industry.toLowerCase()} guide`, searchVolume: seededRandom(3000, 12000, 9) },
+          ],
+          selected: false,
+          totalMonthlySearches: seededRandom(12000, 40000, 12),
+        },
+        {
+          id: 'channel_comparisons',
+          channelType: 'archive' as ChannelType,
+          title: `${industry} Comparison Hub`,
+          description: `"X vs Y" and "Best X for Y" content that captures high-intent decision-stage traffic. When customers ask AI to compare options, your objective analysis becomes the trusted source. Build the definitive comparison resource in your space.`,
+          suggestedCategories: [
+            'Product Comparisons',
+            'Best Of Lists',
+            'Buyer\'s Guides',
+            'Pros & Cons Analysis',
+            'Use Case Breakdowns'
+          ],
+          targetKeywords: [
+            { keyword: `best ${industry.toLowerCase()}`, searchVolume: seededRandom(5000, 25000, 13) },
+            { keyword: `${industry.toLowerCase()} comparison`, searchVolume: seededRandom(2000, 8000, 14) },
+            { keyword: `${industry.toLowerCase()} reviews`, searchVolume: seededRandom(3000, 15000, 15) },
+          ],
+          selected: false,
+          totalMonthlySearches: seededRandom(10000, 45000, 16),
+        },
+      ];
+
+      setSession(prev => prev ? {
+        ...prev,
+        channelRecommendations: channels,
+      } : null);
+
+    } catch (err: any) {
+      console.error('[Onboarding] Channel generation failed:', err);
+      setError(err.message || 'Failed to generate channel recommendations');
+    } finally {
+      setLoading(false);
+    }
+  }, [session?.businessProfile]);
+
+  const selectChannel = useCallback((id: string) => {
+    setSession(prev => {
+      if (!prev) return prev;
+
+      const updatedChannels = prev.channelRecommendations.map(c => ({
+        ...c,
+        selected: c.id === id,
+      }));
+
+      const selectedChannel = updatedChannels.find(c => c.id === id) || null;
+
+      // Also create a project from the selected channel
+      const projectFromChannel: ProjectSuggestion | null = selectedChannel ? {
+        id: `proj_${selectedChannel.id}`,
+        name: selectedChannel.title,
+        icon: selectedChannel.channelType === 'blog' ? '📝' :
+              selectedChannel.channelType === 'knowledge_base' ? '📚' :
+              selectedChannel.channelType === 'guides' ? '📖' :
+              selectedChannel.channelType === 'archive' ? '🗂️' : '🏢',
+        description: selectedChannel.description,
+        coverage: `${selectedChannel.channelType} channel`,
+        estimatedOpportunities: selectedChannel.suggestedCategories.length * 10,
+        selected: true,
+      } : null;
+
+      return {
+        ...prev,
+        channelRecommendations: updatedChannels,
+        selectedChannel,
+        selectedProject: projectFromChannel,
+      };
+    });
   }, []);
 
   // ============================================================================
@@ -508,56 +886,27 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
     setSession(prev => {
       if (!prev) return prev;
 
-      const mode = prev.mode || 'client';
-      let currentIndex = STEP_ORDER.indexOf(prev.currentStep);
+      const stepOrder = getStepOrder(prev.mode);
+      let currentIndex = stepOrder.indexOf(prev.currentStep);
       let nextIndex = currentIndex + 1;
 
-      // Skip steps based on mode
-      while (nextIndex < STEP_ORDER.length) {
-        const nextStepName = STEP_ORDER[nextIndex];
+      const nextStepName = stepOrder[Math.min(nextIndex, stepOrder.length - 1)];
 
-        // In project mode, skip project_selection and account_creation
-        if (mode === 'project' && (nextStepName === 'project_selection' || nextStepName === 'account_creation')) {
-          nextIndex++;
-          continue;
-        }
-
-        // In project mode, skip workspace_intro (returning users already know the workspace)
-        if (mode === 'project' && nextStepName === 'workspace_intro') {
-          nextIndex++;
-          continue;
-        }
-
-        break;
-      }
-
-      const nextStepName = STEP_ORDER[Math.min(nextIndex, STEP_ORDER.length - 1)];
-
-      // Ensure selectedProject is set before entering category_generation
-      // This handles both project mode (where project_selection is skipped) and
-      // cases where no project was pre-selected
+      // Ensure selectedProject is set from channel selection
       let selectedProject = prev.selectedProject;
-      if (nextStepName === 'category_generation' && !selectedProject) {
-        // Try to find a pre-selected project from suggestions
-        selectedProject = prev.suggestedProjects.find(p => p.selected) || null;
-
-        // If still null but we have suggestions, select the first one
-        if (!selectedProject && prev.suggestedProjects.length > 0) {
-          selectedProject = { ...prev.suggestedProjects[0], selected: true };
-        }
-
-        // If still null but we have a business profile, create a default project
-        if (!selectedProject && prev.businessProfile) {
-          selectedProject = {
-            id: `default_${Date.now()}`,
-            name: prev.businessProfile.industry.primary || 'Content Project',
-            icon: '📁',
-            description: `Content strategy for ${prev.businessProfile.industry.primary || 'your business'}`,
-            coverage: 'Full coverage',
-            estimatedOpportunities: 50,
-            selected: true,
-          };
-        }
+      if (!selectedProject && prev.selectedChannel) {
+        selectedProject = {
+          id: `proj_${prev.selectedChannel.id}`,
+          name: prev.selectedChannel.title,
+          icon: prev.selectedChannel.channelType === 'blog' ? '📝' :
+                prev.selectedChannel.channelType === 'knowledge_base' ? '📚' :
+                prev.selectedChannel.channelType === 'guides' ? '📖' :
+                prev.selectedChannel.channelType === 'archive' ? '🗂️' : '🏢',
+          description: prev.selectedChannel.description,
+          coverage: `${prev.selectedChannel.channelType} channel`,
+          estimatedOpportunities: prev.selectedChannel.suggestedCategories.length * 10,
+          selected: true,
+        };
       }
 
       return {
@@ -573,30 +922,11 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
     setSession(prev => {
       if (!prev) return prev;
 
-      const mode = prev.mode || 'client';
-      let currentIndex = STEP_ORDER.indexOf(prev.currentStep);
-      let prevIndex = currentIndex - 1;
+      const stepOrder = getStepOrder(prev.mode);
+      const currentIndex = stepOrder.indexOf(prev.currentStep);
+      const prevIndex = Math.max(currentIndex - 1, 0);
 
-      // Skip steps based on mode
-      while (prevIndex >= 0) {
-        const prevStepName = STEP_ORDER[prevIndex];
-
-        // In project mode, skip project_selection and account_creation
-        if (mode === 'project' && (prevStepName === 'project_selection' || prevStepName === 'account_creation')) {
-          prevIndex--;
-          continue;
-        }
-
-        // In project mode, skip workspace_intro
-        if (mode === 'project' && prevStepName === 'workspace_intro') {
-          prevIndex--;
-          continue;
-        }
-
-        break;
-      }
-
-      return { ...prev, currentStep: STEP_ORDER[Math.max(prevIndex, 0)] };
+      return { ...prev, currentStep: stepOrder[prevIndex] };
     });
     setError(null);
   }, []);
@@ -637,8 +967,13 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
     error,
     analysisProgress,
     startAnalysis,
+    initializeWithExistingProfile,
     updateProfile,
     regenerateProfileSection,
+    // Channel actions
+    selectChannel,
+    generateChannelRecommendations,
+    // Project actions
     selectProject,
     createCustomProject,
     updateProject,

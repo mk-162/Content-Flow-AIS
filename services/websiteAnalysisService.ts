@@ -577,7 +577,7 @@ export async function generateProjectSuggestions(
 
   const ai = getClient();
 
-  const prompt = `Based on this business profile, suggest 3 distinct content project verticals.
+  const prompt = `You are an Editorial Director creating compelling content verticals for a media brand.
 
 **Business Profile:**
 - Industry: ${profile.industry.primary} / ${profile.industry.secondary}
@@ -585,16 +585,34 @@ export async function generateProjectSuggestions(
 - Target Audience: ${profile.targetAudience.primary}
 - Content Style: ${profile.contentStyle.types.join(', ')}
 
+**TASK:** Create 3 distinct content project verticals that will excite and inspire the content team.
+
 For each project, provide:
-1. A SHORT project name (EXACTLY 2-3 words, no more than 30 characters). Examples: "Investment Basics", "Tech Reviews", "Health Tips"
-2. An emoji icon that represents the project
-3. A brief description of what content this project covers
-4. Coverage: What specific topics/areas it includes
-5. Estimated number of content opportunities (realistic estimate based on the industry)
 
-IMPORTANT: The project name MUST be 2-3 words only. Do NOT include subtitles, taglines, or explanations in the name field.
+1. **name**: A SHORT evocative name (EXACTLY 2-3 words, max 30 characters)
+   - Good: "Trail Guides", "Gear Lab", "Ride Stories"
+   - Bad: "Cycling Content" (too generic), "Everything About Bikes" (too long)
 
-Make the projects distinct but complementary. They should cover different aspects of the business's content needs.`;
+2. **icon**: An emoji that captures the project's spirit
+
+3. **description**: THIS IS CRITICAL - Write a compelling EDITORIAL VISION (3-4 sentences) that:
+   - Sells the VALUE and excitement of this content vertical
+   - Paints a vivid picture of what readers will experience
+   - Uses evocative, magazine-quality language
+   - Explains the unique angle that makes this project special
+   - Makes someone WANT to create content for this vertical
+
+   EXAMPLE GOOD DESCRIPTION:
+   "Epic multi-day routes and weekend escapes across dramatic landscapes. Each adventure framed as an experience—not just a ride—with terrain insights, seasonal timing, hidden gems, and the 'type of rider' each journey suits. Where exploration meets storytelling, and every route feels like a chapter in a larger adventure."
+
+   EXAMPLE BAD DESCRIPTION:
+   "Content about cycling routes." (too generic, no vision, doesn't inspire)
+
+4. **coverage**: Specific themes and content types this vertical encompasses
+
+5. **estimatedOpportunities**: Realistic number of content pieces (50-300)
+
+Make each project DISTINCTLY different in tone and purpose. One might be practical/educational, another inspirational/storytelling, another community-focused.`;
 
   try {
     const response = await withRetry(() => withTimeout(
@@ -742,7 +760,7 @@ ${profile.targetAudience.painPoints?.length ? `Pain Points: ${profile.targetAudi
 Tone: ${profile.brandVoice?.tone?.join(', ') || 'Professional'}
 Content Types: ${profile.contentStyle?.types?.join(', ') || 'Educational articles'}`;
 
-  const prompt = `You are an expert content strategist specializing in AI-optimized content.
+  const prompt = `You are an Editorial Director creating compelling content categories for a brand's content channel.
 
 ${businessContext}
 
@@ -750,21 +768,36 @@ ${businessContext}
 
 ---
 
-**TASK:** Generate exactly ${count} highly specific content categories for this business.
+**TASK:** Create exactly ${count} distinct content categories that will excite readers and inspire great content.
 
-CRITICAL REQUIREMENTS:
-1. Categories MUST be directly relevant to the specific products/services listed above
-2. Categories MUST address the target audience's pain points and interests  
-3. Categories should be topics that AI assistants (ChatGPT, Claude, Gemini) frequently answer questions about
-4. Categories should be specific enough to generate focused articles, not generic topics
+**CATEGORY REQUIREMENTS:**
+1. Each category should feel like a gateway to exploration - not just a filing system
+2. Categories MUST be specific to this business's world - no generic "Tips & Tricks" or "Industry Basics"
+3. Think editorially: what would make someone EXCITED to dive into this category?
+4. Mix practical utility with storytelling potential
+5. Categories should be topics that AI assistants (ChatGPT, Claude, Gemini) frequently answer questions about
+
+**DESCRIPTION REQUIREMENTS - THIS IS CRITICAL:**
+Each description must be a compelling EDITORIAL BRIEF (3-4 sentences) that:
+- Paints a vivid picture of what content belongs here
+- Uses evocative, magazine-quality language that SELLS the category
+- Includes specific content angles, themes, and story hooks
+- Mentions the TYPE of reader this serves and what transformation they'll experience
+- Makes someone WANT to explore this category
+
+**EXAMPLE GOOD DESCRIPTION:**
+"Epic multi-day routes and weekend escapes across dramatic landscapes. From coastal cliff paths to moorland climbs, canal towpaths to forest singletrack—each route framed as an experience, not just a ride. Features terrain insights, elevation profiles, seasonal timing, café stops, and wild camping spots. Where adventure meets storytelling."
+
+**EXAMPLE BAD DESCRIPTION:**
+"Content about cycling routes." (too generic, no editorial vision, doesn't inspire)
 
 For each category, provide:
-- name: A clear, specific category name (2-4 words)
-- description: Detailed description of what content belongs here (2-3 sentences)
-- demandScore: Estimated search demand 0-100 (be realistic)
+- name: A clear, evocative category name (2-4 words)
+- description: Rich editorial brief (3-4 sentences - make it COMPELLING)
+- demandScore: Estimated search demand 0-100 (be realistic based on topic popularity)
 - targetMatchScore: How well this matches the target audience 0-100
 - estimatedArticles: Number of potential articles (10-50)
-- reasoning: Why this category is valuable for THIS specific business`;
+- reasoning: Why this category will captivate the target audience for THIS specific business`;
 
   try {
     const response = await withRetry(() => withTimeout(
@@ -857,44 +890,44 @@ function generateFallbackCategories(
   const industry = profile.industry.primary || 'Business';
   const offerings = profile.offerings.categories || [];
 
-  // Base categories that work for most businesses
+  // Base categories with editorial brief style descriptions
   const baseCategories = [
     {
-      name: `${industry} Basics`,
-      description: `Foundational content about ${industry.toLowerCase()} for beginners and newcomers`,
+      name: `${industry} Essentials`,
+      description: `The foundation every ${industry.toLowerCase()} enthusiast needs. From core concepts to common pitfalls, this is where knowledge begins—packed with clear explanations, practical examples, and the fundamentals that separate amateurs from experts. Perfect for newcomers ready to build confidence fast.`,
       demandScore: 75,
       estimatedArticles: 25,
     },
     {
-      name: 'How-To Guides',
-      description: `Step-by-step tutorials and guides for your target audience`,
+      name: 'Step-by-Step Guides',
+      description: `Hands-on tutorials that take you from start to finish with nothing left to chance. Each guide breaks down complex processes into actionable steps, complete with tips from seasoned practitioners. For those who learn by doing—and want to get it right the first time.`,
       demandScore: 85,
       estimatedArticles: 30,
     },
     {
-      name: 'Best Practices',
-      description: `Industry best practices and expert recommendations`,
+      name: 'Expert Playbooks',
+      description: `Battle-tested strategies and insider techniques from those who've been there. This is where theory meets practice—proven frameworks, real-world case studies, and the hard-won wisdom that only comes from experience. Elevate your game with the playbook the pros use.`,
       demandScore: 70,
       estimatedArticles: 20,
     },
     {
-      name: 'FAQs & Common Questions',
-      description: `Answers to frequently asked questions in ${industry.toLowerCase()}`,
+      name: 'Quick Answers',
+      description: `The questions everyone asks—answered clearly and completely. No fluff, no jargon, just straight answers to the common (and not-so-common) questions that keep people up at night. Your go-to resource when you need answers fast.`,
       demandScore: 80,
       estimatedArticles: 35,
     },
     {
-      name: 'Industry Trends',
-      description: `Latest trends and developments in ${industry.toLowerCase()}`,
+      name: `What's Next in ${industry}`,
+      description: `Where ${industry.toLowerCase()} is heading—and how to stay ahead of the curve. From emerging technologies to shifting consumer expectations, this is your window into tomorrow. For forward-thinkers who want to lead, not follow.`,
       demandScore: 65,
       estimatedArticles: 15,
     },
   ];
 
-  // Add offering-specific categories if available
+  // Add offering-specific categories with dynamic editorial descriptions
   const offeringCategories = offerings.slice(0, 3).map((offering, index) => ({
     name: offering,
-    description: `Content focused on ${offering.toLowerCase()} for your audience`,
+    description: `Deep dives into everything ${offering.toLowerCase()}—from fundamentals to advanced techniques. Discover what sets great ${offering.toLowerCase()} apart, explore real-world applications, and unlock insights that transform how you think about this space. For anyone serious about mastering ${offering.toLowerCase()}.`,
     demandScore: 70 + Math.floor(Math.random() * 20),
     estimatedArticles: 15 + Math.floor(Math.random() * 20),
   }));

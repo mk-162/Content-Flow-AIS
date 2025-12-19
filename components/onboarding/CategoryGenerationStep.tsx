@@ -1,33 +1,38 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FolderTree, X, Plus, ChevronRight, TrendingUp, Target, Lightbulb, RefreshCw } from 'lucide-react';
+import { FolderTree, X, Plus, ChevronRight, TrendingUp, Target, Lightbulb, RefreshCw, BarChart3, Zap, Info, ArrowUpRight, ArrowDownRight, Minus } from 'lucide-react';
 import { useOnboarding } from '../../contexts/OnboardingContext';
 import { generateOnboardingCategories } from '../../services/websiteAnalysisService';
+import { CategorySuggestion } from '../../types';
 
 // ============================================================================
-// EDUCATIONAL FACTS FOR LOADING
+// FUN LOADING MESSAGES
 // ============================================================================
 
-const EDUCATIONAL_FACTS = [
+const LOADING_MESSAGES = [
   {
-    stat: '67%',
-    text: 'of B2B buyers prefer getting information from AI assistants before talking to sales.',
-    source: 'Gartner 2024',
+    emoji: '🧠',
+    text: 'Brainstorming killer content ideas...',
   },
   {
-    stat: '3.2x',
-    text: 'more likely to convert when content directly answers their specific question.',
-    source: 'ContentFlow Research',
+    emoji: '🎯',
+    text: 'Finding the topics your audience actually cares about...',
   },
   {
-    stat: '85%',
-    text: 'of product searches will happen through AI assistants by 2026.',
-    source: 'McKinsey Digital',
+    emoji: '✨',
+    text: 'Crafting categories that spark curiosity...',
   },
   {
-    stat: '12 mins',
-    text: 'Average time saved per content piece with AI-assisted generation.',
-    source: 'Customer Data',
+    emoji: '🔥',
+    text: 'Hunting for content goldmines...',
+  },
+  {
+    emoji: '🚀',
+    text: 'Mapping out your content empire...',
+  },
+  {
+    emoji: '💡',
+    text: 'Connecting the dots between ideas...',
   },
 ];
 
@@ -49,31 +54,57 @@ const CategorySkeleton: React.FC = () => (
 );
 
 // ============================================================================
+// HELPER FUNCTIONS FOR PLACEHOLDER DATA
+// ============================================================================
+
+// Generate placeholder metrics for mockup (will be replaced with real DataForSEO data)
+const generatePlaceholderMetrics = (categoryName: string) => {
+  // Use category name as seed for consistent random values
+  const seed = categoryName.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  const random = (min: number, max: number) => min + ((seed * 9301 + 49297) % 233280) / 233280 * (max - min);
+
+  return {
+    searchVolume: Math.floor(random(1000, 45000)),
+    difficulty: Math.floor(random(25, 75)),
+    trend: ['rising', 'stable', 'declining'][Math.floor(random(0, 2.5))] as 'rising' | 'stable' | 'declining',
+    trafficPotential: Math.floor(random(200, 8000)),
+    competitorCount: Math.floor(random(15, 60))
+  };
+};
+
+// Format number with K/M suffix
+const formatNumber = (num: number): string => {
+  if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+  if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+  return num.toString();
+};
+
+// ============================================================================
 // CATEGORY CARD COMPONENT
 // ============================================================================
 
 interface CategoryCardProps {
-  category: {
-    id: string;
-    name: string;
-    description: string;
-    demandScore: number;
-    demandLevel: string;
-    targetMatchScore: number;
-    audienceMatch: 'high' | 'medium' | 'low';
-    competitionLevel: 'high' | 'medium' | 'low';
-    selected: boolean;
-    isUserAdded?: boolean;
-  };
+  category: CategorySuggestion;
   onToggle: () => void;
   onRemove: () => void;
-  onUpdate: (updates: Partial<any>) => void;
+  onUpdate: (updates: Partial<CategorySuggestion>) => void;
 }
 
 const CategoryCard: React.FC<CategoryCardProps> = ({ category, onToggle, onRemove, onUpdate }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(category.name);
   const [editDesc, setEditDesc] = useState(category.description);
+
+  // Generate or use existing placeholder metrics
+  const metrics = category.searchVolume !== undefined
+    ? {
+        searchVolume: category.searchVolume || 0,
+        difficulty: category.difficulty || 50,
+        trend: category.trend || 'stable',
+        trafficPotential: category.trafficPotential || 0,
+        competitorCount: category.competitorCount || 0
+      }
+    : generatePlaceholderMetrics(category.name);
 
   const handleSave = () => {
     if (editName.trim()) {
@@ -82,15 +113,22 @@ const CategoryCard: React.FC<CategoryCardProps> = ({ category, onToggle, onRemov
     }
   };
 
-  const getDemandColor = (level: string) => {
-    switch (level) {
-      case 'Very High': return 'bg-green-500';
-      case 'High': return 'bg-cyan-500';
-      case 'Medium-High': return 'bg-blue-500';
-      case 'Medium': return 'bg-yellow-500';
-      default: return 'bg-orange-500';
-    }
+  const getDifficultyColor = (difficulty: number) => {
+    if (difficulty < 30) return 'text-green-400';
+    if (difficulty < 50) return 'text-cyan-400';
+    if (difficulty < 70) return 'text-yellow-400';
+    return 'text-orange-400';
   };
+
+  const getDifficultyLabel = (difficulty: number) => {
+    if (difficulty < 30) return 'Easy';
+    if (difficulty < 50) return 'Medium';
+    if (difficulty < 70) return 'Hard';
+    return 'Very Hard';
+  };
+
+  const TrendIcon = metrics.trend === 'rising' ? ArrowUpRight : metrics.trend === 'declining' ? ArrowDownRight : Minus;
+  const trendColor = metrics.trend === 'rising' ? 'text-green-400' : metrics.trend === 'declining' ? 'text-red-400' : 'text-slate-400';
 
   return (
     <motion.div
@@ -190,39 +228,70 @@ const CategoryCard: React.FC<CategoryCardProps> = ({ category, onToggle, onRemov
                 </button>
               </div>
               {category.description && (
-                <p className="text-sm text-slate-400 mb-2 leading-relaxed">{category.description}</p>
+                <p className="text-sm text-slate-400 mb-3 leading-relaxed">{category.description}</p>
               )}
             </>
           )}
 
-          {/* Demand Bar */}
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-xs text-slate-500">Demand:</span>
-            <div className="flex-1 h-1.5 bg-slate-800 max-w-[100px]">
-              <div
-                className={`h-full ${getDemandColor(category.demandLevel)}`}
-                style={{ width: `${category.demandScore}%` }}
-              />
-            </div>
-            <span className="text-xs text-slate-400">{category.demandScore}/100</span>
-          </div>
+          {/* NEW: Enhanced Metrics Grid */}
+          {!isEditing && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 pt-3 border-t border-slate-800">
+              {/* Monthly Searches */}
+              <div className="flex items-center gap-2">
+                <BarChart3 className="w-3.5 h-3.5 text-slate-500" />
+                <div>
+                  <p className="text-sm font-medium text-white">{formatNumber(metrics.searchVolume)}</p>
+                  <p className="text-[10px] text-slate-500 uppercase">Searches/mo</p>
+                </div>
+              </div>
 
-          {/* Metrics */}
-          <div className="flex items-center gap-3 text-xs">
-            <span className={`
-              px-1.5 py-0.5 uppercase tracking-wider
-              ${category.audienceMatch === 'high' ? 'bg-green-500/20 text-green-400' : ''}
-              ${category.audienceMatch === 'medium' ? 'bg-yellow-500/20 text-yellow-400' : ''}
-              ${category.audienceMatch === 'low' ? 'bg-slate-700 text-slate-500' : ''}
-            `}>
-              {category.audienceMatch === 'high' ? '🟢' : category.audienceMatch === 'medium' ? '🟡' : '⚪'} {category.audienceMatch} match
-            </span>
-            <span className={`
-              px-1.5 py-0.5 text-slate-500
-            `}>
-              Competition: {category.competitionLevel}
-            </span>
-          </div>
+              {/* Trend */}
+              <div className="flex items-center gap-2">
+                <TrendIcon className={`w-3.5 h-3.5 ${trendColor}`} />
+                <div>
+                  <p className={`text-sm font-medium capitalize ${trendColor}`}>{metrics.trend}</p>
+                  <p className="text-[10px] text-slate-500 uppercase">Trend</p>
+                </div>
+              </div>
+
+              {/* Difficulty */}
+              <div className="flex items-center gap-2">
+                <Target className="w-3.5 h-3.5 text-slate-500" />
+                <div>
+                  <p className={`text-sm font-medium ${getDifficultyColor(metrics.difficulty)}`}>
+                    {getDifficultyLabel(metrics.difficulty)} <span className="text-slate-500">({metrics.difficulty})</span>
+                  </p>
+                  <p className="text-[10px] text-slate-500 uppercase">Difficulty</p>
+                </div>
+              </div>
+
+              {/* Traffic Potential */}
+              <div className="flex items-center gap-2">
+                <Zap className="w-3.5 h-3.5 text-cyan-500" />
+                <div>
+                  <p className="text-sm font-medium text-cyan-400">~{formatNumber(metrics.trafficPotential)}</p>
+                  <p className="text-[10px] text-slate-500 uppercase">Traffic/mo</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Data Source Indicator */}
+          {!isEditing && (
+            <div className="flex items-center gap-1 mt-2">
+              {category.dataSource === 'dataforseo' ? (
+                <span className="text-[10px] text-green-500 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
+                  Real data
+                </span>
+              ) : (
+                <span className="text-[10px] text-yellow-500 flex items-center gap-1">
+                  <Zap className="w-2.5 h-2.5" />
+                  Estimated
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </motion.div>
@@ -284,13 +353,13 @@ export const CategoryGenerationStep: React.FC = () => {
     }
   };
 
-  // Rotate educational facts during loading
-  const [currentFact, setCurrentFact] = useState(0);
+  // Rotate loading messages
+  const [currentMessage, setCurrentMessage] = useState(0);
   useEffect(() => {
     if (loading && categories.length === 0) {
       const interval = setInterval(() => {
-        setCurrentFact((prev) => (prev + 1) % EDUCATIONAL_FACTS.length);
-      }, 4000);
+        setCurrentMessage((prev) => (prev + 1) % LOADING_MESSAGES.length);
+      }, 3000);
       return () => clearInterval(interval);
     }
   }, [loading, categories.length]);
@@ -313,13 +382,12 @@ export const CategoryGenerationStep: React.FC = () => {
           <div className="flex items-start gap-3">
             <Lightbulb className="w-5 h-5 text-cyan-400 mt-0.5" />
             <div>
-              <h2 className="font-bold text-white mb-2">The Content Intelligence Principle</h2>
+              <h2 className="font-bold text-white mb-2">Build Your Content Empire</h2>
               <p className="text-sm text-slate-400 leading-relaxed">
-                "The goal is to have a landing page for every possible question a customer might ask an AI assistant."
+                Great content starts with smart categories. Think of each one as a home for stories your audience is already searching for.
               </p>
               <p className="text-sm text-slate-500 mt-2">
-                When someone asks ChatGPT, Claude, or Google Gemini about {profile?.industry.primary.toLowerCase() || 'your industry'},
-                you want YOUR content to be the answer.
+                The best categories feel like a gateway to exploration—inspiring both readers and writers alike.
               </p>
             </div>
           </div>
@@ -342,45 +410,38 @@ export const CategoryGenerationStep: React.FC = () => {
       >
         {(loading && categories.length === 0) ? (
           <div className="space-y-6">
-            {/* Educational Carousel */}
-            <div className="bg-slate-900/50 border border-slate-800 p-6 text-center">
-              <p className="text-xs text-slate-500 uppercase tracking-wider mb-3">
-                Did you know?
-              </p>
+            {/* Fun Loading Messages */}
+            <div className="bg-slate-900/50 border border-slate-800 p-8 text-center">
               <AnimatePresence mode="wait">
                 <motion.div
-                  key={currentFact}
+                  key={currentMessage}
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
                   transition={{ duration: 0.3 }}
+                  className="flex flex-col items-center"
                 >
-                  <p className="text-3xl font-bold text-cyan-400 mb-2">
-                    {EDUCATIONAL_FACTS[currentFact].stat}
-                  </p>
-                  <p className="text-slate-300 mb-2">
-                    {EDUCATIONAL_FACTS[currentFact].text}
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    — {EDUCATIONAL_FACTS[currentFact].source}
+                  <span className="text-4xl mb-3">
+                    {LOADING_MESSAGES[currentMessage].emoji}
+                  </span>
+                  <p className="text-lg text-slate-300 font-medium">
+                    {LOADING_MESSAGES[currentMessage].text}
                   </p>
                 </motion.div>
               </AnimatePresence>
-              <div className="flex items-center justify-center gap-2 mt-4">
-                {EDUCATIONAL_FACTS.map((_, i) => (
+              <div className="flex items-center justify-center gap-2 mt-6">
+                {LOADING_MESSAGES.map((_, i) => (
                   <div
                     key={i}
-                    className={`w-2 h-2 rounded-full transition-colors ${i === currentFact ? 'bg-cyan-500' : 'bg-slate-700'}`}
+                    className={`w-2 h-2 rounded-full transition-colors ${i === currentMessage ? 'bg-cyan-500' : 'bg-slate-700'}`}
                   />
                 ))}
               </div>
             </div>
 
-            {/* Loading message and estimate */}
+            {/* Time estimate */}
             <div className="text-center">
-              <div className="w-8 h-8 border-2 border-cyan-500/30 border-t-cyan-500 rounded-full animate-spin mx-auto mb-3" />
-              <p className="text-slate-400 font-medium">Generating category suggestions...</p>
-              <p className="text-xs text-slate-600 mt-1">Usually takes 10-15 seconds</p>
+              <p className="text-xs text-slate-600">Usually takes 10-15 seconds</p>
             </div>
 
             {/* Skeleton Loaders */}

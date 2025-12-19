@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Globe, ArrowRight, Sparkles, Shield, Zap, BarChart3 } from 'lucide-react';
 import { useOnboarding } from '../../contexts/OnboardingContext';
@@ -6,9 +7,18 @@ import { validateUrl } from '../../services/websiteAnalysisService';
 
 export const URLInputStep: React.FC = () => {
   const { startAnalysis, loading } = useOnboarding();
+  const [searchParams] = useSearchParams();
   const [url, setUrl] = useState('');
   const [error, setError] = useState('');
   const [isValid, setIsValid] = useState(false);
+
+  // Pre-fill URL from query parameter (from home page CTA)
+  useEffect(() => {
+    const urlParam = searchParams.get('url');
+    if (urlParam && !url) {
+      setUrl(urlParam);
+    }
+  }, [searchParams]);
 
   // Real-time URL validation
   useEffect(() => {
@@ -153,9 +163,25 @@ export const URLInputStep: React.FC = () => {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.3 }}
-        className="text-slate-500 text-sm mb-12"
+        className="text-slate-500 text-sm mb-8"
       >
         No signup required. Results in 60 seconds.
+      </motion.div>
+
+      {/* Demo Mode Button */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.35 }}
+        className="mb-12"
+      >
+        <button
+          onClick={() => startAnalysis('', true)}
+          disabled={loading}
+          className="text-cyan-400 hover:text-cyan-300 text-sm font-medium underline underline-offset-4 transition-colors disabled:opacity-50"
+        >
+          Or try with demo data
+        </button>
       </motion.div>
 
       {/* Features */}

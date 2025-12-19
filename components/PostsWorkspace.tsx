@@ -4,7 +4,7 @@ import { Post, Category, PostStatus, GenerationTask, TaskStatus, ContentType, To
 import {
     Search, Filter, User, CheckCircle, XCircle, Edit3, UploadCloud, Trash2,
     Loader2, ArrowRight, RefreshCw, Clock, Archive, X, GripVertical,
-    Sparkles, Calendar, Hash, Type, AlignLeft, ChevronRight, Layout, Rocket
+    Sparkles, Calendar, Hash, Type, AlignLeft, ChevronRight, Layout, Rocket, ArrowUp
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { TiptapEditor, TiptapViewer } from './TiptapEditor';
@@ -64,6 +64,81 @@ const STATUS_FILTERS = [
     { label: 'Rejected', value: PostStatus.REJECTED },
 ];
 
+const TAB_LABELS: Record<PostStatus, string> = {
+    [PostStatus.GENERATING]: 'Generating',
+    [PostStatus.NEEDS_REVIEW]: 'Review',
+    [PostStatus.APPROVED]: 'Approved',
+    [PostStatus.REJECTED]: 'Rejected',
+    [PostStatus.PENDING]: 'Pending',
+    [PostStatus.PUBLISHED]: 'Published',
+    [PostStatus.ARCHIVED]: 'Archived',
+};
+
+// Smart Empty State Guide Component
+interface EmptyStateGuideProps {
+    currentTab: PostStatus;
+    statusCounts: Record<PostStatus, number>;
+    onNavigate: (status: PostStatus) => void;
+    getNextTabWithContent: (currentTab: PostStatus) => PostStatus | null;
+}
+
+const EmptyStateGuide: React.FC<EmptyStateGuideProps> = ({
+    currentTab,
+    statusCounts,
+    onNavigate,
+    getNextTabWithContent,
+}) => {
+    const nextTab = getNextTabWithContent(currentTab);
+
+    if (!nextTab) {
+        // All tabs empty - guide to Categories
+        return (
+            <div className="p-8 text-center">
+                <div className="max-w-xs mx-auto">
+                    <div className="w-12 h-12 mx-auto mb-4 bg-slate-800 rounded-full flex items-center justify-center">
+                        <Sparkles size={20} className="text-slate-500" />
+                    </div>
+                    <p className="text-slate-400 text-sm mb-2">No content in the engine yet.</p>
+                    <p className="text-slate-600 text-xs">
+                        Head to <span className="text-cyan-400 font-medium">Categories</span> to generate titles first.
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="p-8 text-center"
+        >
+            <div className="flex flex-col items-center gap-3">
+                {/* Animated arrow pointing up toward tabs */}
+                <motion.div
+                    animate={{ y: [-5, 0, -5] }}
+                    transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
+                    className="text-cyan-500"
+                >
+                    <ArrowUp size={24} />
+                </motion.div>
+
+                <p className="text-slate-400 text-sm">
+                    Nothing here right now.
+                </p>
+
+                <button
+                    onClick={() => onNavigate(nextTab)}
+                    className="flex items-center gap-1 text-cyan-400 hover:text-cyan-300 text-sm font-medium transition-colors"
+                >
+                    Check {TAB_LABELS[nextTab]} ({statusCounts[nextTab]})
+                    <ChevronRight className="w-4 h-4" />
+                </button>
+            </div>
+        </motion.div>
+    );
+};
+
 export const PostsWorkspace: React.FC<Props> = ({
     posts, categories, tasks,
     onUpdateStatus, onUpdatePost, onDeletePost, onQueueContent,
@@ -80,6 +155,7 @@ export const PostsWorkspace: React.FC<Props> = ({
     const [saving, setSaving] = useState(false);
     const [isBuilding, setIsBuilding] = useState(false);
     const [isLaunching, setIsLaunching] = useState(false);
+    const [isApprovingAll, setIsApprovingAll] = useState(false);
     const [successModal, setSuccessModal] = useState<{ show: boolean; published: number; updated: number } | null>(null);
 
     const handleUpdate = async (id: string, updates: Partial<Post>) => {
@@ -135,6 +211,37 @@ export const PostsWorkspace: React.FC<Props> = ({
             return dateB - dateA;
         });
     }, [posts, statusFilter, searchQuery]);
+
+    // Count posts per status for badge display and smart navigation
+    const statusCounts = useMemo(() => ({
+        [PostStatus.GENERATING]: posts.filter(p => p.status === PostStatus.GENERATING).length,
+        [PostStatus.NEEDS_REVIEW]: posts.filter(p => p.status === PostStatus.NEEDS_REVIEW).length,
+        [PostStatus.APPROVED]: posts.filter(p => p.status === PostStatus.APPROVED).length,
+        [PostStatus.REJECTED]: posts.filter(p => p.status === PostStatus.REJECTED).length,
+        [PostStatus.PENDING]: posts.filter(p => p.status === PostStatus.PENDING).length,
+        [PostStatus.PUBLISHED]: posts.filter(p => p.status === PostStatus.PUBLISHED).length,
+        [PostStatus.ARCHIVED]: posts.filter(p => p.status === PostStatus.ARCHIVED).length,
+    }), [posts]);
+
+    // Smart navigation: find next tab with content based on workflow priority
+    const getNextTabWithContent = (currentTab: PostStatus): PostStatus | null => {
+        const flowPriority: Record<PostStatus, PostStatus[]> = {
+            [PostStatus.GENERATING]: [PostStatus.NEEDS_REVIEW, PostStatus.APPROVED, PostStatus.REJECTED],
+            [PostStatus.NEEDS_REVIEW]: [PostStatus.APPROVED, PostStatus.GENERATING, PostStatus.REJECTED],
+            [PostStatus.APPROVED]: [PostStatus.NEEDS_REVIEW, PostStatus.GENERATING, PostStatus.REJECTED],
+            [PostStatus.REJECTED]: [PostStatus.NEEDS_REVIEW, PostStatus.APPROVED, PostStatus.GENERATING],
+            // Handle other statuses gracefully
+            [PostStatus.PENDING]: [PostStatus.GENERATING, PostStatus.NEEDS_REVIEW, PostStatus.APPROVED],
+            [PostStatus.PUBLISHED]: [PostStatus.NEEDS_REVIEW, PostStatus.APPROVED, PostStatus.GENERATING],
+            [PostStatus.ARCHIVED]: [PostStatus.NEEDS_REVIEW, PostStatus.APPROVED, PostStatus.GENERATING],
+        };
+
+        const priorities = flowPriority[currentTab] || [PostStatus.NEEDS_REVIEW, PostStatus.APPROVED, PostStatus.GENERATING];
+        for (const status of priorities) {
+            if (statusCounts[status] > 0) return status;
+        }
+        return null; // All tabs empty
+    };
 
     const selectedPost = posts.find(p => p.id === selectedPostId);
 
@@ -330,6 +437,31 @@ export const PostsWorkspace: React.FC<Props> = ({
     // Count approved posts ready to launch
     const approvedCount = posts.filter(p => p.status === PostStatus.APPROVED).length;
 
+    // Count posts in review
+    const reviewCount = posts.filter(p => p.status === PostStatus.NEEDS_REVIEW).length;
+
+    // Approve all posts in review
+    const handleApproveAll = async () => {
+        const reviewPosts = posts.filter(p => p.status === PostStatus.NEEDS_REVIEW);
+        if (reviewPosts.length === 0) return;
+
+        setIsApprovingAll(true);
+        try {
+            const now = Timestamp.now();
+            for (const post of reviewPosts) {
+                await onUpdatePost(post.id, {
+                    status: PostStatus.APPROVED,
+                    approvedAt: now
+                });
+            }
+            setSelectedPostId(null);
+        } catch (error) {
+            console.error('Failed to approve all posts:', error);
+        } finally {
+            setIsApprovingAll(false);
+        }
+    };
+
     const handleImageUpdate = async (image: any) => {
         if (!selectedPostId) return;
         await onUpdatePost(selectedPostId, { heroImage: image });
@@ -350,7 +482,7 @@ export const PostsWorkspace: React.FC<Props> = ({
     return (
         <div
             ref={containerRef}
-            className={`flex h-full bg-slate-950 overflow-hidden ${isResizingLeft ? 'cursor-col-resize select-none' : ''}`}
+            className={`flex flex-1 h-full bg-slate-950 overflow-hidden ${isResizingLeft ? 'cursor-col-resize select-none' : ''}`}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
         >
@@ -386,16 +518,46 @@ export const PostsWorkspace: React.FC<Props> = ({
                                 key={f.value}
                                 onClick={() => setStatusFilter(f.value)}
                                 className={`
-                            px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap transition-colors border border-transparent
-                            ${statusFilter === f.value
+                                    flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap transition-colors border border-transparent
+                                    ${statusFilter === f.value
                                         ? 'bg-cyan-950 text-cyan-400 border-cyan-900'
                                         : 'text-slate-500 hover:bg-slate-900 hover:text-slate-300'}
-                        `}
+                                `}
                             >
                                 {f.label}
+                                {statusCounts[f.value] > 0 && (
+                                    <span className={`px-1.5 py-0.5 text-[9px] rounded-full ${
+                                        statusFilter === f.value
+                                            ? 'bg-cyan-900 text-cyan-300'
+                                            : 'bg-slate-700 text-slate-300'
+                                    }`}>
+                                        {statusCounts[f.value]}
+                                    </span>
+                                )}
                             </button>
                         ))}
                     </div>
+
+                    {/* Approve All Button - Only shown on Review tab */}
+                    {statusFilter === PostStatus.NEEDS_REVIEW && (
+                        <div className="mt-3 pt-3 border-t border-slate-800">
+                            <div className="space-y-2">
+                                <button
+                                    onClick={handleApproveAll}
+                                    disabled={isApprovingAll || reviewCount === 0}
+                                    className="w-full py-3 bg-teal-600 hover:bg-teal-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all"
+                                >
+                                    {isApprovingAll ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle size={16} />}
+                                    {isApprovingAll ? 'Approving...' : 'Approve All'}
+                                </button>
+                                <p className="text-[10px] text-slate-500 text-center">
+                                    {reviewCount > 0
+                                        ? `${reviewCount} Post${reviewCount !== 1 ? 's' : ''} Ready for Review`
+                                        : 'No posts to review'}
+                                </p>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Launch Button - Only shown on Approved tab */}
                     {statusFilter === PostStatus.APPROVED && (
@@ -417,9 +579,20 @@ export const PostsWorkspace: React.FC<Props> = ({
                                     </p>
                                 </div>
                             ) : (
-                                <div className="py-3 px-3 bg-slate-800/50 border border-slate-700 text-center">
-                                    <p className="text-xs text-slate-400">Deployment not configured</p>
-                                    <p className="text-[10px] text-slate-500 mt-1">Contact admin to set up deployment</p>
+                                <div className="space-y-2">
+                                    <button
+                                        onClick={() => alert('Your site is not yet ready. Contact support.')}
+                                        disabled={approvedCount === 0}
+                                        className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all"
+                                    >
+                                        <Rocket size={16} />
+                                        Launch Approved Posts
+                                    </button>
+                                    <p className="text-[10px] text-slate-500 text-center">
+                                        {approvedCount > 0
+                                            ? `${approvedCount} Post${approvedCount !== 1 ? 's' : ''} Approved`
+                                            : 'No posts approved'}
+                                    </p>
                                 </div>
                             )}
                         </div>
@@ -443,12 +616,12 @@ export const PostsWorkspace: React.FC<Props> = ({
                                 style={{ top: filteredPosts.filter(p => p.status === PostStatus.APPROVED).length * 100 }}
                             >
                                 <div className="relative">
-                                    <Rocket size={64} className="text-cyan-500 -rotate-45" />
+                                    <img src="/mission-icon.svg" alt="Launch" className="w-16 h-auto" />
                                     <motion.div
                                         initial={{ height: 32, opacity: 0.7 }}
                                         animate={{ height: 80, opacity: 0.95 }}
                                         transition={{ duration: 0.15, repeat: Infinity, repeatType: "reverse" }}
-                                        className="absolute top-12 left-6 w-5 bg-gradient-to-b from-orange-500 via-yellow-400 to-transparent blur-sm rounded-full"
+                                        className="absolute top-16 left-1/2 -translate-x-1/2 w-5 bg-gradient-to-b from-orange-500 via-yellow-400 to-transparent blur-sm rounded-full"
                                     />
                                 </div>
                             </motion.div>
@@ -456,9 +629,12 @@ export const PostsWorkspace: React.FC<Props> = ({
                     </AnimatePresence>
 
                     {filteredPosts.length === 0 ? (
-                        <div className="p-8 text-center text-slate-600 text-xs">
-                            No posts found.
-                        </div>
+                        <EmptyStateGuide
+                            currentTab={statusFilter}
+                            statusCounts={statusCounts}
+                            onNavigate={setStatusFilter}
+                            getNextTabWithContent={getNextTabWithContent}
+                        />
                     ) : (
                         <AnimatePresence mode="popLayout">
                             {filteredPosts.map((post, index) => {
@@ -516,7 +692,22 @@ export const PostsWorkspace: React.FC<Props> = ({
                                                 </div>
                                                 <span className="text-xs text-slate-600">{post.updatedAt?.toDate().toLocaleDateString()}</span>
                                             </div>
-                                            {activeTask && <Loader2 size={14} className="animate-spin text-cyan-500" />}
+                                            <div className="flex items-center gap-2">
+                                                {activeTask && <Loader2 size={14} className="animate-spin text-cyan-500" />}
+                                                {isApproved && (
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handleReject(post.id);
+                                                        }}
+                                                        disabled={rejectingPostId === post.id}
+                                                        className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-600/30 transition-all disabled:opacity-50"
+                                                        title="Reject this post"
+                                                    >
+                                                        {rejectingPostId === post.id ? <Loader2 size={10} className="animate-spin" /> : 'Reject'}
+                                                    </button>
+                                                )}
+                                            </div>
                                         </div>
                                     </motion.div>
                                 );
@@ -539,7 +730,7 @@ export const PostsWorkspace: React.FC<Props> = ({
 
 
                         {/* Content Stage */}
-                        <div className="flex-1 overflow-y-auto p-6 bg-slate-950 custom-scrollbar overflow-x-hidden">
+                        <div className="flex-1 overflow-y-auto p-4 bg-slate-950 custom-scrollbar overflow-x-hidden">
                             <div className="max-w-3xl mx-auto">
                                 {/* Preview Card */}
                                 <AnimatePresence mode="wait">
@@ -552,26 +743,23 @@ export const PostsWorkspace: React.FC<Props> = ({
                                         className="bg-slate-900 shadow-2xl border border-slate-800 overflow-hidden min-h-[800px]"
                                     >
                                     {/* Internal Header */}
-                                    <div className="p-8 pb-4 relative">
-                                        <h1 className="text-2xl font-bold text-slate-200 leading-snug mb-2">
+                                    <div className="px-6 pt-4 pb-2 relative">
+                                        <h1 className="text-2xl font-bold text-slate-200 leading-snug mb-1">
                                             {selectedPost.title}
                                         </h1>
-                                        <div className="text-xs text-slate-500 mb-4">
+                                        <div className="text-xs text-slate-500 mb-2">
                                             {getCategoryBreadcrumb(selectedPost.categoryId)}
                                         </div>
                                         <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                                            <div className="flex items-center gap-3">
-                                                <div className="w-10 h-10 bg-indigo-500/20 flex items-center justify-center text-indigo-300 font-bold">
+                                            <div className="flex items-center gap-2 text-sm text-slate-400">
+                                                <span className="w-6 h-6 bg-indigo-500/20 flex items-center justify-center text-indigo-300 text-[10px] font-bold">
                                                     {(selectedPost.editor || 'SJ').substring(0, 2).toUpperCase()}
-                                                </div>
-                                                <div>
-                                                    <div className="text-sm font-medium text-slate-300">
-                                                        By {selectedPost.editor || 'Sarah Jenkins'}
-                                                    </div>
-                                                    <div className="text-xs text-slate-500">
-                                                        {selectedPost.submittedAt ? selectedPost.submittedAt.toDate().toLocaleDateString() : new Date().toLocaleDateString()}
-                                                    </div>
-                                                </div>
+                                                </span>
+                                                <span>By {selectedPost.editor || 'Sarah Jenkins'}</span>
+                                                <span className="text-slate-600">•</span>
+                                                <span className="text-slate-500">
+                                                    {selectedPost.submittedAt ? selectedPost.submittedAt.toDate().toLocaleDateString() : new Date().toLocaleDateString()}
+                                                </span>
                                             </div>
                                             <div className="flex items-center gap-2">
                                                 <button
@@ -600,7 +788,7 @@ export const PostsWorkspace: React.FC<Props> = ({
                                     </div>
 
                                     {/* Body */}
-                                    <div className="px-8 pt-2 pb-6">
+                                    <div className="px-6 pt-1 pb-6">
                                         {selectedPost.status === PostStatus.GENERATING ? (
                                             <div className="flex flex-col items-center justify-center py-20 text-slate-500">
                                                 <Loader2 size={40} className="animate-spin text-cyan-500 mb-4" />
@@ -894,7 +1082,7 @@ export const PostsWorkspace: React.FC<Props> = ({
                         >
                             <div className="mb-6">
                                 <div className="w-20 h-20 mx-auto bg-cyan-500/20 rounded-full flex items-center justify-center mb-4">
-                                    <Rocket size={40} className="text-cyan-500" />
+                                    <img src="/mission-icon.svg" alt="Mission" className="w-12 h-auto" />
                                 </div>
                                 <h2 className="text-2xl font-bold text-white mb-2">Launch Successful!</h2>
                                 <p className="text-slate-400">

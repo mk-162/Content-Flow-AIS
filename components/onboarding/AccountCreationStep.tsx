@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Check, ChevronRight, Lock, Eye, EyeOff, Save } from 'lucide-react';
-import { doc, setDoc, collection, Timestamp } from 'firebase/firestore';
+import { Check, ChevronRight, Eye, EyeOff, Sparkles } from 'lucide-react';
+import { doc, setDoc, Timestamp, writeBatch } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { useOnboarding } from '../../contexts/OnboardingContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -11,11 +11,13 @@ import {
   OrganizationMember,
   Project,
   ProjectMember,
-  Category,
   SubscriptionTier,
   OrgMemberRole,
   ProjectMemberRole,
 } from '../../types';
+
+// Demo account constants
+const DEMO_FREE_CREDITS = 50;
 
 // ============================================================================
 // PASSWORD STRENGTH
@@ -41,8 +43,8 @@ const getPasswordStrength = (password: string): { strength: string; color: strin
 // ============================================================================
 
 export const AccountCreationStep: React.FC = () => {
-  const { session, nextStep, previousStep } = useOnboarding();
-  const { signUp } = useAuth();
+  const { session, previousStep, clearSession } = useOnboarding();
+  const { signUp, signInWithGoogle } = useAuth();
   const navigate = useNavigate();
 
   const [email, setEmail] = useState('');
@@ -52,14 +54,137 @@ export const AccountCreationStep: React.FC = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const categories = session?.categories.filter(c => c.selected) || [];
-  const subcategories = session?.subcategories || {};
-  const totalSubcategories = Object.values(subcategories).flat().filter(s => s.selected).length;
-  const projectName = session?.selectedProject?.name || 'Your Project';
-  const opportunityCount = session?.businessProfile?.opportunityScore.contentGaps || 0;
+  const channelName = session?.selectedChannel?.title || 'Your Channel';
+  const channelType = session?.selectedChannel?.channelType || 'blog';
+  const businessName = session?.businessProfile?.businessName || 'Your Business';
+  const totalKeywordDemand = session?.selectedChannel?.totalMonthlySearches || 0;
 
   const passwordStrength = getPasswordStrength(password);
   const passwordsMatch = password === confirmPassword && confirmPassword.length > 0;
+
+  // Shared function to create org, project, and redirect to workspace
+  const createAccountData = async (userId: string, displayName: string) => {
+    // Create organization for the new user
+    const orgId = `org_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const orgName = session?.businessProfile?.industry.primary
+      ? `${displayName}'s ${session.businessProfile.industry.primary}`
+      : `${displayName}'s Organization`;
+
+    const newOrg: Omit<Organization, 'id'> = {
+      name: orgName,
+      ownerId: userId,
+      subscriptionTier: SubscriptionTier.FREE,
+      settings: {
+        allowUserInvites: true,
+        maxProjects: 5,
+        maxUsersPerProject: 10,
+      },
+      // Demo account flag and credits
+      isDemo: true,
+      freeCredits: DEMO_FREE_CREDITS,
+      creditsUsed: 0,
+      // Populate defaults from business profile
+      targetAudience: session?.businessProfile?.targetAudience ? {
+        primary: session.businessProfile.targetAudience.primary,
+        secondary: session.businessProfile.targetAudience.secondary || '',
+        demographics: {
+          ageRange: session.businessProfile.targetAudience.demographics.ageRange,
+          income: session.businessProfile.targetAudience.demographics.income,
+          geographic: session.businessProfile.targetAudience.demographics.geographic
+        }
+      } : undefined,
+      brandCompliance: session?.businessProfile?.compliance || '',
+      brandMessage: session?.businessProfile?.businessSummary || '',
+      // Store ALL channel recommendations for upsell on dashboard
+      channelRecommendations: session?.channelRecommendations || [],
+      systemPrompts: {},
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    };
+
+    // Add user as organization owner
+    const orgMembershipId = `${orgId}_${userId}`;
+    const orgMembership: Omit<OrganizationMember, 'id'> = {
+      organizationId: orgId,
+      userId: userId,
+      role: OrgMemberRole.OWNER,
+      invitedBy: userId,
+      invitedAt: Timestamp.now(),
+      joinedAt: Timestamp.now(),
+    };
+
+    // Create project from channel selection
+    const projectId = `proj_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const selectedChannel = session?.selectedChannel;
+
+    const newProject: Omit<Project, 'id'> = {
+      organizationId: orgId,
+      name: selectedChannel?.title || 'My First Project',
+      description: selectedChannel?.description || 'Content project created during onboarding',
+      channelType: selectedChannel?.channelType || 'blog',
+      createdBy: userId,
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+      websiteUrl: session?.websiteUrl,
+      businessProfile: session?.businessProfile,
+      // Store channel recommendations for later use
+      channelRecommendations: session?.channelRecommendations,
+      suggestedCategories: selectedChannel?.suggestedCategories || [],
+      settings: {
+        autoPublish: false,
+      },
+    };
+
+    // Add user as project admin
+    const projMembershipId = `${projectId}_${userId}`;
+    const projMembership: Omit<ProjectMember, 'id'> = {
+      organizationId: orgId,
+      projectId,
+      userId: userId,
+      role: ProjectMemberRole.ADMIN,
+      addedBy: userId,
+      addedAt: Timestamp.now(),
+    };
+
+    // Use batch write for atomic document creation
+    // This ensures all documents are created together or none at all
+    // Prevents permissions issues from partial document creation
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'organizations', orgId), newOrg);
+    batch.set(doc(db, 'organizationMembers', orgMembershipId), orgMembership);
+    batch.set(doc(db, `organizations/${orgId}/projects`, projectId), newProject);
+    batch.set(doc(db, 'projectMembers', projMembershipId), projMembership);
+    await batch.commit();
+
+    // Set localStorage for current org and project so MainWorkspace loads them
+    localStorage.setItem('currentOrganizationId', orgId);
+    localStorage.setItem(`currentProjectId_${orgId}`, projectId);
+
+    // Set flag for new user onboarding tooltip
+    localStorage.setItem('showOnboardingTooltip', 'true');
+
+    // Clear onboarding session and redirect to workspace
+    clearSession();
+    navigate('/');
+  };
+
+  const handleGoogleSignUp = async () => {
+    setError('');
+    setLoading(true);
+
+    try {
+      const user = await signInWithGoogle();
+      if (!user) {
+        throw new Error('Google sign-in failed');
+      }
+
+      await createAccountData(user.id, user.displayName || user.email.split('@')[0]);
+    } catch (err: any) {
+      console.error('Google sign-up failed:', err);
+      setError(err.message || 'Failed to sign in with Google. Please try again.');
+      setLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -90,154 +215,7 @@ export const AccountCreationStep: React.FC = () => {
         throw new Error('Account creation failed');
       }
 
-      // Create organization for the new user
-      const orgId = `org_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const orgName = session?.businessProfile?.industry.primary
-        ? `${displayName}'s ${session.businessProfile.industry.primary}`
-        : `${displayName}'s Organization`;
-
-      const newOrg: Omit<Organization, 'id'> = {
-        name: orgName,
-        ownerId: newUser.id,
-        subscriptionTier: SubscriptionTier.FREE,
-        settings: {
-          allowUserInvites: true,
-          maxProjects: 5,
-          maxUsersPerProject: 10,
-        },
-        // Populate defaults from business profile
-        targetAudience: session?.businessProfile?.targetAudience ? {
-          primary: session.businessProfile.targetAudience.primary,
-          secondary: session.businessProfile.targetAudience.secondary || '',
-          demographics: {
-            ageRange: session.businessProfile.targetAudience.demographics.ageRange,
-            income: session.businessProfile.targetAudience.demographics.income,
-            geographic: session.businessProfile.targetAudience.demographics.geographic
-          }
-        } : undefined,
-        brandCompliance: session?.businessProfile?.compliance || '',
-        brandMessage: session?.businessProfile?.businessSummary || '',
-        systemPrompts: {},
-        createdAt: Timestamp.now(),
-        updatedAt: Timestamp.now(),
-      };
-
-      await setDoc(doc(db, 'organizations', orgId), newOrg);
-
-      // Add user as organization owner
-      const orgMembershipId = `${orgId}_${newUser.id}`;
-      const orgMembership: Omit<OrganizationMember, 'id'> = {
-        organizationId: orgId,
-        userId: newUser.id,
-        role: OrgMemberRole.OWNER,
-        invitedBy: newUser.id,
-        invitedAt: Timestamp.now(),
-        joinedAt: Timestamp.now(),
-      };
-
-      await setDoc(doc(db, 'organizationMembers', orgMembershipId), orgMembership);
-
-      // Create project from onboarding selection
-      const projectId = `proj_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const selectedProject = session?.selectedProject;
-
-      const newProject: Omit<Project, 'id'> = {
-        organizationId: orgId,
-        name: selectedProject?.name || 'My First Project',
-        description: selectedProject?.description || 'Content project created during onboarding',
-        createdBy: newUser.id,
-        createdAt: Timestamp.now(),
-        updatedAt: Timestamp.now(),
-        websiteUrl: session?.websiteUrl, // Store the analyzed website URL
-        businessProfile: session?.businessProfile, // Store the full business profile for context
-        settings: {
-          autoPublish: false,
-        },
-      };
-
-      await setDoc(doc(db, `organizations/${orgId}/projects`, projectId), newProject);
-
-      // Add user as project admin
-      const projMembershipId = `${projectId}_${newUser.id}`;
-      const projMembership: Omit<ProjectMember, 'id'> = {
-        organizationId: orgId,
-        projectId,
-        userId: newUser.id,
-        role: ProjectMemberRole.ADMIN,
-        addedBy: newUser.id,
-        addedAt: Timestamp.now(),
-      };
-
-      await setDoc(doc(db, 'projectMembers', projMembershipId), projMembership);
-
-      // Create categories from onboarding selection
-      const selectedCategories = session?.categories.filter(c => c.selected) || [];
-      const sessionSubcategories = session?.subcategories || {};
-
-      // Map to track session category ID -> Firestore category ID
-      const categoryIdMap = new Map<string, string>();
-
-      for (let i = 0; i < selectedCategories.length; i++) {
-        const cat = selectedCategories[i];
-        const categoryId = `cat_${Date.now()}_${i}_${Math.random().toString(36).substr(2, 9)}`;
-
-        // Store mapping for subcategory parent resolution
-        categoryIdMap.set(cat.id, categoryId);
-
-        const newCategory: Omit<Category, 'id'> = {
-          projectId,
-          organizationId: orgId,
-          name: cat.name,
-          description: cat.description || '',
-          parentId: null,
-          order: i,
-          createdAt: Timestamp.now(),
-          updatedAt: Timestamp.now(),
-        };
-
-        await setDoc(
-          doc(db, `organizations/${orgId}/projects/${projectId}/categories`, categoryId),
-          newCategory
-        );
-      }
-
-      // Create subcategories from onboarding selection
-      let subcategoryOrder = 0;
-      for (const [sessionCategoryId, subs] of Object.entries(sessionSubcategories)) {
-        const parentCategoryId = categoryIdMap.get(sessionCategoryId);
-        if (!parentCategoryId) continue; // Skip if parent category wasn't selected
-
-        for (const sub of subs) {
-          if (!sub.selected) continue; // Skip unselected subcategories
-
-          const subcategoryId = `cat_${Date.now()}_sub_${subcategoryOrder}_${Math.random().toString(36).substr(2, 9)}`;
-
-          const newSubcategory: Omit<Category, 'id'> = {
-            projectId,
-            organizationId: orgId,
-            name: sub.name,
-            description: sub.description || '',
-            parentId: parentCategoryId,
-            order: subcategoryOrder,
-            createdAt: Timestamp.now(),
-            updatedAt: Timestamp.now(),
-          };
-
-          await setDoc(
-            doc(db, `organizations/${orgId}/projects/${projectId}/categories`, subcategoryId),
-            newSubcategory
-          );
-
-          subcategoryOrder++;
-        }
-      }
-
-      // Set localStorage for current org and project so MainWorkspace loads them
-      localStorage.setItem('currentOrganizationId', orgId);
-      localStorage.setItem(`currentProjectId_${orgId}`, projectId);
-
-      // Move to next step
-      nextStep();
+      await createAccountData(newUser.id, displayName);
 
     } catch (err: any) {
       console.error('Account creation failed:', err);
@@ -252,7 +230,6 @@ export const AccountCreationStep: React.FC = () => {
       } else {
         setError(err.message || 'Failed to create account. Please try again.');
       }
-    } finally {
       setLoading(false);
     }
   };
@@ -265,16 +242,16 @@ export const AccountCreationStep: React.FC = () => {
         animate={{ opacity: 1, y: 0 }}
         className="text-center mb-8"
       >
-        <div className="inline-flex items-center gap-2 px-4 py-2 bg-slate-800 text-slate-400 text-sm mb-4">
-          <Save className="w-4 h-4" />
-          Save Your Progress
+        <div className="inline-flex items-center gap-2 px-4 py-2 bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-sm mb-4">
+          <Sparkles className="w-4 h-4" />
+          Almost There!
         </div>
 
         <h1 className="text-3xl font-bold mb-2">
           Create your free account
         </h1>
         <p className="text-slate-400">
-          Don't lose the work you've done
+          Get {DEMO_FREE_CREDITS} free credits to start building content
         </p>
       </motion.div>
 
@@ -290,33 +267,19 @@ export const AccountCreationStep: React.FC = () => {
             <div className="w-5 h-5 bg-green-500/20 flex items-center justify-center">
               <Check className="w-3 h-3 text-green-500" />
             </div>
-            <span className="text-slate-300">Business profile created</span>
+            <span className="text-slate-300">Business profile for <strong className="text-white">{businessName}</strong></span>
           </li>
           <li className="flex items-center gap-3 text-sm">
             <div className="w-5 h-5 bg-green-500/20 flex items-center justify-center">
               <Check className="w-3 h-3 text-green-500" />
             </div>
-            <span className="text-slate-300">{projectName} project</span>
+            <span className="text-slate-300">Channel: <strong className="text-white">{channelName}</strong></span>
           </li>
           <li className="flex items-center gap-3 text-sm">
             <div className="w-5 h-5 bg-green-500/20 flex items-center justify-center">
               <Check className="w-3 h-3 text-green-500" />
             </div>
-            <span className="text-slate-300">{categories.length} categories configured</span>
-          </li>
-          {totalSubcategories > 0 && (
-            <li className="flex items-center gap-3 text-sm">
-              <div className="w-5 h-5 bg-green-500/20 flex items-center justify-center">
-                <Check className="w-3 h-3 text-green-500" />
-              </div>
-              <span className="text-slate-300">{totalSubcategories} subcategories created</span>
-            </li>
-          )}
-          <li className="flex items-center gap-3 text-sm">
-            <div className="w-5 h-5 bg-green-500/20 flex items-center justify-center">
-              <Check className="w-3 h-3 text-green-500" />
-            </div>
-            <span className="text-slate-300">{opportunityCount} content opportunities identified</span>
+            <span className="text-slate-300">Targeting <strong className="text-cyan-400">{totalKeywordDemand.toLocaleString()}</strong> monthly searches</span>
           </li>
         </ul>
       </motion.div>
@@ -328,25 +291,59 @@ export const AccountCreationStep: React.FC = () => {
         transition={{ delay: 0.15 }}
         className="mb-6"
       >
-        <p className="text-sm text-slate-400 mb-3">Create a free account to:</p>
+        <p className="text-sm text-slate-400 mb-3">Your free account includes:</p>
         <ul className="space-y-2 text-sm text-slate-500">
           <li className="flex items-center gap-2">
             <Check className="w-4 h-4 text-cyan-500" />
-            Save everything you've built
+            <strong className="text-white">{DEMO_FREE_CREDITS} free AI credits</strong> to generate content
           </li>
           <li className="flex items-center gap-2">
             <Check className="w-4 h-4 text-cyan-500" />
-            Generate 5 AI-powered articles free
+            Category and subcategory generation
           </li>
           <li className="flex items-center gap-2">
             <Check className="w-4 h-4 text-cyan-500" />
-            Generate subcategories for your categories
+            Full access to workspace and tools
           </li>
           <li className="flex items-center gap-2">
             <Check className="w-4 h-4 text-cyan-500" />
-            Access your content opportunity roadmap
+            All onboarding data saved to your project
           </li>
         </ul>
+      </motion.div>
+
+      {/* Google Sign Up Button */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.18 }}
+        className="mb-4"
+      >
+        <button
+          onClick={handleGoogleSignUp}
+          disabled={loading}
+          className="w-full py-3 bg-white hover:bg-gray-100 text-gray-900 font-bold uppercase tracking-wider transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3"
+        >
+          <svg className="w-5 h-5" viewBox="0 0 24 24">
+            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+          </svg>
+          {loading ? 'Signing up...' : 'Continue with Google'}
+        </button>
+      </motion.div>
+
+      {/* Divider */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.19 }}
+        className="flex items-center gap-4 mb-4"
+      >
+        <div className="flex-1 h-px bg-slate-700" />
+        <span className="text-xs text-slate-500 uppercase">or</span>
+        <div className="flex-1 h-px bg-slate-700" />
       </motion.div>
 
       {/* Sign Up Form */}

@@ -26,7 +26,7 @@ export const AppShell: React.FC<AppShellProps> = ({
       <TopBar showProject={showProject} />
 
       {/* Main Content */}
-      <main className={`flex-1 overflow-hidden ${contentClassName}`}>
+      <main className={`flex-1 flex flex-col overflow-hidden ${contentClassName}`}>
         {children}
       </main>
     </div>

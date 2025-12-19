@@ -14,6 +14,14 @@ import {
   ExternalLink,
   Coins,
   Globe,
+  Sparkles,
+  FileText,
+  BookOpen,
+  HelpCircle,
+  Archive,
+  Building2,
+  Play,
+  Lock,
 } from 'lucide-react';
 import { useOrganization } from '../contexts/OrganizationContext';
 import { useProject } from '../contexts/ProjectContext';
@@ -24,7 +32,35 @@ import { QuickCreateProjectModal } from '../components/QuickCreateProjectModal';
 import { ProjectCreationHub } from '../components/project/ProjectCreationHub';
 import { CloneProjectModal, CloneOptions } from '../components/project/CloneProjectModal';
 import { AppShell } from '../components/layout';
-import { PostStatus } from '../types';
+import { PostStatus, ChannelType, ChannelRecommendation } from '../types';
+import { CreditManagementModal } from '../components/CreditManagementModal';
+import { UpgradeLimitModal } from '../components/UpgradeLimitModal';
+
+// Channel type icons and colors
+const CHANNEL_ICONS: Record<ChannelType, React.ElementType> = {
+  blog: FileText,
+  knowledge_base: HelpCircle,
+  guides: BookOpen,
+  archive: Archive,
+  industry_vertical: Building2,
+};
+
+const CHANNEL_COLORS: Record<ChannelType, string> = {
+  blog: 'cyan',
+  knowledge_base: 'emerald',
+  guides: 'violet',
+  archive: 'amber',
+  industry_vertical: 'rose',
+};
+
+// Demo site examples for templates
+const DEMO_SITES: Record<ChannelType, string> = {
+  blog: 'https://demo.missioncontent.io/blog',
+  knowledge_base: 'https://demo.missioncontent.io/kb',
+  guides: 'https://demo.missioncontent.io/guides',
+  archive: 'https://demo.missioncontent.io/archive',
+  industry_vertical: 'https://demo.missioncontent.io/vertical',
+};
 
 interface ProjectStats {
   categoryCount: number;
@@ -56,6 +92,25 @@ export const ProjectDashboard: React.FC = () => {
   const [orgCreating, setOrgCreating] = useState(false);
   const [orgError, setOrgError] = useState('');
   const [orgMemberCount, setOrgMemberCount] = useState(0);
+  const [showCreditModal, setShowCreditModal] = useState(false);
+
+  // Upgrade modal state
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [upgradeLimitType, setUpgradeLimitType] = useState<'categories' | 'articles' | 'credits' | 'projects'>('projects');
+
+  // Get saved channel recommendations from organization (saved during onboarding)
+  const savedRecommendations: ChannelRecommendation[] = currentOrg?.channelRecommendations || [];
+
+  // Filter out already-used channel types
+  const usedChannelTypes = projects.map(p => p.channelType).filter(Boolean);
+  const availableSuggestions = savedRecommendations.filter(
+    rec => !rec.selected && !usedChannelTypes.includes(rec.channelType)
+  );
+
+  // Demo account limits
+  const isDemo = currentOrg?.isDemo || false;
+  const projectLimit = isDemo ? 1 : (currentOrg?.settings?.maxProjects || 5);
+  const hasHitProjectLimit = projects.length >= projectLimit;
 
   // Fetch organization member count
   useEffect(() => {
@@ -136,6 +191,14 @@ export const ProjectDashboard: React.FC = () => {
     e.preventDefault();
     setError('');
 
+    // Check project limit for demo accounts
+    if (hasHitProjectLimit) {
+      setUpgradeLimitType('projects');
+      setShowUpgradeModal(true);
+      setShowCreateModal(false);
+      return;
+    }
+
     if (!newProjectName.trim()) {
       setError('Project name is required');
       return;
@@ -154,6 +217,18 @@ export const ProjectDashboard: React.FC = () => {
     } finally {
       setCreating(false);
     }
+  };
+
+  const handleCreateFromSuggestion = (suggestion: ChannelRecommendation) => {
+    if (hasHitProjectLimit) {
+      setUpgradeLimitType('projects');
+      setShowUpgradeModal(true);
+      return;
+    }
+    // Pre-fill creation with suggestion data
+    setNewProjectName(suggestion.title);
+    setNewProjectDescription(suggestion.description);
+    setShowCreateModal(true);
   };
 
   const handleCreateOrganization = async (e: React.FormEvent) => {
@@ -325,13 +400,17 @@ export const ProjectDashboard: React.FC = () => {
                 <Users className="w-4 h-4" />
                 <span className="text-sm">{orgMemberCount} Member{orgMemberCount !== 1 ? 's' : ''}</span>
               </div>
-              {/* Credits */}
-              <div className="flex items-center gap-2 text-slate-400">
+              {/* Credits - Clickable */}
+              <button
+                onClick={() => setShowCreditModal(true)}
+                className="flex items-center gap-2 text-slate-400 hover:text-indigo-400 hover:bg-indigo-500/10 px-2 py-1 -mx-2 transition-colors"
+                title="Manage credits"
+              >
                 <Coins className="w-4 h-4" />
                 <span className="text-sm">
                   {currentOrg.credits?.balance ?? 0} / {currentOrg.credits?.monthlyAllowance ?? 0}
                 </span>
-              </div>
+              </button>
               {/* Plan Badge - Clickable */}
               <button
                 onClick={() => navigate('/admin/settings', { state: { tab: 'billing' } })}
@@ -367,123 +446,258 @@ export const ProjectDashboard: React.FC = () => {
           </div>
 
           {/* Projects Grid */}
-          {projects.length === 0 ? (
-            <div className="text-center py-16">
-              <Folder className="w-16 h-16 text-slate-700 mx-auto mb-4" />
-              <h3 className="text-lg font-bold text-white mb-2">No projects yet</h3>
-              <p className="text-slate-500 text-sm mb-6">
-                Create your first project to start generating content
-              </p>
-              <button
-                onClick={() => setShowCreationHub(true)}
-                className="inline-flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500
-                         text-white text-xs font-bold uppercase tracking-wider py-2.5 px-5 transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                Create Project
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {projects.map((project) => {
-                const stats = projectStats[project.id] || {
-                  categoryCount: 0,
-                  titleCount: 0,
-                  reviewCount: 0,
-                  liveCount: 0,
-                  channelUrl: undefined,
-                };
+          <div className="mb-8">
+            <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4">Your Projects</h2>
+            {projects.length === 0 ? (
+              <div className="text-center py-16">
+                <Folder className="w-16 h-16 text-slate-700 mx-auto mb-4" />
+                <h3 className="text-lg font-bold text-white mb-2">No projects yet</h3>
+                <p className="text-slate-500 text-sm mb-6">
+                  Create your first project to start generating content
+                </p>
+                <button
+                  onClick={() => setShowCreationHub(true)}
+                  className="inline-flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500
+                           text-white text-xs font-bold uppercase tracking-wider py-2.5 px-5 transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Create Project
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {projects.map((project) => {
+                  const stats = projectStats[project.id] || {
+                    categoryCount: 0,
+                    titleCount: 0,
+                    reviewCount: 0,
+                    liveCount: 0,
+                    channelUrl: undefined,
+                  };
+                  const ChannelIcon = project.channelType ? CHANNEL_ICONS[project.channelType] : Folder;
 
-                return (
-                  <motion.div
-                    key={project.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="bg-slate-900/80 border border-slate-700/50 overflow-hidden
-                             hover:border-cyan-500/30 hover:bg-slate-900 transition-all duration-200 group
-                             shadow-lg shadow-black/20"
-                  >
-                    {/* Project Header */}
-                    <div className="p-5 bg-slate-800/30">
-                      <div className="flex items-start justify-between mb-2">
-                        <h3 className="text-base font-bold text-white">{project.name}</h3>
-                        <div className="flex items-center gap-2">
-                          {project.projectType && (
-                            <span className="px-2 py-1 bg-cyan-500/10 text-cyan-400 text-[10px] uppercase tracking-wider border border-cyan-500/20">
-                              {project.projectType.replace('_', ' ')}
-                            </span>
+                  return (
+                    <motion.div
+                      key={project.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="bg-slate-900/80 border border-slate-700/50 overflow-hidden
+                               hover:border-cyan-500/30 hover:bg-slate-900 transition-all duration-200 group
+                               shadow-lg shadow-black/20"
+                    >
+                      {/* Project Header */}
+                      <div className="p-5 bg-slate-800/30">
+                        <div className="flex items-start justify-between mb-2">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 bg-cyan-500/10 flex items-center justify-center">
+                              <ChannelIcon className="w-4 h-4 text-cyan-400" />
+                            </div>
+                            <h3 className="text-base font-bold text-white">{project.name}</h3>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {project.channelType && (
+                              <span className="px-2 py-1 bg-cyan-500/10 text-cyan-400 text-[10px] uppercase tracking-wider border border-cyan-500/20">
+                                {project.channelType.replace('_', ' ')}
+                              </span>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCurrentProject(project.id);
+                                navigate('/', { state: { initialScreen: 'settings' } });
+                              }}
+                              className="text-slate-500 hover:text-white opacity-0 group-hover:opacity-100 transition-all p-1 hover:bg-slate-700/50"
+                              title="Settings"
+                            >
+                              <Settings className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Channel URL - fixed height for consistent card layout */}
+                        <div className="h-5 mt-1">
+                          {stats.channelUrl && (
+                            <a
+                              href={`https://${stats.channelUrl}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-cyan-400 transition-colors"
+                            >
+                              <Globe className="w-3 h-3" />
+                              <span>{stats.channelUrl.replace(/^https?:\/\//, '')}</span>
+                              <ExternalLink className="w-3 h-3 opacity-50" />
+                            </a>
                           )}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setCurrentProject(project.id);
-                              navigate('/', { state: { initialScreen: 'settings' } });
-                            }}
-                            className="text-slate-500 hover:text-white opacity-0 group-hover:opacity-100 transition-all p-1 hover:bg-slate-700/50"
-                            title="Settings"
-                          >
-                            <Settings className="w-4 h-4" />
-                          </button>
                         </div>
                       </div>
 
-                      {/* Channel URL - only show if configured */}
-                      {stats.channelUrl && (
+                      {/* Stats Grid */}
+                      <div className="p-4 bg-slate-950/50">
+                        <div className="grid grid-cols-4 gap-2">
+                          <div className="bg-slate-800/50 p-3 text-center">
+                            <p className="text-xl font-bold text-white">{stats.categoryCount}</p>
+                            <p className="text-[9px] text-slate-500 uppercase tracking-widest mt-1">Categories</p>
+                          </div>
+                          <div className="bg-slate-800/50 p-3 text-center">
+                            <p className="text-xl font-bold text-white">{stats.titleCount}</p>
+                            <p className="text-[9px] text-slate-500 uppercase tracking-widest mt-1">Titles</p>
+                          </div>
+                          <div className="bg-amber-500/10 p-3 text-center border border-amber-500/20">
+                            <p className="text-xl font-bold text-amber-400">{stats.reviewCount}</p>
+                            <p className="text-[9px] text-amber-500/70 uppercase tracking-widest mt-1">Review</p>
+                          </div>
+                          <div className="bg-emerald-500/10 p-3 text-center border border-emerald-500/20">
+                            <p className="text-xl font-bold text-emerald-400">{stats.liveCount}</p>
+                            <p className="text-[9px] text-emerald-500/70 uppercase tracking-widest mt-1">Live</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Footer */}
+                      <div className="px-5 py-4 bg-slate-800/20 flex items-center justify-between border-t border-slate-700/30">
+                        <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                          <Calendar className="w-3.5 h-3.5" />
+                          <span>{formatDate(project.createdAt)}</span>
+                        </div>
+                        <button
+                          onClick={() => handleSelectProject(project.id)}
+                          className="flex items-center gap-1.5 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold uppercase tracking-wider transition-colors"
+                        >
+                          <span>Open</span>
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Suggestions Section - from onboarding channel recommendations */}
+          {availableSuggestions.length > 0 && (
+            <div className="mb-8">
+              <div className="flex items-center gap-2 mb-4">
+                <Sparkles className="w-4 h-4 text-cyan-400" />
+                <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Suggested Channels</h2>
+                <span className="text-xs text-slate-500">from your onboarding analysis</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {availableSuggestions.map((suggestion) => {
+                  const IconComponent = CHANNEL_ICONS[suggestion.channelType];
+                  const colorName = CHANNEL_COLORS[suggestion.channelType];
+                  const demoUrl = DEMO_SITES[suggestion.channelType];
+
+                  return (
+                    <motion.div
+                      key={suggestion.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="bg-slate-900/50 border border-dashed border-slate-700 p-5 hover:border-slate-600 transition-all"
+                    >
+                      <div className="flex items-start justify-between mb-3">
+                        <div className={`px-2 py-1 text-xs font-medium uppercase tracking-wider bg-${colorName}-500/10 text-${colorName}-400 border border-${colorName}-500/20`}>
+                          <div className="flex items-center gap-1.5">
+                            <IconComponent className="w-3 h-3" />
+                            {suggestion.channelType.replace('_', ' ')}
+                          </div>
+                        </div>
+                        {hasHitProjectLimit && (
+                          <div className="flex items-center gap-1 text-amber-500 text-xs">
+                            <Lock className="w-3 h-3" />
+                            <span>Upgrade</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <h3 className="text-base font-bold text-white mb-2">{suggestion.title}</h3>
+                      <p className="text-xs text-slate-400 leading-relaxed mb-4 line-clamp-2">
+                        {suggestion.description}
+                      </p>
+
+                      <div className="flex items-center gap-2 mb-4 text-xs text-slate-500">
+                        <span>{suggestion.totalMonthlySearches?.toLocaleString() || 0} monthly searches</span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleCreateFromSuggestion(suggestion)}
+                          className={`flex-1 py-2 text-xs font-bold uppercase tracking-wider transition-colors flex items-center justify-center gap-1.5 ${
+                            hasHitProjectLimit
+                              ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                              : 'bg-cyan-600 hover:bg-cyan-500 text-white'
+                          }`}
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Create
+                        </button>
                         <a
-                          href={`https://${stats.channelUrl}`}
+                          href={demoUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-cyan-400 transition-colors mt-1"
+                          className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5"
                         >
-                          <Globe className="w-3 h-3" />
-                          <span>{stats.channelUrl.replace(/^https?:\/\//, '')}</span>
-                          <ExternalLink className="w-3 h-3 opacity-50" />
+                          <Play className="w-3.5 h-3.5" />
+                          Demo
                         </a>
-                      )}
-                    </div>
-
-                    {/* Stats Grid */}
-                    <div className="p-4 bg-slate-950/50">
-                      <div className="grid grid-cols-4 gap-2">
-                        <div className="bg-slate-800/50 p-3 text-center">
-                          <p className="text-xl font-bold text-white">{stats.categoryCount}</p>
-                          <p className="text-[9px] text-slate-500 uppercase tracking-widest mt-1">Categories</p>
-                        </div>
-                        <div className="bg-slate-800/50 p-3 text-center">
-                          <p className="text-xl font-bold text-white">{stats.titleCount}</p>
-                          <p className="text-[9px] text-slate-500 uppercase tracking-widest mt-1">Titles</p>
-                        </div>
-                        <div className="bg-amber-500/10 p-3 text-center border border-amber-500/20">
-                          <p className="text-xl font-bold text-amber-400">{stats.reviewCount}</p>
-                          <p className="text-[9px] text-amber-500/70 uppercase tracking-widest mt-1">Review</p>
-                        </div>
-                        <div className="bg-emerald-500/10 p-3 text-center border border-emerald-500/20">
-                          <p className="text-xl font-bold text-emerald-400">{stats.liveCount}</p>
-                          <p className="text-[9px] text-emerald-500/70 uppercase tracking-widest mt-1">Live</p>
-                        </div>
                       </div>
-                    </div>
-
-                    {/* Footer */}
-                    <div className="px-5 py-4 bg-slate-800/20 flex items-center justify-between border-t border-slate-700/30">
-                      <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
-                        <Calendar className="w-3.5 h-3.5" />
-                        <span>{formatDate(project.createdAt)}</span>
-                      </div>
-                      <button
-                        onClick={() => handleSelectProject(project.id)}
-                        className="flex items-center gap-1.5 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold uppercase tracking-wider transition-colors"
-                      >
-                        <span>Open</span>
-                        <ChevronRight className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </motion.div>
-                );
-              })}
+                    </motion.div>
+                  );
+                })}
+              </div>
             </div>
           )}
+
+          {/* Template Card - How to create next project */}
+          <div className="mb-8">
+            <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4">Templates</h2>
+            <div className="bg-gradient-to-br from-slate-800/50 to-slate-900/50 border border-slate-700 p-6">
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 bg-cyan-500/10 flex items-center justify-center flex-shrink-0">
+                  <Zap className="w-6 h-6 text-cyan-400" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-white mb-2">Create Your Next Channel</h3>
+                  <p className="text-sm text-slate-400 mb-4">
+                    Use our AI-powered wizard to analyze any website and generate a complete content strategy.
+                    Get category suggestions, keyword opportunities, and a ready-to-use project structure.
+                  </p>
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      onClick={() => {
+                        if (hasHitProjectLimit) {
+                          setUpgradeLimitType('projects');
+                          setShowUpgradeModal(true);
+                        } else {
+                          // Use existing mode to skip URL analysis - uses stored business profile
+                          navigate('/onboarding?mode=existing');
+                        }
+                      }}
+                      className={`py-2.5 px-5 text-xs font-bold uppercase tracking-wider transition-colors flex items-center gap-2 ${
+                        hasHitProjectLimit
+                          ? 'bg-slate-700 text-slate-400'
+                          : 'bg-cyan-600 hover:bg-cyan-500 text-white'
+                      }`}
+                    >
+                      {hasHitProjectLimit && <Lock className="w-3.5 h-3.5" />}
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Generate with AI
+                    </button>
+                    <a
+                      href="https://demo.missioncontent.io"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="py-2.5 px-5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold uppercase tracking-wider transition-colors flex items-center gap-2"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      View Example Sites
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -598,6 +812,21 @@ export const ProjectDashboard: React.FC = () => {
           await cloneProject(sourceProjectId, newName, newDescription, options);
           navigate('/');
         }}
+      />
+
+      {/* Credit Management Modal */}
+      <CreditManagementModal
+        isOpen={showCreditModal}
+        onClose={() => setShowCreditModal(false)}
+      />
+
+      {/* Upgrade Limit Modal */}
+      <UpgradeLimitModal
+        isOpen={showUpgradeModal}
+        onClose={() => setShowUpgradeModal(false)}
+        limitType={upgradeLimitType}
+        currentUsage={projects.length}
+        limit={projectLimit}
       />
     </AppShell>
   );

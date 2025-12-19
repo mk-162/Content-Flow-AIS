@@ -63,7 +63,7 @@ export const TopBar: React.FC<TopBarProps> = ({ showProject = true }) => {
             onClick={() => navigate('/projects')}
             className="hover:opacity-80 transition-opacity"
           >
-            <img src={MissionLogo} alt="MissionContent" className="h-12" />
+            <img src={MissionLogo} alt="MissionContent" className="h-14" />
           </button>
 
           {/* Organization Dropdown */}

@@ -1,14 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useNavigate } from 'react-router-dom';
-import { doc, setDoc, Timestamp } from 'firebase/firestore';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { doc, setDoc, writeBatch, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { OnboardingProvider, useOnboarding } from '../contexts/OnboardingContext';
 import { useAuth } from '../contexts/AuthContext';
-import { Category } from '../types';
+import { useOrganization } from '../contexts/OrganizationContext';
+import { useProject } from '../contexts/ProjectContext';
+import { Category, Project, ProjectMember, ProjectMemberRole, BusinessProfile } from '../types';
 import { URLInputStep } from '../components/onboarding/URLInputStep';
 import { AnalysisLoadingStep } from '../components/onboarding/AnalysisLoadingStep';
 import { ProfileReviewStep } from '../components/onboarding/ProfileReviewStep';
+import { ChannelRecommendationStep } from '../components/onboarding/ChannelRecommendationStep';
 import { ProjectSelectionStep } from '../components/onboarding/ProjectSelectionStep';
 import { CategoryGenerationStep } from '../components/onboarding/CategoryGenerationStep';
 import { AccountCreationStep } from '../components/onboarding/AccountCreationStep';
@@ -25,6 +28,7 @@ const StepComponents: Record<OnboardingStep, React.FC> = {
   url_input: URLInputStep,
   analyzing: AnalysisLoadingStep,
   profile_review: ProfileReviewStep,
+  channel_recommendations: ChannelRecommendationStep,
   project_selection: ProjectSelectionStep,
   category_generation: CategoryGenerationStep,
   account_creation: AccountCreationStep,
@@ -38,25 +42,39 @@ const StepComponents: Record<OnboardingStep, React.FC> = {
 // PROGRESS INDICATOR
 // ============================================================================
 
+// Steps for new users (not logged in)
 const CLIENT_MODE_STEPS: OnboardingStep[] = [
   'url_input',
   'profile_review',
-  'project_selection',
-  'category_generation',
-  'subcategory_generation',
+  'channel_recommendations',
   'account_creation',
 ];
 
+// Steps for existing users (logged in, creating new project)
+const EXISTING_USER_STEPS: OnboardingStep[] = [
+  'profile_review',
+  'channel_recommendations',
+];
+
+// Legacy project mode (same as client for now)
 const PROJECT_MODE_STEPS: OnboardingStep[] = [
   'url_input',
   'profile_review',
-  'category_generation',
-  'subcategory_generation',
+  'channel_recommendations',
+  'account_creation',
 ];
+
+// Get visible steps based on mode
+const getVisibleSteps = (mode: string): OnboardingStep[] => {
+  if (mode === 'existing') return EXISTING_USER_STEPS;
+  if (mode === 'project') return PROJECT_MODE_STEPS;
+  return CLIENT_MODE_STEPS;
+};
 
 const STEP_LABELS: Record<string, string> = {
   url_input: 'Analyze',
   profile_review: 'Profile',
+  channel_recommendations: 'Channels',
   project_selection: 'Project',
   category_generation: 'Categories',
   subcategory_generation: 'Subcategories',
@@ -76,13 +94,50 @@ const getDemandColor = (level: string) => {
   }
 };
 
+// ============================================================================
+// STEP COUNTER (Header Badge)
+// ============================================================================
+
+const StepCounter: React.FC = () => {
+  const { session } = useOnboarding();
+  if (!session) return null;
+
+  const currentStep = session.currentStep;
+  const mode = session.mode || 'client';
+  const VISIBLE_STEPS = getVisibleSteps(mode);
+  const currentIndex = VISIBLE_STEPS.indexOf(currentStep);
+
+  // Don't show counter on analyzing, demo_output, complete, or workspace_intro steps
+  if (
+    currentStep === 'analyzing' ||
+    currentStep === 'demo_output' ||
+    currentStep === 'workspace_intro' ||
+    currentStep === 'complete' ||
+    currentIndex < 0
+  ) {
+    return null;
+  }
+
+  const totalSteps = VISIBLE_STEPS.length;
+  const stepNumber = currentIndex + 1;
+
+  return (
+    <div className="hidden sm:flex items-center gap-2 ml-4 pl-4 border-l border-slate-700">
+      <span className="text-sm text-slate-500">
+        Step <span className="text-white font-medium">{stepNumber}</span> of{' '}
+        <span className="text-white font-medium">{totalSteps}</span>
+      </span>
+    </div>
+  );
+};
+
 const ProgressIndicator: React.FC = () => {
   const { session } = useOnboarding();
   if (!session) return null;
 
   const currentStep = session.currentStep;
   const mode = session.mode || 'client';
-  const VISIBLE_STEPS = mode === 'project' ? PROJECT_MODE_STEPS : CLIENT_MODE_STEPS;
+  const VISIBLE_STEPS = getVisibleSteps(mode);
   const currentIndex = VISIBLE_STEPS.indexOf(currentStep);
 
   // Don't show progress on analyzing, demo_output, or workspace_intro steps
@@ -139,26 +194,161 @@ const ProgressIndicator: React.FC = () => {
 // ============================================================================
 
 const OnboardingContent: React.FC = () => {
-  const { session, error, clearSession } = useOnboarding();
-  const { user } = useAuth();
+  const { session, error, clearSession, initializeWithExistingProfile, nextStep } = useOnboarding();
+  const { user, loading: authLoading } = useAuth();
+  const { currentOrg, loading: orgLoading } = useOrganization();
+  const { projects, loading: projectsLoading } = useProject();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [isSaving, setIsSaving] = useState(false);
   const [showResumePrompt, setShowResumePrompt] = useState(false);
   const [checkComplete, setCheckComplete] = useState(false);
+  const [existingUserInitialized, setExistingUserInitialized] = useState(false);
 
   const currentStep = session?.currentStep || 'url_input';
   const CurrentStepComponent = StepComponents[currentStep];
 
+  // Check if this is an existing user creating a new project (from URL param or logged-in state)
+  const isExistingUserMode = searchParams.get('mode') === 'existing';
+
+  // For existing user mode, wait for all data to load
+  const isLoadingExistingData = isExistingUserMode && (authLoading || orgLoading || projectsLoading);
+
+  // Initialize existing user with their stored business profile
+  useEffect(() => {
+    // Don't run until all data is loaded
+    if (isExistingUserMode && !isLoadingExistingData && !existingUserInitialized) {
+      console.log('[Onboarding] Existing mode - checking for profile...', {
+        user: !!user,
+        currentOrg: !!currentOrg,
+        projects: projects.length,
+        projectsWithProfile: projects.filter(p => p.businessProfile).length
+      });
+
+      if (!user || !currentOrg) {
+        // User not logged in or no org - redirect to login
+        console.warn('[Onboarding] No user or org for existing mode, redirecting to login');
+        navigate('/login');
+        return;
+      }
+
+      // Get business profile from first project that has one
+      const existingProject = projects.find(p => p.businessProfile);
+      let existingProfile = existingProject?.businessProfile;
+
+      // If no project has businessProfile, try to construct one from org data
+      if (!existingProfile && currentOrg) {
+        console.log('[Onboarding] No project profile found, constructing from org data...');
+
+        // Build a minimal profile from organization data if available
+        if (currentOrg.targetAudience || currentOrg.brandMessage || currentOrg.website) {
+          existingProfile = {
+            id: `profile_${Date.now()}`,
+            websiteUrl: currentOrg.website || projects[0]?.websiteUrl || '',
+            analyzedAt: Timestamp.now(),
+            businessName: currentOrg.name || '',
+            businessSummary: currentOrg.brandMessage || '',
+            industry: {
+              primary: '',
+              secondary: '',
+              tertiary: '',
+              confidence: 50,
+            },
+            targetAudience: currentOrg.targetAudience || {
+              primary: '',
+              demographics: { ageRange: '', income: '', geographic: [] },
+            },
+            offerings: {
+              type: 'services',
+              categories: [],
+            },
+            brandVoice: {
+              tone: [],
+              style: '',
+              personality: [],
+              uniqueSellingPoints: [],
+            },
+            contentStyle: {
+              types: [],
+              averageLength: 'medium',
+              technicalLevel: 'intermediate',
+            },
+            opportunityScore: {
+              overall: 50,
+              contentGaps: 0,
+              potentialTraffic: 'Unknown',
+            },
+          } as BusinessProfile;
+        }
+      }
+
+      // For existing users, ALWAYS go to profile review - create minimal profile if needed
+      if (!existingProfile) {
+        console.log('[Onboarding] Creating minimal profile for existing user...');
+        existingProfile = {
+          id: `profile_${Date.now()}`,
+          websiteUrl: projects[0]?.websiteUrl || currentOrg.website || '',
+          analyzedAt: Timestamp.now(),
+          businessName: currentOrg.name?.replace(/'s Organization$/, '') || '',
+          businessSummary: currentOrg.brandMessage || '',
+          industry: {
+            primary: '',
+            secondary: '',
+            tertiary: '',
+            confidence: 0,
+          },
+          targetAudience: currentOrg.targetAudience || {
+            primary: '',
+            demographics: { ageRange: '', income: '', geographic: [] },
+          },
+          offerings: {
+            type: 'services',
+            categories: [],
+          },
+          brandVoice: {
+            tone: [],
+            style: '',
+            personality: [],
+            uniqueSellingPoints: [],
+          },
+          contentStyle: {
+            types: [],
+            averageLength: 'medium',
+            technicalLevel: 'intermediate',
+          },
+          opportunityScore: {
+            overall: 0,
+            contentGaps: 0,
+            potentialTraffic: 'Not analyzed yet',
+          },
+        } as BusinessProfile;
+      }
+
+      console.log('[Onboarding] Initializing with profile for existing user...');
+      // Clear any existing session first, then initialize with existing profile
+      clearSession();
+      // Small delay to ensure session is cleared before reinitializing
+      setTimeout(() => {
+        initializeWithExistingProfile(
+          existingProfile!,
+          currentOrg.id,
+          currentOrg.channelRecommendations || []
+        );
+        setExistingUserInitialized(true);
+      }, 100);
+    }
+  }, [isExistingUserMode, isLoadingExistingData, user, currentOrg, projects, existingUserInitialized, initializeWithExistingProfile, clearSession, navigate]);
+
   // Check for existing session on mount (once session is loaded)
   useEffect(() => {
-    if (session && !checkComplete) {
+    if (session && !checkComplete && !isExistingUserMode) {
       // Only prompt if we have a URL and aren't on the first step
       if (session.currentStep !== 'url_input' && session.websiteUrl) {
         setShowResumePrompt(true);
       }
       setCheckComplete(true);
     }
-  }, [session, checkComplete]);
+  }, [session, checkComplete, isExistingUserMode]);
 
   const handleStartFresh = () => {
     clearSession();
@@ -273,6 +463,84 @@ const OnboardingContent: React.FC = () => {
     saveProjectData();
   }, [currentStep, session, user, isSaving, clearSession, navigate]);
 
+  // Handle existing user mode completion - create project in existing org
+  useEffect(() => {
+    const createProjectForExistingUser = async () => {
+      if (
+        currentStep === 'complete' &&
+        session?.mode === 'existing' &&
+        session?.organizationId &&
+        user &&
+        !isSaving
+      ) {
+        setIsSaving(true);
+
+        try {
+          const orgId = session.organizationId;
+          const projectId = `proj_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          const selectedChannel = session.selectedChannel;
+
+          // Create new project from channel selection
+          const newProject: Omit<Project, 'id'> = {
+            organizationId: orgId,
+            name: selectedChannel?.title || 'New Content Project',
+            description: selectedChannel?.description || 'Created via AI-powered channel recommendation',
+            createdBy: user.id,
+            createdAt: Timestamp.now(),
+            updatedAt: Timestamp.now(),
+            channelType: selectedChannel?.channelType,
+            channelRecommendations: session.channelRecommendations,
+            suggestedCategories: selectedChannel?.suggestedCategories || [],
+            businessProfile: session.businessProfile || undefined,
+            settings: { autoPublish: false },
+          };
+
+          // Create project membership
+          const projMembershipId = `${projectId}_${user.id}`;
+          const projMembership: Omit<ProjectMember, 'id'> = {
+            organizationId: orgId,
+            projectId,
+            userId: user.id,
+            role: ProjectMemberRole.ADMIN,
+            addedBy: user.id,
+            addedAt: Timestamp.now(),
+          };
+
+          // Use batch write for atomic creation
+          const batch = writeBatch(db);
+          batch.set(doc(db, `organizations/${orgId}/projects`, projectId), newProject);
+          batch.set(doc(db, 'projectMembers', projMembershipId), projMembership);
+          await batch.commit();
+
+          // Set current project in localStorage
+          localStorage.setItem(`currentProjectId_${orgId}`, projectId);
+
+          // Clear session and redirect to workspace
+          clearSession();
+          navigate('/');
+        } catch (err) {
+          console.error('[OnboardingFlow] Error creating project for existing user:', err);
+          setIsSaving(false);
+        }
+      }
+    };
+
+    createProjectForExistingUser();
+  }, [currentStep, session, user, isSaving, clearSession, navigate]);
+
+  // Show loading state while loading existing user data
+  if (isExistingUserMode && (isLoadingExistingData || !existingUserInitialized)) {
+    return (
+      <div className="h-screen bg-[#0f172a] flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-12 h-12 border-3 border-cyan-500/30 border-t-cyan-500 rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-white font-medium">Loading your business profile...</p>
+          <p className="text-sm text-slate-500 mt-1">Preparing project wizard</p>
+        </div>
+      </div>
+    );
+  }
+
   // Show loading state while saving project data
   if (isSaving) {
     return (
@@ -296,6 +564,7 @@ const OnboardingContent: React.FC = () => {
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <img src={MissionLogo} alt="MissionContent" className="h-10" />
+            <StepCounter />
           </div>
           <div className="flex items-center gap-4">
             {user ? (
@@ -329,7 +598,6 @@ const OnboardingContent: React.FC = () => {
         }}
       >
         <div className="max-w-4xl mx-auto px-4 py-8 pb-24">
-          <ProgressIndicator />
 
           {/* Resume Prompt Modal */}
           <AnimatePresence>

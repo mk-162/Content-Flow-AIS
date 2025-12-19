@@ -190,14 +190,26 @@ export const CreditManagementModal: React.FC<CreditManagementModalProps> = ({ is
                         </div>
 
                         <div className="mt-4 p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-lg">
-                            <h5 className="text-xs font-bold text-indigo-300 mb-1">Usage Costs</h5>
+                            <h5 className="text-xs font-bold text-indigo-300 mb-2">Usage Costs</h5>
                             <div className="flex justify-between text-xs text-slate-400">
+                                <span>Title Generation</span>
+                                <span className="text-slate-200">{CREDIT_COSTS.TITLE_GENERATION} Credit</span>
+                            </div>
+                            <div className="flex justify-between text-xs text-slate-400 mt-1">
                                 <span>Article Generation</span>
                                 <span className="text-slate-200">{CREDIT_COSTS.ARTICLE_GENERATION} Credit</span>
                             </div>
                             <div className="flex justify-between text-xs text-slate-400 mt-1">
                                 <span>Image Generation</span>
                                 <span className="text-slate-200">{CREDIT_COSTS.IMAGE_GENERATION} Credits</span>
+                            </div>
+                            <div className="mt-3 pt-3 border-t border-indigo-500/20">
+                                <button
+                                    onClick={() => {/* TODO: Navigate to full statement */}}
+                                    className="w-full text-center text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                                >
+                                    View Full Statement →
+                                </button>
                             </div>
                         </div>
                     </div>

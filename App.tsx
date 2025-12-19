@@ -13,9 +13,12 @@ import { ProjectDashboard } from './pages/ProjectDashboard';
 import { MainWorkspace } from './pages/MainWorkspace';
 import { Settings } from './pages/Settings';
 import { AdminPrompts } from './pages/AdminPrompts';
+import { AdminPromptsReference } from './pages/admin/AdminPromptsReference';
 import { OnboardingFlow } from './pages/OnboardingFlow';
 import { ProjectOnboardingFlow } from './pages/ProjectOnboardingFlow';
+import { HomePage } from './pages/HomePage';
 import { AdminDashboard, AdminOverview, AdminUsers, AdminOrganizations, AdminDeployments, AdminSettings } from './pages/admin';
+import { UpgradePage } from './pages/UpgradePage';
 import { GlobalRole } from './types';
 
 const App: React.FC = () => {
@@ -36,6 +39,7 @@ const App: React.FC = () => {
               <ProjectProvider>
                 <Routes>
                 {/* Public Routes */}
+                <Route path="/home" element={<HomePage />} />
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/signup" element={<SignUpPage />} />
                 <Route path="/forgot-password" element={<ForgotPasswordPage />} />
@@ -74,6 +78,14 @@ const App: React.FC = () => {
                     </ProtectedRoute>
                   }
                 />
+                <Route
+                  path="/upgrade"
+                  element={
+                    <ProtectedRoute>
+                      <UpgradePage />
+                    </ProtectedRoute>
+                  }
+                />
                 {/* Redirect old organization settings URL */}
                 <Route
                   path="/settings/organization"
@@ -93,6 +105,7 @@ const App: React.FC = () => {
                   <Route path="organizations" element={<AdminOrganizations />} />
                   <Route path="deployments" element={<AdminDeployments />} />
                   <Route path="prompts" element={<AdminPrompts />} />
+                  <Route path="prompts-reference" element={<AdminPromptsReference />} />
                   <Route path="settings" element={<AdminSettings />} />
                 </Route>
 

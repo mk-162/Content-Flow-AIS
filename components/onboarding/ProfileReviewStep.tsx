@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   Building2,
   Users,
@@ -11,9 +11,70 @@ import {
   RefreshCw,
   Check,
   Info,
+  HelpCircle,
+  Search,
+  Target,
+  Lightbulb,
+  TrendingUp,
+  AlertTriangle,
+  Zap,
+  Award,
 } from 'lucide-react';
 import { useOnboarding } from '../../contexts/OnboardingContext';
 import { BusinessProfile } from '../../types';
+
+// ============================================================================
+// TOOLTIP COMPONENT
+// ============================================================================
+
+interface TooltipProps {
+  content: React.ReactNode;
+  children: React.ReactNode;
+}
+
+const Tooltip: React.FC<TooltipProps> = ({ content, children }) => {
+  const [isVisible, setIsVisible] = useState(false);
+
+  return (
+    <div className="relative inline-flex">
+      <div
+        onMouseEnter={() => setIsVisible(true)}
+        onMouseLeave={() => setIsVisible(false)}
+        className="cursor-help"
+      >
+        {children}
+      </div>
+      <AnimatePresence>
+        {isVisible && (
+          <motion.div
+            initial={{ opacity: 0, y: 5 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 5 }}
+            className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-slate-800 border border-slate-700 text-xs text-slate-300 rounded shadow-lg min-w-[200px] max-w-[280px]"
+          >
+            <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-full">
+              <div className="border-8 border-transparent border-t-slate-800" />
+            </div>
+            {content}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
+// Get confidence explanation based on level
+const getConfidenceExplanation = (confidence: number, source?: string): string => {
+  const sourceText = source ? ` Based on analysis of ${source.toLowerCase()}.` : '';
+
+  if (confidence >= 80) {
+    return `High confidence - Strong signals detected from multiple page elements.${sourceText}`;
+  } else if (confidence >= 60) {
+    return `Medium confidence - Some signals found but data may be incomplete.${sourceText} Consider verifying.`;
+  } else {
+    return `Low confidence - Limited signals detected.${sourceText} We recommend reviewing and editing if needed.`;
+  }
+};
 
 // ============================================================================
 // PROFILE CARD COMPONENT
@@ -78,16 +139,19 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
       {(confidence !== undefined || source) && !isEditing && (
         <div className="flex items-center gap-4 text-xs text-slate-500">
           {confidence !== undefined && (
-            <div className="flex items-center gap-1">
-              {confidence >= 80 ? (
-                <Check className="w-3 h-3 text-green-500" />
-              ) : confidence >= 60 ? (
-                <Info className="w-3 h-3 text-yellow-500" />
-              ) : (
-                <Info className="w-3 h-3 text-orange-500" />
-              )}
-              <span>{confidence}% confident</span>
-            </div>
+            <Tooltip content={getConfidenceExplanation(confidence, source)}>
+              <div className="flex items-center gap-1">
+                {confidence >= 80 ? (
+                  <Check className="w-3 h-3 text-green-500" />
+                ) : confidence >= 60 ? (
+                  <Info className="w-3 h-3 text-yellow-500" />
+                ) : (
+                  <Info className="w-3 h-3 text-orange-500" />
+                )}
+                <span>{confidence}% confident</span>
+                <HelpCircle className="w-3 h-3 text-slate-600 ml-0.5" />
+              </div>
+            </Tooltip>
           )}
           {source && (
             <span className="text-slate-600">
@@ -116,9 +180,22 @@ const OpportunityScore: React.FC<OpportunityScoreProps> = ({ score, contentGaps 
 
   return (
     <div className="bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 p-6 mb-6">
-      <h2 className="text-sm font-medium text-slate-400 uppercase tracking-wider mb-4">
-        Content Gap Analysis
-      </h2>
+      <div className="flex items-center gap-2 mb-4">
+        <h2 className="text-sm font-medium text-slate-400 uppercase tracking-wider">
+          Content Gap Analysis
+        </h2>
+        <Tooltip
+          content={
+            <div className="space-y-2">
+              <p><strong className="text-white">What is Content Gap?</strong></p>
+              <p>This measures the percentage of customer questions and search queries in your industry that your website doesn't currently answer.</p>
+              <p className="text-cyan-400">Lower gap = better coverage. Our goal is to help you close this gap with targeted content.</p>
+            </div>
+          }
+        >
+          <HelpCircle className="w-4 h-4 text-slate-500 hover:text-slate-400" />
+        </Tooltip>
+      </div>
 
       <div className="mb-4">
         <div className="flex items-baseline gap-2 mb-2">
@@ -240,22 +317,226 @@ export const ProfileReviewStep: React.FC = () => {
       </motion.div>
 
       {/* Opportunity Score */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-      >
-        <OpportunityScore
-          score={profile.opportunityScore.overall}
-          contentGaps={profile.opportunityScore.contentGaps}
-        />
-      </motion.div>
+      {profile.opportunityScore?.overall !== undefined && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+        >
+          <OpportunityScore
+            score={profile.opportunityScore.overall}
+            contentGaps={profile.opportunityScore.contentGaps ?? 0}
+          />
+        </motion.div>
+      )}
+
+      {/* USPs - Unique Selling Points */}
+      {profile.brandVoice.uniqueSellingPoints && profile.brandVoice.uniqueSellingPoints.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15 }}
+          className="bg-gradient-to-br from-emerald-900/30 to-slate-900 border border-emerald-500/30 p-6 mb-6"
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <Award className="w-5 h-5 text-emerald-400" />
+            <h2 className="text-sm font-medium text-emerald-400 uppercase tracking-wider">
+              Your Competitive Advantages
+            </h2>
+          </div>
+          <div className="grid gap-3">
+            {profile.brandVoice.uniqueSellingPoints.map((usp, i) => (
+              <div key={i} className="flex items-start gap-3 p-3 bg-slate-900/50 border border-slate-800">
+                <Zap className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
+                <span className="text-white font-medium">{usp}</span>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      )}
+
+      {/* Top Keywords */}
+      {profile.topKeywords && profile.topKeywords.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="bg-slate-900/50 border border-slate-800 p-6 mb-6"
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <Search className="w-5 h-5 text-cyan-400" />
+            <h2 className="text-sm font-medium text-slate-400 uppercase tracking-wider">
+              Top Keyword Opportunities
+            </h2>
+            <span className="ml-auto text-xs text-slate-500">
+              {profile.topKeywords.reduce((sum, k) => sum + k.searchVolume, 0).toLocaleString()} total monthly searches
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-slate-500 uppercase tracking-wider border-b border-slate-800">
+                  <th className="pb-3 pr-4">Keyword</th>
+                  <th className="pb-3 pr-4 text-right">Volume</th>
+                  <th className="pb-3 pr-4 text-right">Difficulty</th>
+                  <th className="pb-3">Intent</th>
+                </tr>
+              </thead>
+              <tbody>
+                {profile.topKeywords.map((kw, i) => (
+                  <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                    <td className="py-3 pr-4">
+                      <span className="text-white font-medium">{kw.keyword}</span>
+                    </td>
+                    <td className="py-3 pr-4 text-right">
+                      <span className="text-cyan-400 font-mono">{kw.searchVolume.toLocaleString()}</span>
+                    </td>
+                    <td className="py-3 pr-4 text-right">
+                      <span className={`font-mono ${
+                        kw.difficulty < 40 ? 'text-green-400' :
+                        kw.difficulty < 60 ? 'text-yellow-400' : 'text-orange-400'
+                      }`}>
+                        {kw.difficulty}
+                      </span>
+                    </td>
+                    <td className="py-3">
+                      <span className={`px-2 py-0.5 text-xs uppercase tracking-wider ${
+                        kw.intent === 'commercial' ? 'bg-amber-500/20 text-amber-400' :
+                        kw.intent === 'transactional' ? 'bg-green-500/20 text-green-400' :
+                        'bg-blue-500/20 text-blue-400'
+                      }`}>
+                        {kw.intent}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </motion.div>
+      )}
+
+      {/* Content Angles */}
+      {profile.contentAngles && profile.contentAngles.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.25 }}
+          className="bg-slate-900/50 border border-slate-800 p-6 mb-6"
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <Lightbulb className="w-5 h-5 text-amber-400" />
+            <h2 className="text-sm font-medium text-slate-400 uppercase tracking-wider">
+              Strategic Content Angles
+            </h2>
+          </div>
+          <div className="space-y-3">
+            {profile.contentAngles.map((angle, i) => (
+              <div key={i} className="p-4 bg-slate-800/50 border border-slate-700 hover:border-slate-600 transition-colors">
+                <div className="flex items-start justify-between gap-4 mb-2">
+                  <h3 className="text-white font-semibold">{angle.angle}</h3>
+                  <span className={`px-2 py-0.5 text-xs uppercase tracking-wider flex-shrink-0 ${
+                    angle.priority === 'high' ? 'bg-red-500/20 text-red-400' :
+                    angle.priority === 'medium' ? 'bg-amber-500/20 text-amber-400' :
+                    'bg-slate-500/20 text-slate-400'
+                  }`}>
+                    {angle.priority} priority
+                  </span>
+                </div>
+                <p className="text-slate-400 text-sm">{angle.description}</p>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      )}
+
+      {/* Pain Points */}
+      {profile.targetAudience.painPoints && profile.targetAudience.painPoints.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="bg-slate-900/50 border border-slate-800 p-6 mb-6"
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <AlertTriangle className="w-5 h-5 text-orange-400" />
+            <h2 className="text-sm font-medium text-slate-400 uppercase tracking-wider">
+              Customer Pain Points to Address
+            </h2>
+          </div>
+          <div className="grid gap-2">
+            {profile.targetAudience.painPoints.map((pain, i) => (
+              <div key={i} className="flex items-start gap-3 p-3 bg-orange-500/5 border border-orange-500/20">
+                <Target className="w-4 h-4 text-orange-400 mt-0.5 flex-shrink-0" />
+                <span className="text-slate-300">{pain}</span>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      )}
+
+      {/* Competitor Insights */}
+      {profile.competitorInsights && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.35 }}
+          className="bg-slate-900/50 border border-slate-800 p-6 mb-6"
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <TrendingUp className="w-5 h-5 text-violet-400" />
+            <h2 className="text-sm font-medium text-slate-400 uppercase tracking-wider">
+              Competitive Analysis
+            </h2>
+          </div>
+          <div className="space-y-4">
+            {profile.competitorInsights.topCompetitors.length > 0 && (
+              <div>
+                <h3 className="text-xs text-slate-500 uppercase tracking-wider mb-2">Top Competitors</h3>
+                <div className="flex flex-wrap gap-2">
+                  {profile.competitorInsights.topCompetitors.map((comp, i) => (
+                    <span key={i} className="px-3 py-1 bg-slate-800 border border-slate-700 text-slate-300 text-sm">
+                      {comp}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {profile.competitorInsights.contentGapsVsCompetitors.length > 0 && (
+              <div>
+                <h3 className="text-xs text-slate-500 uppercase tracking-wider mb-2">Content Gaps vs Competitors</h3>
+                <ul className="space-y-2">
+                  {profile.competitorInsights.contentGapsVsCompetitors.map((gap, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm">
+                      <Check className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" />
+                      <span className="text-slate-300">{gap}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {profile.competitorInsights.differentiators.length > 0 && (
+              <div>
+                <h3 className="text-xs text-slate-500 uppercase tracking-wider mb-2">Your Differentiators</h3>
+                <ul className="space-y-2">
+                  {profile.competitorInsights.differentiators.map((diff, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm">
+                      <Zap className="w-4 h-4 text-cyan-400 mt-0.5 flex-shrink-0" />
+                      <span className="text-slate-300">{diff}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </motion.div>
+      )}
 
       {/* Profile Cards Grid */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
+        transition={{ delay: 0.4 }}
         className="space-y-4 mb-8"
       >
         {/* Industry */}
@@ -263,7 +544,7 @@ export const ProfileReviewStep: React.FC = () => {
         <ProfileCard
           icon={<Building2 className="w-4 h-4" />}
           title="Industry"
-          confidence={Math.round(profile.industry.confidence * 100)}
+          confidence={profile.industry.confidence}
           source="Homepage, About page"
           onEdit={() => handleEdit('industry', profile.industry.primary)}
           isEditing={editingField === 'industry'}
@@ -476,12 +757,12 @@ export const ProfileReviewStep: React.FC = () => {
             disabled={loading}
             className="inline-flex items-center gap-2 px-8 py-3 bg-cyan-600 hover:bg-cyan-500 text-white font-bold uppercase tracking-wider transition-colors disabled:opacity-50 shadow-lg shadow-cyan-900/20"
           >
-            Looks Good! Continue
+            Recommend Channels
             <ChevronRight className="w-5 h-5" />
           </button>
         </div>
         <p className="mt-3 text-sm text-slate-500">
-          You can make edits above to refine your profile
+          Review your profile above, then we'll recommend content channels for your business
         </p>
       </motion.div>
     </div>

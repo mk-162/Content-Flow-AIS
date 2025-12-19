@@ -134,7 +134,7 @@ export const LivePostsWorkspace: React.FC<Props> = ({
     return (
         <div
             ref={containerRef}
-            className={`flex h-full bg-slate-950 overflow-hidden ${isResizingLeft ? 'cursor-col-resize select-none' : ''}`}
+            className={`flex flex-1 h-full bg-slate-950 overflow-hidden ${isResizingLeft ? 'cursor-col-resize select-none' : ''}`}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
         >
@@ -300,6 +300,7 @@ export const LivePostsWorkspace: React.FC<Props> = ({
                                                         onClick={() => {
                                                             if (confirm('Archive this post? It will be removed from the website on the next launch.')) {
                                                                 onUpdateStatus(selectedPost.id, PostStatus.ARCHIVED);
+                                                                setSelectedPostId(null);
                                                             }
                                                         }}
                                                         className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider bg-slate-700 hover:bg-rose-600 text-slate-200 hover:text-white transition-colors"
@@ -377,7 +378,10 @@ export const LivePostsWorkspace: React.FC<Props> = ({
                             <div className="flex items-center gap-1">
                                 {selectedPost.status === PostStatus.PUBLISHED && (
                                     <button
-                                        onClick={() => onUpdateStatus(selectedPost.id, PostStatus.ARCHIVED)}
+                                        onClick={() => {
+                                            onUpdateStatus(selectedPost.id, PostStatus.ARCHIVED);
+                                            setSelectedPostId(null);
+                                        }}
                                         className="p-1.5 text-slate-400 hover:bg-slate-700 transition-colors"
                                         title="Archive"
                                     >
