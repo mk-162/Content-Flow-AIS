@@ -14,6 +14,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { TiptapEditor, TiptapViewer } from './TiptapEditor';
 import { ImageInspectorControl } from './ImageInspectorControl';
 import { Timestamp } from 'firebase/firestore';
+import { marked } from 'marked';
 import {
     DndContext,
     DragOverlay,
@@ -1763,18 +1764,18 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                                         {selectedCategory.googleDeepResearch.content.length.toLocaleString()} chars
                                                     </span>
                                                 </div>
-                                                {/* Research Content Preview */}
-                                                <details className="group">
-                                                    <summary className="cursor-pointer text-xs text-slate-400 hover:text-slate-300 flex items-center gap-2">
+                                                {/* Research Content - Full Markdown */}
+                                                <details className="group" open>
+                                                    <summary className="cursor-pointer text-xs text-slate-400 hover:text-slate-300 flex items-center gap-2 mb-3">
                                                         <ChevronDown size={12} className="group-open:rotate-180 transition-transform" />
-                                                        View research summary
+                                                        Research Report
                                                     </summary>
-                                                    <div className="mt-3 bg-slate-950 border border-slate-800 p-4 max-h-64 overflow-y-auto custom-scrollbar">
-                                                        <p className="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">
-                                                            {selectedCategory.googleDeepResearch.content.substring(0, 1500)}
-                                                            {selectedCategory.googleDeepResearch.content.length > 1500 && '...'}
-                                                        </p>
-                                                    </div>
+                                                    <div
+                                                        className="bg-slate-950 border border-slate-800 p-5 max-h-[500px] overflow-y-auto custom-scrollbar prose prose-invert prose-sm prose-headings:text-slate-200 prose-headings:font-bold prose-h2:text-base prose-h2:mt-6 prose-h2:mb-3 prose-h3:text-sm prose-p:text-slate-300 prose-li:text-slate-300 prose-strong:text-white prose-ul:my-2 prose-li:my-0.5"
+                                                        dangerouslySetInnerHTML={{
+                                                            __html: marked.parse(selectedCategory.googleDeepResearch.content) as string
+                                                        }}
+                                                    />
                                                 </details>
                                                 <button
                                                     onClick={() => {
