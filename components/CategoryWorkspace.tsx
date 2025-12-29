@@ -1756,12 +1756,26 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                             </div>
                                         ) : selectedCategory?.googleDeepResearch?.status === 'complete' ? (
                                             <div className="space-y-4">
-                                                <div className="bg-slate-950 border border-slate-800 p-4 max-h-48 overflow-y-auto custom-scrollbar">
-                                                    <p className="text-sm text-slate-300 whitespace-pre-wrap">
-                                                        {selectedCategory.googleDeepResearch.content.substring(0, 500)}
-                                                        {selectedCategory.googleDeepResearch.content.length > 500 && '...'}
-                                                    </p>
+                                                {/* Research Results Header */}
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-xs font-bold text-emerald-400 uppercase tracking-widest">Research Complete</span>
+                                                    <span className="text-xs text-slate-500">
+                                                        {selectedCategory.googleDeepResearch.content.length.toLocaleString()} chars
+                                                    </span>
                                                 </div>
+                                                {/* Research Content Preview */}
+                                                <details className="group">
+                                                    <summary className="cursor-pointer text-xs text-slate-400 hover:text-slate-300 flex items-center gap-2">
+                                                        <ChevronDown size={12} className="group-open:rotate-180 transition-transform" />
+                                                        View research summary
+                                                    </summary>
+                                                    <div className="mt-3 bg-slate-950 border border-slate-800 p-4 max-h-64 overflow-y-auto custom-scrollbar">
+                                                        <p className="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">
+                                                            {selectedCategory.googleDeepResearch.content.substring(0, 1500)}
+                                                            {selectedCategory.googleDeepResearch.content.length > 1500 && '...'}
+                                                        </p>
+                                                    </div>
+                                                </details>
                                                 <button
                                                     onClick={() => {
                                                         if (categoryPagePost) {
