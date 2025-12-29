@@ -46,6 +46,34 @@ const LoadingBar: React.FC<{ className?: string }> = ({ className = '' }) => (
     </div>
 );
 
+// Client-side preamble stripping for display (handles existing research with preambles)
+const stripPreamble = (content: string): string => {
+    let result = content.trim();
+
+    // Find first structural element (heading, bold section, numbered list)
+    const structuralPatterns = [
+        /^#{1,3}\s+/m,           // Markdown headings (# ## ###)
+        /^\*\*\d+\./m,           // Bold numbered items (**1.)
+        /^\*\*[A-Z][^*]+\*\*/m,  // Bold section headers (**Key Insights**)
+        /^\d+\.\s+\*\*/m,        // Numbered items with bold (1. **Title**)
+    ];
+
+    let firstStructureIndex = -1;
+    for (const pattern of structuralPatterns) {
+        const match = result.search(pattern);
+        if (match !== -1 && (firstStructureIndex === -1 || match < firstStructureIndex)) {
+            firstStructureIndex = match;
+        }
+    }
+
+    // If we found structure and there's preamble before it, strip it
+    if (firstStructureIndex > 50) {
+        result = result.substring(firstStructureIndex);
+    }
+
+    return result.trim();
+};
+
 interface Props {
     categories: Category[];
     posts: Post[];
@@ -1779,7 +1807,7 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                                     <div
                                                         className="prose prose-invert prose-sm prose-headings:text-slate-200 prose-headings:font-bold prose-h2:text-sm prose-p:text-slate-400 prose-li:text-slate-400 prose-strong:text-slate-300"
                                                         dangerouslySetInnerHTML={{
-                                                            __html: marked.parse(selectedCategory.googleDeepResearch.content.substring(0, 800) + '...') as string
+                                                            __html: marked.parse(stripPreamble(selectedCategory.googleDeepResearch.content).substring(0, 800) + '...') as string
                                                         }}
                                                     />
                                                     <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-slate-950 to-transparent flex items-end justify-center pb-2">
@@ -2108,14 +2136,14 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                 <div
                                     className="prose prose-invert prose-lg max-w-none prose-headings:text-white prose-headings:font-bold prose-h2:text-xl prose-h2:mt-8 prose-h2:mb-4 prose-h3:text-lg prose-h3:mt-6 prose-p:text-slate-300 prose-p:leading-relaxed prose-li:text-slate-300 prose-strong:text-white prose-ul:my-3 prose-li:my-1"
                                     dangerouslySetInnerHTML={{
-                                        __html: marked.parse(selectedCategory.googleDeepResearch.content) as string
+                                        __html: marked.parse(stripPreamble(selectedCategory.googleDeepResearch.content)) as string
                                     }}
                                 />
                             </div>
                             {/* Footer */}
                             <div className="px-6 py-4 border-t border-slate-800 bg-slate-950 flex items-center justify-between">
                                 <span className="text-xs text-slate-500">
-                                    {selectedCategory.googleDeepResearch.content.length.toLocaleString()} characters
+                                    {stripPreamble(selectedCategory.googleDeepResearch.content).length.toLocaleString()} characters
                                 </span>
                                 <button
                                     onClick={() => setShowResearchModal(false)}
