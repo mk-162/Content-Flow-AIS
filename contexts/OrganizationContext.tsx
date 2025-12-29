@@ -18,6 +18,7 @@ import {
   SubscriptionTier,
   OrgMemberRole,
   GlobalRole,
+  TIER_LIMITS,
 } from '../types';
 import { useAuth } from './AuthContext';
 import { useImpersonation } from './ImpersonationContext';
@@ -195,8 +196,8 @@ export const OrganizationProvider: React.FC<OrganizationProviderProps> = ({ chil
         subscriptionTier: SubscriptionTier.FREE,
         settings: {
           allowUserInvites: true,
-          maxProjects: 5,
-          maxUsersPerProject: 10,
+          maxProjects: TIER_LIMITS[SubscriptionTier.FREE].maxProjects,
+          maxUsersPerProject: TIER_LIMITS[SubscriptionTier.FREE].maxUsersPerProject,
         },
         systemPrompts: {},
         createdAt: Timestamp.now(),

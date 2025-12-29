@@ -23,6 +23,7 @@ import {
   TaskStatus,
   TaskType,
   PostStatus,
+  ContentType,
 } from '../types';
 import {
   collection,
@@ -43,6 +44,8 @@ import { TopBar } from '../components/layout';
 import { creditService, CREDIT_COSTS } from '../services/creditService';
 import { imageGenerationService } from '../services/imageGenerationService';
 import { CreditManagementModal } from '../components/CreditManagementModal';
+import { MigrationConfirmationModal } from '../components/MigrationConfirmationModal';
+import { useAutoGeneration } from '../hooks/useAutoGeneration';
 
 interface ExtendedGenerationTask extends GenerationTask {
   requestedCount?: number;
@@ -66,6 +69,7 @@ export const MainWorkspace: React.FC = () => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
   const [loading, setLoading] = useState(true);
   const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
+  const [showMigrationModal, setShowMigrationModal] = useState(false);
 
   const notify = (msg: string, type: 'success' | 'info' = 'info') => {
     const id = Math.random().toString(36);
@@ -74,6 +78,25 @@ export const MainWorkspace: React.FC = () => {
       setNotifications((prev) => prev.filter((n) => n.id !== id));
     }, 3000);
   };
+
+  // Auto-generation hook
+  const autoGen = useAutoGeneration(
+    categories,
+    posts,
+    currentProject,
+    currentOrg?.id,
+    user?.id,
+    currentOrg?.credits?.balance ?? 0,
+    tasks.map(t => ({ categoryId: t.categoryId, type: t.type, status: t.status })),
+    notify
+  );
+
+  // Show migration modal when needed
+  useEffect(() => {
+    if (autoGen.showMigrationPrompt && !loading && categories.length > 0) {
+      setShowMigrationModal(true);
+    }
+  }, [autoGen.showMigrationPrompt, loading, categories.length]);
 
   // Redirect to projects if no project selected
   useEffect(() => {
@@ -249,7 +272,7 @@ export const MainWorkspace: React.FC = () => {
         `organizations/${currentOrg.id}/projects/${currentProject.id}/categories`
       );
 
-      await addDoc(categoriesRef, {
+      const newCategoryRef = await addDoc(categoriesRef, {
         projectId: currentProject.id,
         organizationId: currentOrg.id,
         name,
@@ -260,6 +283,73 @@ export const MainWorkspace: React.FC = () => {
       });
 
       notify(`Added category: ${name}`, 'success');
+
+      // Auto-create category page post
+      const postsRef = collection(
+        db,
+        `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`
+      );
+
+      // Check credits before creating category page
+      const creditBalance = currentOrg.credits?.balance ?? 0;
+      const hasCreditsForCategoryPage = creditBalance >= 1;
+
+      const categoryPageRef = await addDoc(postsRef, {
+        projectId: currentProject.id,
+        organizationId: currentOrg.id,
+        categoryId: newCategoryRef.id,
+        title: name,
+        contentType: ContentType.CATEGORY_PAGE,
+        isCategoryPage: true,
+        // Set to GENERATING if we'll queue it, so it shows in Content Engine immediately
+        status: hasCreditsForCategoryPage ? PostStatus.GENERATING : PostStatus.PENDING,
+        createdBy: user.id,
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+        categoryPageContent: {
+          introduction: '',
+          aiInstructions: description || ''
+        }
+      });
+
+      // Auto-queue category page generation
+      if (hasCreditsForCategoryPage) {
+        await addDoc(collection(db, 'generationQueue'), {
+          type: TaskType.GENERATE_CATEGORY_PAGE,
+          organizationId: currentOrg.id,
+          projectId: currentProject.id,
+          categoryId: newCategoryRef.id,
+          categoryName: name,
+          targetPostId: categoryPageRef.id,
+          status: TaskStatus.QUEUED,
+          progress: 0,
+          createdBy: user.id,
+          startedAt: Timestamp.now(),
+        });
+      }
+
+      // Auto-generate stubs for new category if enabled (defaults to true)
+      const autoGenSettings = currentProject.settings?.autoGeneration;
+      const autoGenEnabled = autoGenSettings?.enabled ?? true; // Default to enabled
+      if (autoGenEnabled) {
+        const threshold = autoGenSettings?.stubThreshold ?? 5;
+
+        if (creditBalance >= threshold + 1) { // +1 for category page
+          await addDoc(collection(db, 'generationQueue'), {
+            type: TaskType.GENERATE_TITLES,
+            organizationId: currentOrg.id,
+            projectId: currentProject.id,
+            categoryId: newCategoryRef.id,
+            categoryName: name,
+            status: TaskStatus.QUEUED,
+            progress: 0,
+            createdBy: user.id,
+            startedAt: Timestamp.now(),
+            requestedCount: threshold,
+          });
+          notify(`Auto-generating ${threshold} stubs for ${name}`);
+        }
+      }
     } catch (error) {
       console.error('Error adding category:', error);
       notify('Failed to add category', 'info');
@@ -404,9 +494,111 @@ export const MainWorkspace: React.FC = () => {
       });
 
       notify('Moved to Posts queue');
+
+      // Auto-replenish stubs if below threshold (defaults to enabled)
+      const autoGenSettings = currentProject.settings?.autoGeneration;
+      const autoGenEnabled = autoGenSettings?.enabled ?? true;
+      if (autoGenEnabled && post.categoryId) {
+        // Trigger check for this specific category
+        // The hook will handle the logic - we just need to trigger it
+        setTimeout(() => {
+          autoGen.triggerAutoGeneration([post.categoryId]);
+        }, 1000); // Small delay to let state update
+      }
     } catch (error) {
       console.error('Error queuing content:', error);
       notify('Failed to queue content', 'info');
+    }
+  };
+
+  // Queue category page regeneration
+  const queueCategoryPageRegenerate = async (post: Post) => {
+    if (!currentOrg || !currentProject || !user) return;
+
+    // Check balance
+    const hasCredits = await creditService.checkBalance(currentOrg.id, CREDIT_COSTS.CATEGORY_PAGE_GENERATION);
+    if (!hasCredits) {
+      notify('Insufficient credits', 'info');
+      setIsCreditModalOpen(true);
+      return;
+    }
+
+    const cat = categories.find((c) => c.id === post.categoryId);
+
+    try {
+      await addDoc(collection(db, 'generationQueue'), {
+        type: TaskType.GENERATE_CATEGORY_PAGE,
+        organizationId: currentOrg.id,
+        projectId: currentProject.id,
+        categoryId: post.categoryId,
+        categoryName: cat?.name || 'Unknown',
+        targetPostId: post.id,
+        status: TaskStatus.QUEUED,
+        progress: 0,
+        createdBy: user.id,
+        startedAt: Timestamp.now(),
+      });
+
+      const postRef = doc(
+        db,
+        `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`,
+        post.id
+      );
+      await updateDoc(postRef, {
+        status: PostStatus.GENERATING,
+        updatedAt: Timestamp.now(),
+      });
+
+      notify('Regenerating category page...');
+    } catch (error) {
+      console.error('Error queuing category page regeneration:', error);
+      notify('Failed to queue regeneration', 'info');
+    }
+  };
+
+  // Queue Google Deep Research
+  const queueGoogleDeepResearch = async (categoryId: string) => {
+    if (!currentOrg || !currentProject || !user) return;
+
+    // Check balance for deep research
+    const hasCredits = await creditService.checkBalance(currentOrg.id, CREDIT_COSTS.GOOGLE_DEEP_RESEARCH);
+    if (!hasCredits) {
+      notify('Insufficient credits (20 required)', 'info');
+      setIsCreditModalOpen(true);
+      return;
+    }
+
+    const cat = categories.find((c) => c.id === categoryId);
+
+    try {
+      // Update category status to show research is running
+      const catRef = doc(
+        db,
+        `organizations/${currentOrg.id}/projects/${currentProject.id}/categories`,
+        categoryId
+      );
+      await updateDoc(catRef, {
+        'googleDeepResearch.status': 'running',
+        updatedAt: Timestamp.now(),
+      });
+
+      // Queue the research task
+      await addDoc(collection(db, 'generationQueue'), {
+        type: TaskType.GOOGLE_DEEP_RESEARCH,
+        organizationId: currentOrg.id,
+        projectId: currentProject.id,
+        categoryId: categoryId,
+        categoryName: cat?.name || 'Unknown',
+        status: TaskStatus.QUEUED,
+        progress: 0,
+        createdBy: user.id,
+        startedAt: Timestamp.now(),
+      });
+
+      notify('Deep research started...');
+    } catch (error) {
+      console.error('Error queuing deep research:', error);
+      notify('Failed to start research', 'info');
     }
   };
 
@@ -605,6 +797,25 @@ export const MainWorkspace: React.FC = () => {
           isOpen={isCreditModalOpen}
           onClose={() => setIsCreditModalOpen(false)}
         />
+
+        {/* Migration Confirmation Modal */}
+        <MigrationConfirmationModal
+          isOpen={showMigrationModal}
+          onClose={() => setShowMigrationModal(false)}
+          onConfirm={async () => {
+            await autoGen.confirmMigration();
+            setShowMigrationModal(false);
+          }}
+          onDisable={async () => {
+            await autoGen.dismissMigration();
+            setShowMigrationModal(false);
+          }}
+          categoriesNeedingStubs={autoGen.categoriesBelowThreshold}
+          totalStubsNeeded={autoGen.totalStubsNeeded}
+          creditBalance={currentOrg?.credits?.balance ?? 0}
+          isLoading={autoGen.isGenerating}
+        />
+
         {/* Notifications */}
         <div className="fixed top-0 left-0 right-0 z-50 flex flex-col items-center gap-2 pointer-events-none">
           {notifications.map((n) => (
@@ -635,10 +846,13 @@ export const MainWorkspace: React.FC = () => {
               onMoveCategory={moveCategory}
               onQueueTitles={queueTitleGeneration}
               onQueueContent={queueContentGeneration}
+              onQueueCategoryPageRegenerate={queueCategoryPageRegenerate}
+              onQueueGoogleDeepResearch={queueGoogleDeepResearch}
               onUpdatePost={updatePostFields}
               onDeletePost={deletePost}
               organizationId={currentOrg?.id}
               projectId={currentProject?.id}
+              organization={currentOrg || undefined}
             />
           </div>
         )}

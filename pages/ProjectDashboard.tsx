@@ -32,7 +32,7 @@ import { QuickCreateProjectModal } from '../components/QuickCreateProjectModal';
 import { ProjectCreationHub } from '../components/project/ProjectCreationHub';
 import { CloneProjectModal, CloneOptions } from '../components/project/CloneProjectModal';
 import { AppShell } from '../components/layout';
-import { PostStatus, ChannelType, ChannelRecommendation } from '../types';
+import { PostStatus, ChannelType, ChannelRecommendation, SubscriptionTier, TIER_LIMITS } from '../types';
 import { CreditManagementModal } from '../components/CreditManagementModal';
 import { UpgradeLimitModal } from '../components/UpgradeLimitModal';
 
@@ -107,9 +107,11 @@ export const ProjectDashboard: React.FC = () => {
     rec => !rec.selected && !usedChannelTypes.includes(rec.channelType)
   );
 
-  // Demo account limits
+  // Project limits based on subscription tier
   const isDemo = currentOrg?.isDemo || false;
-  const projectLimit = isDemo ? 1 : (currentOrg?.settings?.maxProjects || 5);
+  const tier = currentOrg?.subscriptionTier || SubscriptionTier.FREE;
+  const tierLimit = TIER_LIMITS[tier].maxProjects;
+  const projectLimit = isDemo ? 1 : (tierLimit === -1 ? Infinity : tierLimit);
   const hasHitProjectLimit = projects.length >= projectLimit;
 
   // Fetch organization member count
@@ -620,17 +622,41 @@ export const ProjectDashboard: React.FC = () => {
                         <span>{suggestion.totalMonthlySearches?.toLocaleString() || 0} monthly searches</span>
                       </div>
 
+                      {/* Upgrade prompt if at limit */}
+                      {hasHitProjectLimit && (
+                        <div className="mb-3 p-2 bg-amber-500/10 border border-amber-500/30 rounded text-xs text-amber-300 flex items-center gap-2">
+                          <Zap className="w-3.5 h-3.5 flex-shrink-0" />
+                          <span>Upgrade to create more channels</span>
+                        </div>
+                      )}
+
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => handleCreateFromSuggestion(suggestion)}
+                          onClick={() => {
+                            if (hasHitProjectLimit) {
+                              setUpgradeLimitType('projects');
+                              setShowUpgradeModal(true);
+                            } else {
+                              handleCreateFromSuggestion(suggestion);
+                            }
+                          }}
                           className={`flex-1 py-2 text-xs font-bold uppercase tracking-wider transition-colors flex items-center justify-center gap-1.5 ${
                             hasHitProjectLimit
-                              ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                              ? 'bg-amber-600 hover:bg-amber-500 text-white'
                               : 'bg-cyan-600 hover:bg-cyan-500 text-white'
                           }`}
                         >
-                          <Plus className="w-3.5 h-3.5" />
-                          Create
+                          {hasHitProjectLimit ? (
+                            <>
+                              <Zap className="w-3.5 h-3.5" />
+                              Upgrade
+                            </>
+                          ) : (
+                            <>
+                              <Plus className="w-3.5 h-3.5" />
+                              Create
+                            </>
+                          )}
                         </button>
                         <a
                           href={demoUrl}
@@ -799,7 +825,7 @@ export const ProjectDashboard: React.FC = () => {
         onClose={() => setShowCreateModal(false)}
         onAdvancedSetup={() => {
           setShowCreateModal(false);
-          navigate('/onboarding/project');
+          navigate('/onboarding?mode=existing');
         }}
       />
 

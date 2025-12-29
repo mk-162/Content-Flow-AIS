@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Check, ChevronRight, Eye, EyeOff, Sparkles } from 'lucide-react';
 import { doc, setDoc, Timestamp, writeBatch } from 'firebase/firestore';
@@ -14,6 +14,7 @@ import {
   SubscriptionTier,
   OrgMemberRole,
   ProjectMemberRole,
+  TIER_LIMITS,
 } from '../../types';
 
 // Demo account constants
@@ -43,8 +44,8 @@ const getPasswordStrength = (password: string): { strength: string; color: strin
 // ============================================================================
 
 export const AccountCreationStep: React.FC = () => {
-  const { session, previousStep, clearSession } = useOnboarding();
-  const { signUp, signInWithGoogle } = useAuth();
+  const { session, previousStep, clearSession, nextStep } = useOnboarding();
+  const { signUp, signInWithGoogle, user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
 
   const [email, setEmail] = useState('');
@@ -53,6 +54,14 @@ export const AccountCreationStep: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // If user is already authenticated, skip this step
+  useEffect(() => {
+    if (!authLoading && user) {
+      console.log('[AccountCreationStep] User already authenticated, skipping to complete');
+      nextStep(); // Will go to 'complete' step
+    }
+  }, [user, authLoading, nextStep]);
 
   const channelName = session?.selectedChannel?.title || 'Your Channel';
   const channelType = session?.selectedChannel?.channelType || 'blog';
@@ -76,8 +85,8 @@ export const AccountCreationStep: React.FC = () => {
       subscriptionTier: SubscriptionTier.FREE,
       settings: {
         allowUserInvites: true,
-        maxProjects: 5,
-        maxUsersPerProject: 10,
+        maxProjects: TIER_LIMITS[SubscriptionTier.FREE].maxProjects,
+        maxUsersPerProject: TIER_LIMITS[SubscriptionTier.FREE].maxUsersPerProject,
       },
       // Demo account flag and credits
       isDemo: true,
@@ -233,6 +242,18 @@ export const AccountCreationStep: React.FC = () => {
       setLoading(false);
     }
   };
+
+  // Show loading if checking auth or user already exists (will redirect)
+  if (authLoading || user) {
+    return (
+      <div className="max-w-lg mx-auto flex items-center justify-center py-20">
+        <div className="text-center">
+          <div className="w-8 h-8 border-2 border-cyan-500/30 border-t-cyan-500 rounded-full animate-spin mx-auto mb-3" />
+          <p className="text-slate-400 text-sm">Checking authentication...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-lg mx-auto">

@@ -2,17 +2,28 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { usePaneWidth } from '../hooks/usePaneWidth';
 import { Post, Category, PostStatus, GenerationTask, TaskStatus, ContentType, Tone, Project, Organization } from '../types';
 import {
-    Search, Filter, User, CheckCircle, XCircle, Edit3, UploadCloud, Trash2,
-    Loader2, ArrowRight, RefreshCw, Clock, Archive, X, GripVertical,
-    Sparkles, Calendar, Hash, Type, AlignLeft, ChevronRight, Layout, Rocket, ArrowUp
+    CheckCircle, Trash2, RefreshCw, Clock, X,
+    Sparkles, Calendar, Hash, Layout, Rocket, FolderOpen
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { TiptapEditor, TiptapViewer } from './TiptapEditor';
 import { Timestamp } from 'firebase/firestore';
 import { ImageInspectorControl } from './ImageInspectorControl';
+import { CategoryPageEditor } from './CategoryPageEditor';
 import { ImageGenerationResult } from '../services/imageGenerationService';
 import { triggerBuild } from '../services/deploymentService';
 import { useAuth } from '../contexts/AuthContext';
+
+// Consistent loading bar indicator
+const LoadingBar: React.FC<{ className?: string }> = ({ className = '' }) => (
+    <div className={`h-1 bg-slate-700 rounded-full overflow-hidden ${className}`}>
+        <motion.div
+            className="h-full w-1/3 bg-cyan-500 rounded-full"
+            animate={{ x: ['0%', '200%'] }}
+            transition={{ duration: 1, repeat: Infinity, ease: 'easeInOut' }}
+        />
+    </div>
+);
 
 // Helper to strip title from content (both markdown and HTML formats)
 // Since title is displayed separately above, we strip ALL leading H1/H2 headings
@@ -57,85 +68,20 @@ interface Props {
     organization?: Organization;
 }
 
-const STATUS_FILTERS = [
-    { label: 'Generating', value: PostStatus.GENERATING },
-    { label: 'Review', value: PostStatus.NEEDS_REVIEW },
-    { label: 'Approved', value: PostStatus.APPROVED },
-    { label: 'Rejected', value: PostStatus.REJECTED },
-];
-
-const TAB_LABELS: Record<PostStatus, string> = {
-    [PostStatus.GENERATING]: 'Generating',
-    [PostStatus.NEEDS_REVIEW]: 'Review',
-    [PostStatus.APPROVED]: 'Approved',
-    [PostStatus.REJECTED]: 'Rejected',
-    [PostStatus.PENDING]: 'Pending',
-    [PostStatus.PUBLISHED]: 'Published',
-    [PostStatus.ARCHIVED]: 'Archived',
-};
-
-// Smart Empty State Guide Component
-interface EmptyStateGuideProps {
-    currentTab: PostStatus;
-    statusCounts: Record<PostStatus, number>;
-    onNavigate: (status: PostStatus) => void;
-    getNextTabWithContent: (currentTab: PostStatus) => PostStatus | null;
-}
-
-const EmptyStateGuide: React.FC<EmptyStateGuideProps> = ({
-    currentTab,
-    statusCounts,
-    onNavigate,
-    getNextTabWithContent,
-}) => {
-    const nextTab = getNextTabWithContent(currentTab);
-
-    if (!nextTab) {
-        // All tabs empty - guide to Categories
-        return (
-            <div className="p-8 text-center">
-                <div className="max-w-xs mx-auto">
-                    <div className="w-12 h-12 mx-auto mb-4 bg-slate-800 rounded-full flex items-center justify-center">
-                        <Sparkles size={20} className="text-slate-500" />
-                    </div>
-                    <p className="text-slate-400 text-sm mb-2">No content in the engine yet.</p>
-                    <p className="text-slate-600 text-xs">
-                        Head to <span className="text-cyan-400 font-medium">Categories</span> to generate titles first.
-                    </p>
-                </div>
-            </div>
-        );
-    }
-
+// Empty State Component
+const EmptyStateGuide: React.FC = () => {
     return (
-        <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="p-8 text-center"
-        >
-            <div className="flex flex-col items-center gap-3">
-                {/* Animated arrow pointing up toward tabs */}
-                <motion.div
-                    animate={{ y: [-5, 0, -5] }}
-                    transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
-                    className="text-cyan-500"
-                >
-                    <ArrowUp size={24} />
-                </motion.div>
-
-                <p className="text-slate-400 text-sm">
-                    Nothing here right now.
+        <div className="p-8 text-center">
+            <div className="max-w-xs mx-auto">
+                <div className="w-12 h-12 mx-auto mb-4 bg-slate-800 rounded-full flex items-center justify-center">
+                    <Sparkles size={20} className="text-slate-500" />
+                </div>
+                <p className="text-slate-400 text-sm mb-2">No content in the engine yet.</p>
+                <p className="text-slate-600 text-xs">
+                    Head to <span className="text-cyan-400 font-medium">Categories</span> to generate content.
                 </p>
-
-                <button
-                    onClick={() => onNavigate(nextTab)}
-                    className="flex items-center gap-1 text-cyan-400 hover:text-cyan-300 text-sm font-medium transition-colors"
-                >
-                    Check {TAB_LABELS[nextTab]} ({statusCounts[nextTab]})
-                    <ChevronRight className="w-4 h-4" />
-                </button>
             </div>
-        </motion.div>
+        </div>
     );
 };
 
@@ -146,7 +92,7 @@ export const PostsWorkspace: React.FC<Props> = ({
 }) => {
     const { user } = useAuth();
     const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
-    const [statusFilter, setStatusFilter] = useState<PostStatus>(PostStatus.GENERATING);
+    const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [editMode, setEditMode] = useState(false);
     const [inspectorTab, setInspectorTab] = useState<'info' | 'history'>('info');
@@ -190,67 +136,64 @@ export const PostsWorkspace: React.FC<Props> = ({
         return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
     }, []);
 
-    // Filter Posts - This workspace handles: GENERATING, NEEDS_REVIEW, APPROVED, REJECTED
-    // PENDING = Categories tab, PUBLISHED/ARCHIVED = Live Posts tab
-    const filteredPosts = useMemo(() => {
-        return posts.filter(post => {
-            // Exclude PENDING (stubs in Categories), PUBLISHED and ARCHIVED (in Live Posts)
+    // Filter and split posts into two sections: Needs Review and Approved for Launch
+    const { needsReviewPosts, approvedPosts } = useMemo(() => {
+        const filtered = posts.filter(post => {
+            // Exclude category pages (managed in Content Areas)
+            if (post.isCategoryPage) return false;
+            // Exclude PENDING (stubs in Categories), PUBLISHED, ARCHIVED, and REJECTED (deleted)
             if (post.status === PostStatus.PENDING) return false;
             if (post.status === PostStatus.PUBLISHED) return false;
             if (post.status === PostStatus.ARCHIVED) return false;
+            if (post.status === PostStatus.REJECTED) return false;
 
-            const matchesStatus = post.status === statusFilter;
-            const matchesSearch = post.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            const matchesSearch = searchQuery === '' ||
+                post.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
                 post.editor?.toLowerCase().includes(searchQuery.toLowerCase());
 
-            return matchesStatus && matchesSearch;
-        }).sort((a, b) => {
-            // Sort by updated date, newest first
-            const dateA = a.updatedAt?.toMillis() || 0;
-            const dateB = b.updatedAt?.toMillis() || 0;
-            return dateB - dateA;
+            return matchesSearch;
         });
-    }, [posts, statusFilter, searchQuery]);
 
-    // Count posts per status for badge display and smart navigation
-    const statusCounts = useMemo(() => ({
-        [PostStatus.GENERATING]: posts.filter(p => p.status === PostStatus.GENERATING).length,
-        [PostStatus.NEEDS_REVIEW]: posts.filter(p => p.status === PostStatus.NEEDS_REVIEW).length,
-        [PostStatus.APPROVED]: posts.filter(p => p.status === PostStatus.APPROVED).length,
-        [PostStatus.REJECTED]: posts.filter(p => p.status === PostStatus.REJECTED).length,
-        [PostStatus.PENDING]: posts.filter(p => p.status === PostStatus.PENDING).length,
-        [PostStatus.PUBLISHED]: posts.filter(p => p.status === PostStatus.PUBLISHED).length,
-        [PostStatus.ARCHIVED]: posts.filter(p => p.status === PostStatus.ARCHIVED).length,
-    }), [posts]);
+        // Split into two sections
+        const needsReview = filtered
+            .filter(p => p.status === PostStatus.NEEDS_REVIEW || p.status === PostStatus.GENERATING)
+            .sort((a, b) => {
+                // Generating first, then by date
+                if (a.status === PostStatus.GENERATING && b.status !== PostStatus.GENERATING) return -1;
+                if (b.status === PostStatus.GENERATING && a.status !== PostStatus.GENERATING) return 1;
+                const dateA = a.updatedAt?.toMillis() || 0;
+                const dateB = b.updatedAt?.toMillis() || 0;
+                return dateB - dateA;
+            });
 
-    // Smart navigation: find next tab with content based on workflow priority
-    const getNextTabWithContent = (currentTab: PostStatus): PostStatus | null => {
-        const flowPriority: Record<PostStatus, PostStatus[]> = {
-            [PostStatus.GENERATING]: [PostStatus.NEEDS_REVIEW, PostStatus.APPROVED, PostStatus.REJECTED],
-            [PostStatus.NEEDS_REVIEW]: [PostStatus.APPROVED, PostStatus.GENERATING, PostStatus.REJECTED],
-            [PostStatus.APPROVED]: [PostStatus.NEEDS_REVIEW, PostStatus.GENERATING, PostStatus.REJECTED],
-            [PostStatus.REJECTED]: [PostStatus.NEEDS_REVIEW, PostStatus.APPROVED, PostStatus.GENERATING],
-            // Handle other statuses gracefully
-            [PostStatus.PENDING]: [PostStatus.GENERATING, PostStatus.NEEDS_REVIEW, PostStatus.APPROVED],
-            [PostStatus.PUBLISHED]: [PostStatus.NEEDS_REVIEW, PostStatus.APPROVED, PostStatus.GENERATING],
-            [PostStatus.ARCHIVED]: [PostStatus.NEEDS_REVIEW, PostStatus.APPROVED, PostStatus.GENERATING],
-        };
+        const approved = filtered
+            .filter(p => p.status === PostStatus.APPROVED)
+            .sort((a, b) => {
+                // Sort by approved date, newest first
+                const dateA = a.approvedAt?.toMillis() || a.updatedAt?.toMillis() || 0;
+                const dateB = b.approvedAt?.toMillis() || b.updatedAt?.toMillis() || 0;
+                return dateB - dateA;
+            });
 
-        const priorities = flowPriority[currentTab] || [PostStatus.NEEDS_REVIEW, PostStatus.APPROVED, PostStatus.GENERATING];
-        for (const status of priorities) {
-            if (statusCounts[status] > 0) return status;
-        }
-        return null; // All tabs empty
-    };
+        return { needsReviewPosts: needsReview, approvedPosts: approved };
+    }, [posts, searchQuery]);
+
+    // Combined for some operations
+    const allVisiblePosts = [...needsReviewPosts, ...approvedPosts];
 
     const selectedPost = posts.find(p => p.id === selectedPostId);
 
-    // Auto-select first post if none selected
+    // Auto-select first post if none selected (prefer from needs review)
     useEffect(() => {
-        if (!selectedPostId && filteredPosts.length > 0) {
-            setSelectedPostId(filteredPosts[0].id);
+        if (!selectedPostId && allVisiblePosts.length > 0) {
+            // Prefer selecting from needsReviewPosts first
+            if (needsReviewPosts.length > 0) {
+                setSelectedPostId(needsReviewPosts[0].id);
+            } else if (approvedPosts.length > 0) {
+                setSelectedPostId(approvedPosts[0].id);
+            }
         }
-    }, [filteredPosts, selectedPostId]);
+    }, [allVisiblePosts, needsReviewPosts, approvedPosts, selectedPostId]);
 
     // Calculate Recommended Publish Date
     const recommendedPublishDate = useMemo(() => {
@@ -286,7 +229,7 @@ export const PostsWorkspace: React.FC<Props> = ({
         }
     }, [posts, selectedPost]);
 
-    // Approve -> Moves to Publishing Queue
+    // Approve -> Moves to Approved for Launch section
     const handleApprove = async (postId: string) => {
         setApprovingPostId(postId);
 
@@ -299,9 +242,9 @@ export const PostsWorkspace: React.FC<Props> = ({
                 approvedAt: Timestamp.now()
             });
 
-            // Auto-advance on success
-            const currentIndex = filteredPosts.findIndex(p => p.id === postId);
-            const nextPost = filteredPosts.find((p, idx) => idx > currentIndex && p.status === PostStatus.NEEDS_REVIEW);
+            // Auto-advance to next in Needs Review section
+            const currentIndex = needsReviewPosts.findIndex(p => p.id === postId);
+            const nextPost = needsReviewPosts.find((p, idx) => idx > currentIndex && p.status === PostStatus.NEEDS_REVIEW);
             if (nextPost) setSelectedPostId(nextPost.id);
             else setSelectedPostId(null);
 
@@ -312,28 +255,28 @@ export const PostsWorkspace: React.FC<Props> = ({
         }
     };
 
-    // Reject -> Moves to Rejected
-    const handleReject = async (postId: string) => {
+    // Delete post with confirmation
+    const handleDelete = async (postId: string) => {
         setRejectingPostId(postId);
 
         try {
             // Brief delay for visual feedback
-            await new Promise(resolve => setTimeout(resolve, 800));
+            await new Promise(resolve => setTimeout(resolve, 400));
 
-            await onUpdatePost(postId, {
-                status: PostStatus.REJECTED
-            });
+            // Actually delete the post
+            onDeletePost(postId);
 
             // Auto-advance on success
-            const currentIndex = filteredPosts.findIndex(p => p.id === postId);
-            const nextPost = filteredPosts.find((p, idx) => idx > currentIndex && p.status === PostStatus.NEEDS_REVIEW);
+            const currentIndex = allVisiblePosts.findIndex(p => p.id === postId);
+            const nextPost = allVisiblePosts.find((p, idx) => idx > currentIndex);
             if (nextPost) setSelectedPostId(nextPost.id);
             else setSelectedPostId(null);
 
         } catch (error) {
-            console.error('Failed to reject post:', error);
+            console.error('Failed to delete post:', error);
         } finally {
             setRejectingPostId(null);
+            setDeleteConfirmId(null);
         }
     };
 
@@ -437,8 +380,11 @@ export const PostsWorkspace: React.FC<Props> = ({
     // Count approved posts ready to launch
     const approvedCount = posts.filter(p => p.status === PostStatus.APPROVED).length;
 
-    // Count posts in review
-    const reviewCount = posts.filter(p => p.status === PostStatus.NEEDS_REVIEW).length;
+    // Count posts in review (ready for approval, not generating)
+    const reviewReadyCount = posts.filter(p => p.status === PostStatus.NEEDS_REVIEW).length;
+
+    // Count generating posts
+    const generatingCount = posts.filter(p => p.status === PostStatus.GENERATING).length;
 
     // Approve all posts in review
     const handleApproveAll = async () => {
@@ -494,109 +440,31 @@ export const PostsWorkspace: React.FC<Props> = ({
                 {/* Header */}
                 <div className="p-4 border-b border-slate-800 bg-slate-900/30">
                     <div className="mb-4">
-                        <h1 className="text-2xl font-bold text-white tracking-tight mb-1">Content Engine</h1>
-                        <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Review, Approve & Launch</p>
+                        <h1 className="text-2xl font-bold text-white tracking-tight mb-2">Content Engine</h1>
+                        <p className="text-xs text-slate-400">
+                            Approve content then launch to publish to your site.
+                        </p>
                     </div>
 
-                    <div className="relative mb-3">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
-                        <input
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            placeholder="Search posts..."
-                            className="w-full bg-slate-900 border border-slate-800 pl-9 pr-3 py-2 text-sm text-slate-200 focus:border-cyan-500 focus:outline-none transition-all"
-                        />
+                    {/* Action Buttons */}
+                    <div className="flex gap-2">
+                        <button
+                            onClick={handleApproveAll}
+                            disabled={isApprovingAll || reviewReadyCount === 0}
+                            className="flex-1 py-2.5 bg-teal-600 hover:bg-teal-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all"
+                        >
+                            {isApprovingAll ? <LoadingBar className="w-8" /> : <CheckCircle size={14} />}
+                            {isApprovingAll ? 'Approving...' : `Approve All${reviewReadyCount > 0 ? ` (${reviewReadyCount})` : ''}`}
+                        </button>
+                        <button
+                            onClick={project?.settings?.deployment?.webhookUrl ? handleTriggerBuild : () => alert('Your site is not yet ready. Contact support.')}
+                            disabled={isBuilding || approvedCount === 0}
+                            className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all"
+                        >
+                            {isBuilding ? <LoadingBar className="w-8" /> : <Rocket size={14} />}
+                            {isBuilding ? 'Launching...' : `Launch${approvedCount > 0 ? ` (${approvedCount})` : ''}`}
+                        </button>
                     </div>
-                    <div className="flex gap-1 overflow-x-auto pb-1 custom-scrollbar">
-                        {[
-                            { label: 'Generating', value: PostStatus.GENERATING },
-                            { label: 'Review', value: PostStatus.NEEDS_REVIEW },
-                            { label: 'Approved', value: PostStatus.APPROVED },
-                            { label: 'Rejected', value: PostStatus.REJECTED },
-                        ].map(f => (
-                            <button
-                                key={f.value}
-                                onClick={() => setStatusFilter(f.value)}
-                                className={`
-                                    flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap transition-colors border border-transparent
-                                    ${statusFilter === f.value
-                                        ? 'bg-cyan-950 text-cyan-400 border-cyan-900'
-                                        : 'text-slate-500 hover:bg-slate-900 hover:text-slate-300'}
-                                `}
-                            >
-                                {f.label}
-                                {statusCounts[f.value] > 0 && (
-                                    <span className={`px-1.5 py-0.5 text-[9px] rounded-full ${
-                                        statusFilter === f.value
-                                            ? 'bg-cyan-900 text-cyan-300'
-                                            : 'bg-slate-700 text-slate-300'
-                                    }`}>
-                                        {statusCounts[f.value]}
-                                    </span>
-                                )}
-                            </button>
-                        ))}
-                    </div>
-
-                    {/* Approve All Button - Only shown on Review tab */}
-                    {statusFilter === PostStatus.NEEDS_REVIEW && (
-                        <div className="mt-3 pt-3 border-t border-slate-800">
-                            <div className="space-y-2">
-                                <button
-                                    onClick={handleApproveAll}
-                                    disabled={isApprovingAll || reviewCount === 0}
-                                    className="w-full py-3 bg-teal-600 hover:bg-teal-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all"
-                                >
-                                    {isApprovingAll ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle size={16} />}
-                                    {isApprovingAll ? 'Approving...' : 'Approve All'}
-                                </button>
-                                <p className="text-[10px] text-slate-500 text-center">
-                                    {reviewCount > 0
-                                        ? `${reviewCount} Post${reviewCount !== 1 ? 's' : ''} Ready for Review`
-                                        : 'No posts to review'}
-                                </p>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Launch Button - Only shown on Approved tab */}
-                    {statusFilter === PostStatus.APPROVED && (
-                        <div className="mt-3 pt-3 border-t border-slate-800">
-                            {project?.settings?.deployment?.webhookUrl ? (
-                                <div className="space-y-2">
-                                    <button
-                                        onClick={handleTriggerBuild}
-                                        disabled={isBuilding || approvedCount === 0}
-                                        className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all"
-                                    >
-                                        {isBuilding ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} />}
-                                        {isBuilding ? 'Launching...' : 'Launch Approved Posts'}
-                                    </button>
-                                    <p className="text-[10px] text-slate-500 text-center">
-                                        {approvedCount > 0
-                                            ? `${approvedCount} Post${approvedCount !== 1 ? 's' : ''} Approved`
-                                            : 'No posts approved'}
-                                    </p>
-                                </div>
-                            ) : (
-                                <div className="space-y-2">
-                                    <button
-                                        onClick={() => alert('Your site is not yet ready. Contact support.')}
-                                        disabled={approvedCount === 0}
-                                        className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all"
-                                    >
-                                        <Rocket size={16} />
-                                        Launch Approved Posts
-                                    </button>
-                                    <p className="text-[10px] text-slate-500 text-center">
-                                        {approvedCount > 0
-                                            ? `${approvedCount} Post${approvedCount !== 1 ? 's' : ''} Approved`
-                                            : 'No posts approved'}
-                                    </p>
-                                </div>
-                            )}
-                        </div>
-                    )}
                 </div>
 
                 {/* Post List */}
@@ -609,11 +477,11 @@ export const PostsWorkspace: React.FC<Props> = ({
                                 animate={{ y: -1200 }}
                                 transition={{
                                     duration: 1.8,
-                                    delay: (filteredPosts.filter(p => p.status === PostStatus.APPROVED).length * 0.08) + 0.1,
+                                    delay: (approvedPosts.length * 0.08) + 0.1,
                                     ease: [0.4, 0, 0.2, 1]
                                 }}
                                 className="absolute left-1/2 -translate-x-1/2 z-50 pointer-events-none"
-                                style={{ top: filteredPosts.filter(p => p.status === PostStatus.APPROVED).length * 100 }}
+                                style={{ top: approvedPosts.length * 100 }}
                             >
                                 <div className="relative">
                                     <img src="/mission-icon.svg" alt="Launch" className="w-16 h-auto" />
@@ -628,91 +496,167 @@ export const PostsWorkspace: React.FC<Props> = ({
                         )}
                     </AnimatePresence>
 
-                    {filteredPosts.length === 0 ? (
-                        <EmptyStateGuide
-                            currentTab={statusFilter}
-                            statusCounts={statusCounts}
-                            onNavigate={setStatusFilter}
-                            getNextTabWithContent={getNextTabWithContent}
-                        />
+                    {allVisiblePosts.length === 0 ? (
+                        <EmptyStateGuide />
                     ) : (
-                        <AnimatePresence mode="popLayout">
-                            {filteredPosts.map((post, index) => {
-                                const activeTask = tasks.find(t => t.targetPostId === post.id && t.status === TaskStatus.PROCESSING);
-                                const isApproved = post.status === PostStatus.APPROVED;
-                                return (
-                                    <motion.div
-                                        key={post.id}
-                                        layout
-                                        initial={{ opacity: 1, x: 0 }}
-                                        animate={isLaunching && isApproved ? {
-                                            y: -1000,
-                                            opacity: 0,
-                                            transition: {
-                                                duration: 1.8,
-                                                delay: index * 0.08,
-                                                ease: [0.4, 0, 0.2, 1]
-                                            }
-                                        } : {
-                                            y: 0,
-                                            opacity: 1
-                                        }}
-                                        exit={{ opacity: 0, x: -50, height: 0, marginBottom: 0 }}
-                                        transition={{ duration: 0.3, ease: "easeOut" }}
-                                        onClick={() => !isLaunching && setSelectedPostId(post.id)}
-                                        className={`
-                                            p-4 border-b border-slate-800/50 cursor-pointer transition-colors hover:bg-slate-900/50
-                                            ${selectedPostId === post.id ? 'bg-slate-900 border-l-2 border-l-cyan-500' : 'border-l-2 border-l-transparent'}
-                                            ${isLaunching ? 'pointer-events-none' : ''}
-                                        `}
-                                    >
-                                        <div className="flex justify-between items-start mb-1">
-                                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider truncate max-w-[120px]">
-                                                {getCategoryBreadcrumb(post.categoryId)}
-                                            </span>
-                                            <span className={`text-[10px] font-bold uppercase ${
-                                                post.status === PostStatus.REJECTED ? 'text-red-500' :
-                                                post.status === PostStatus.GENERATING ? 'text-cyan-500' :
-                                                post.status === PostStatus.APPROVED ? 'text-emerald-500' :
-                                                'text-amber-500'
-                                            }`}>
-                                                {post.status === PostStatus.NEEDS_REVIEW ? 'REVIEW' :
-                                                    post.status === PostStatus.GENERATING ? 'GENERATING' :
-                                                    post.status === PostStatus.APPROVED ? 'READY' :
-                                                    post.status.toUpperCase()}
-                                            </span>
+                        <>
+                            {/* SECTION 1: Needs Review */}
+                            <div className="border-b border-slate-700">
+                                <div className="px-4 py-3 bg-slate-900/80 sticky top-0 z-10 border-b border-slate-800">
+                                    <div className="flex items-center justify-between">
+                                        <h2 className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-2">
+                                            <span className="w-2 h-2 bg-amber-400 rounded-full"></span>
+                                            Needs Review
+                                        </h2>
+                                        <span className="text-xs text-slate-500 font-medium">{needsReviewPosts.length}</span>
+                                    </div>
+                                </div>
+                                <AnimatePresence mode="popLayout">
+                                    {needsReviewPosts.length === 0 ? (
+                                        <div className="px-4 py-6 text-center">
+                                            <p className="text-xs text-slate-600">No posts awaiting review</p>
                                         </div>
-                                        <h3 className={`text-sm font-medium leading-snug mb-2 ${selectedPostId === post.id ? 'text-white' : 'text-slate-400'}`}>
-                                            {post.title}
-                                        </h3>
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-5 h-5 bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-400">
-                                                    {(post.editor || 'SJ').substring(0, 2).toUpperCase()}
+                                    ) : (
+                                        needsReviewPosts.map((post) => (
+                                            <motion.div
+                                                key={post.id}
+                                                layout
+                                                initial={{ opacity: 1, x: 0 }}
+                                                exit={{ opacity: 0, x: -50, height: 0, marginBottom: 0 }}
+                                                transition={{ duration: 0.3, ease: "easeOut" }}
+                                                onClick={() => setSelectedPostId(post.id)}
+                                                className={`
+                                                    p-4 border-b border-slate-800/50 cursor-pointer transition-colors hover:bg-slate-900/50
+                                                    ${selectedPostId === post.id ? 'bg-slate-900 border-l-2 border-l-cyan-500' : 'border-l-2 border-l-transparent'}
+                                                `}
+                                            >
+                                                <div className="flex justify-between items-start mb-1 gap-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                                                            {getCategoryBreadcrumb(post.categoryId)}
+                                                        </span>
+                                                        {post.isCategoryPage && (
+                                                            <span className="px-1.5 py-0.5 bg-purple-500/20 text-purple-400 text-[9px] font-bold uppercase flex items-center gap-1">
+                                                                <FolderOpen size={10} /> Page
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    {post.status === PostStatus.GENERATING && (
+                                                        <LoadingBar className="w-10 flex-shrink-0" />
+                                                    )}
                                                 </div>
-                                                <span className="text-xs text-slate-600">{post.updatedAt?.toDate().toLocaleDateString()}</span>
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                {activeTask && <Loader2 size={14} className="animate-spin text-cyan-500" />}
-                                                {isApproved && (
+                                                <h3 className={`text-sm font-medium leading-snug mb-2 ${selectedPostId === post.id ? 'text-white' : 'text-slate-400'}`}>
+                                                    {post.title}
+                                                </h3>
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="w-5 h-5 bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-400">
+                                                            {(post.editor || 'SJ').substring(0, 2).toUpperCase()}
+                                                        </div>
+                                                        <span className="text-xs text-slate-600">{post.updatedAt?.toDate().toLocaleDateString()}</span>
+                                                    </div>
                                                     <button
                                                         onClick={(e) => {
                                                             e.stopPropagation();
-                                                            handleReject(post.id);
+                                                            setDeleteConfirmId(post.id);
                                                         }}
                                                         disabled={rejectingPostId === post.id}
-                                                        className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-600/30 transition-all disabled:opacity-50"
-                                                        title="Reject this post"
+                                                        className="p-1 text-slate-600 hover:text-red-400 transition-colors disabled:opacity-50"
+                                                        title="Delete this post"
                                                     >
-                                                        {rejectingPostId === post.id ? <Loader2 size={10} className="animate-spin" /> : 'Reject'}
+                                                        {rejectingPostId === post.id ? <LoadingBar className="w-6" /> : <Trash2 size={14} />}
                                                     </button>
-                                                )}
-                                            </div>
+                                                </div>
+                                            </motion.div>
+                                        ))
+                                    )}
+                                </AnimatePresence>
+                            </div>
+
+                            {/* SECTION 2: Approved for Launch */}
+                            <div>
+                                <div className="px-4 py-3 bg-slate-900/80 sticky top-0 z-10 border-b border-slate-800">
+                                    <div className="flex items-center justify-between">
+                                        <h2 className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-2">
+                                            <CheckCircle size={12} className="text-emerald-400" />
+                                            Approved for Launch
+                                        </h2>
+                                        <span className="text-xs text-slate-500 font-medium">{approvedPosts.length}</span>
+                                    </div>
+                                </div>
+                                <AnimatePresence mode="popLayout">
+                                    {approvedPosts.length === 0 ? (
+                                        <div className="px-4 py-6 text-center">
+                                            <p className="text-xs text-slate-600">No approved posts yet</p>
                                         </div>
-                                    </motion.div>
-                                );
-                            })}
-                        </AnimatePresence>
+                                    ) : (
+                                        approvedPosts.map((post, index) => (
+                                            <motion.div
+                                                key={post.id}
+                                                layout
+                                                initial={{ opacity: 1, x: 0 }}
+                                                animate={isLaunching ? {
+                                                    y: -1000,
+                                                    opacity: 0,
+                                                    transition: {
+                                                        duration: 1.8,
+                                                        delay: index * 0.08,
+                                                        ease: [0.4, 0, 0.2, 1]
+                                                    }
+                                                } : {
+                                                    y: 0,
+                                                    opacity: 1
+                                                }}
+                                                exit={{ opacity: 0, x: -50, height: 0, marginBottom: 0 }}
+                                                transition={{ duration: 0.3, ease: "easeOut" }}
+                                                onClick={() => !isLaunching && setSelectedPostId(post.id)}
+                                                className={`
+                                                    p-4 border-b border-slate-800/50 cursor-pointer transition-colors hover:bg-slate-900/50
+                                                    ${selectedPostId === post.id ? 'bg-slate-900 border-l-2 border-l-cyan-500' : 'border-l-2 border-l-transparent'}
+                                                    ${isLaunching ? 'pointer-events-none' : ''}
+                                                `}
+                                            >
+                                                <div className="flex justify-between items-start mb-1 gap-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                                                            {getCategoryBreadcrumb(post.categoryId)}
+                                                        </span>
+                                                        {post.isCategoryPage && (
+                                                            <span className="px-1.5 py-0.5 bg-purple-500/20 text-purple-400 text-[9px] font-bold uppercase flex items-center gap-1">
+                                                                <FolderOpen size={10} /> Page
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <CheckCircle size={14} className="text-emerald-500 flex-shrink-0" />
+                                                </div>
+                                                <h3 className={`text-sm font-medium leading-snug mb-2 ${selectedPostId === post.id ? 'text-white' : 'text-slate-400'}`}>
+                                                    {post.title}
+                                                </h3>
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="w-5 h-5 bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-400">
+                                                            {(post.editor || 'SJ').substring(0, 2).toUpperCase()}
+                                                        </div>
+                                                        <span className="text-xs text-slate-600">{post.updatedAt?.toDate().toLocaleDateString()}</span>
+                                                    </div>
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setDeleteConfirmId(post.id);
+                                                        }}
+                                                        disabled={rejectingPostId === post.id}
+                                                        className="p-1 text-slate-600 hover:text-red-400 transition-colors disabled:opacity-50"
+                                                        title="Delete this post"
+                                                    >
+                                                        {rejectingPostId === post.id ? <LoadingBar className="w-6" /> : <Trash2 size={14} />}
+                                                    </button>
+                                                </div>
+                                            </motion.div>
+                                        ))
+                                    )}
+                                </AnimatePresence>
+                            </div>
+                        </>
                     )}
                 </div>
             </div>
@@ -734,6 +678,17 @@ export const PostsWorkspace: React.FC<Props> = ({
                             <div className="max-w-3xl mx-auto">
                                 {/* Preview Card */}
                                 <AnimatePresence mode="wait">
+                                    {selectedPost.isCategoryPage ? (
+                                        <CategoryPageEditor
+                                            key={selectedPost.id}
+                                            post={selectedPost}
+                                            onUpdate={async (id, updates) => {
+                                                await onUpdatePost(id, updates);
+                                            }}
+                                            onQueueRegenerate={() => onQueueContent(selectedPost)}
+                                            categories={categories}
+                                        />
+                                    ) : (
                                     <motion.div
                                         key={selectedPost.id}
                                         initial={{ opacity: 0, y: 30 }}
@@ -791,8 +746,8 @@ export const PostsWorkspace: React.FC<Props> = ({
                                     <div className="px-6 pt-1 pb-6">
                                         {selectedPost.status === PostStatus.GENERATING ? (
                                             <div className="flex flex-col items-center justify-center py-20 text-slate-500">
-                                                <Loader2 size={40} className="animate-spin text-cyan-500 mb-4" />
-                                                <p className="font-mono text-sm animate-pulse">AI_WRITER_IS_TYPING...</p>
+                                                <LoadingBar className="w-32 mb-6" />
+                                                <p className="font-mono text-sm text-slate-400">Generating content...</p>
                                             </div>
                                         ) : editMode ? (
                                             <TiptapEditor
@@ -817,6 +772,7 @@ export const PostsWorkspace: React.FC<Props> = ({
                                         )}
                                     </div>
                                     </motion.div>
+                                    )}
                                 </AnimatePresence>
                             </div>
                         </div>
@@ -851,32 +807,40 @@ export const PostsWorkspace: React.FC<Props> = ({
                         {selectedPost.status === PostStatus.NEEDS_REVIEW && (
                             <div className="flex gap-2">
                                 <button
-                                    onClick={() => handleReject(selectedPost.id)}
+                                    onClick={() => setDeleteConfirmId(selectedPost.id)}
                                     disabled={rejectingPostId === selectedPost.id || approvingPostId === selectedPost.id}
-                                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50"
+                                    className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50"
                                 >
-                                    {rejectingPostId === selectedPost.id ? <Loader2 size={14} className="animate-spin" /> : <XCircle size={14} />}
-                                    Reject
+                                    <Trash2 size={14} />
                                 </button>
                                 <button
                                     onClick={() => handleApprove(selectedPost.id)}
                                     disabled={approvingPostId === selectedPost.id || rejectingPostId === selectedPost.id}
                                     className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50"
                                 >
-                                    {approvingPostId === selectedPost.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
-                                    Approve
+                                    {approvingPostId === selectedPost.id ? <LoadingBar className="w-8" /> : <CheckCircle size={14} />}
+                                    Approve for Launch
                                 </button>
                             </div>
                         )}
 
-                        {selectedPost.status === PostStatus.REJECTED && (
-                            <button
-                                onClick={() => onUpdateStatus(selectedPost.id, PostStatus.NEEDS_REVIEW)}
-                                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold uppercase tracking-wider transition-all"
-                            >
-                                <RefreshCw size={14} />
-                                Restore to Review
-                            </button>
+                        {selectedPost.status === PostStatus.APPROVED && (
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setDeleteConfirmId(selectedPost.id)}
+                                    disabled={rejectingPostId === selectedPost.id}
+                                    className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50"
+                                >
+                                    <Trash2 size={14} />
+                                </button>
+                                <button
+                                    onClick={() => onUpdateStatus(selectedPost.id, PostStatus.NEEDS_REVIEW)}
+                                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold uppercase tracking-wider transition-all"
+                                >
+                                    <RefreshCw size={14} />
+                                    Back to Approve
+                                </button>
+                            </div>
                         )}
                     </div>
                 )}
@@ -913,7 +877,7 @@ export const PostsWorkspace: React.FC<Props> = ({
                                                 exit={{ opacity: 0 }}
                                                 className="flex items-center gap-1.5 text-[10px] font-medium text-indigo-400"
                                             >
-                                                <Loader2 size={10} className="animate-spin" />
+                                                <LoadingBar className="w-6" />
                                                 <span>Saving...</span>
                                             </motion.div>
                                         ) : (
@@ -952,7 +916,8 @@ export const PostsWorkspace: React.FC<Props> = ({
                                 )}
 
                                 <div className="space-y-1">
-                                    <label className="text-xs text-slate-400 font-medium">Category</label>
+                                    <label className="text-xs text-slate-400 font-medium">Content Area</label>
+                                    <p className="text-xs text-cyan-400 mb-1">{getCategoryBreadcrumb(selectedPost.categoryId)}</p>
                                     <div className="relative">
                                         <select
                                             value={selectedPost.categoryId}
@@ -960,20 +925,19 @@ export const PostsWorkspace: React.FC<Props> = ({
                                             className="w-full bg-slate-950 border border-slate-700 py-2 pl-3 pr-8 text-sm text-slate-200 focus:border-indigo-500 outline-none appearance-none"
                                         >
                                             {categories.map(c => {
-                                                // Calculate depth for visual hierarchy
-                                                let depth = 0;
-                                                let current = c;
-                                                while (current.parentId) {
-                                                    depth++;
-                                                    const parent = categories.find(cat => cat.id === current.parentId);
-                                                    if (parent) current = parent;
-                                                    else break;
-                                                }
-                                                const prefix = depth > 0 ? '-'.repeat(depth) + ' ' : '';
-
+                                                const depth = (() => {
+                                                    let d = 0;
+                                                    let curr: typeof c | undefined = c;
+                                                    while (curr?.parentId) {
+                                                        d++;
+                                                        curr = categories.find(p => p.id === curr!.parentId);
+                                                    }
+                                                    return d;
+                                                })();
+                                                const isParent = depth === 0;
                                                 return (
                                                     <option key={c.id} value={c.id}>
-                                                        {prefix}{c.name}
+                                                        {isParent ? `■ ${c.name.toUpperCase()}` : `${'    '.repeat(depth)}└ ${c.name}`}
                                                     </option>
                                                 );
                                             })}
@@ -1111,6 +1075,58 @@ export const PostsWorkspace: React.FC<Props> = ({
                             >
                                 Got it
                             </button>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Delete Confirmation Modal */}
+            <AnimatePresence>
+                {deleteConfirmId && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
+                        onClick={() => setDeleteConfirmId(null)}
+                    >
+                        <motion.div
+                            initial={{ scale: 0.9, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.9, opacity: 0 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="bg-slate-900 border border-slate-700 p-6 max-w-sm w-full mx-4"
+                        >
+                            <div className="flex items-center gap-3 mb-4">
+                                <div className="w-10 h-10 bg-red-500/20 rounded-full flex items-center justify-center">
+                                    <Trash2 size={20} className="text-red-400" />
+                                </div>
+                                <div>
+                                    <h3 className="text-lg font-bold text-white">Delete Post?</h3>
+                                    <p className="text-sm text-slate-400">This action cannot be undone.</p>
+                                </div>
+                            </div>
+
+                            <p className="text-sm text-slate-300 mb-6 bg-slate-800/50 p-3 border border-slate-700">
+                                "{posts.find(p => p.id === deleteConfirmId)?.title}"
+                            </p>
+
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={() => setDeleteConfirmId(null)}
+                                    className="flex-1 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold uppercase tracking-wider transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={() => handleDelete(deleteConfirmId)}
+                                    disabled={rejectingPostId === deleteConfirmId}
+                                    className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-sm font-bold uppercase tracking-wider transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                                >
+                                    {rejectingPostId === deleteConfirmId ? <LoadingBar className="w-6" /> : <Trash2 size={14} />}
+                                    Delete
+                                </button>
+                            </div>
                         </motion.div>
                     </motion.div>
                 )}

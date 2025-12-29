@@ -825,7 +825,9 @@ enum TaskStatus {
 enum TaskType {
   GENERATE_TITLES = 'Generate Titles',
   GENERATE_CONTENT = 'Generate Content',
-  GENERATE_IMAGE = 'Generate Image'
+  GENERATE_IMAGE = 'Generate Image',
+  GENERATE_CATEGORY_PAGE = 'Generate Category Page',
+  GOOGLE_DEEP_RESEARCH = 'Google Deep Research'
 }
 
 // Post status enum
@@ -925,6 +927,10 @@ export const processGenerationQueue = functions
         await processGenerateContent(taskRef, taskData);
       } else if (type === TaskType.GENERATE_IMAGE) {
         await processGenerateImage(taskRef, taskData);
+      } else if (type === TaskType.GENERATE_CATEGORY_PAGE) {
+        await processGenerateCategoryPage(taskRef, taskData);
+      } else if (type === TaskType.GOOGLE_DEEP_RESEARCH) {
+        await processGoogleDeepResearch(taskRef, taskData);
       } else {
         throw new Error(`Unknown task type: ${type}`);
       }
@@ -950,7 +956,7 @@ export const processGenerationQueue = functions
       });
 
       // Reset post status if content generation failed
-      if (taskData.type === TaskType.GENERATE_CONTENT && taskData.targetPostId) {
+      if ((taskData.type === TaskType.GENERATE_CONTENT || taskData.type === TaskType.GENERATE_CATEGORY_PAGE) && taskData.targetPostId) {
         const postRef = admin.firestore().doc(
           `organizations/${taskData.organizationId}/projects/${taskData.projectId}/posts/${taskData.targetPostId}`
         );
@@ -974,6 +980,19 @@ async function processGenerateTitles(
   const { organizationId, projectId, categoryId, categoryName, requestedCount = 5, contextOverride, createdBy } = taskData;
 
   console.log(`[GenerateTitles] Category: ${categoryName}, Count: ${requestedCount}`);
+
+  // Credit check - 1 credit per stub
+  const orgDoc = await admin.firestore().doc(`organizations/${organizationId}`).get();
+  const creditBalance = orgDoc.data()?.credits?.balance ?? 0;
+  if (creditBalance < requestedCount) {
+    console.error(`[GenerateTitles] Insufficient credits. Required: ${requestedCount}, Available: ${creditBalance}`);
+    await taskRef.update({
+      status: TaskStatus.FAILED,
+      error: `Insufficient credits. Required: ${requestedCount}, Available: ${creditBalance}`,
+      completedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    return;
+  }
 
   // Fetch all context in parallel: category, project, research, existing posts
   const [categoryDoc, projectDoc, researchDoc, existingPostsSnap] = await Promise.all([
@@ -1067,6 +1086,19 @@ async function processGenerateTitles(
     console.log(`[GenerateTitles] Using keyword research with ${primaryKeywords.length} keywords`);
   }
 
+  // Build Google Deep Research context if available
+  let deepResearchContext = '';
+  if (categoryData?.googleDeepResearch?.status === 'complete' && categoryData.googleDeepResearch.content) {
+    // Include a summary of the research to inform title generation
+    const researchContent = categoryData.googleDeepResearch.content;
+    // Truncate to first 2000 chars to keep prompt manageable
+    const truncatedResearch = researchContent.length > 2000
+      ? researchContent.substring(0, 2000) + '...'
+      : researchContent;
+    deepResearchContext = `\n**EXPERT RESEARCH INSIGHTS**\nUse these insights to create more authoritative, well-researched titles:\n${truncatedResearch}`;
+    console.log(`[GenerateTitles] Including Google Deep Research context`);
+  }
+
   await taskRef.update({ progress: 40 });
 
   // Build existing titles context for deduplication
@@ -1089,6 +1121,7 @@ Name: ${categoryName}
 ${categoryDescription ? `Description: ${categoryDescription}` : ''}
 
 ${keywordContext}
+${deepResearchContext}
 ${existingTitlesContext}
 
 ---
@@ -1197,6 +1230,37 @@ Return as JSON array.`;
 
   await batch.commit();
   console.log(`[GenerateTitles] Created ${generatedTitles.length} posts for category: ${categoryName}`);
+
+  // Deduct credits - 1 per stub generated
+  const creditsToDeduct = generatedTitles.length;
+  if (creditsToDeduct > 0) {
+    await admin.firestore().runTransaction(async (transaction) => {
+      const orgRef = admin.firestore().doc(`organizations/${organizationId}`);
+      const orgSnap = await transaction.get(orgRef);
+      const currentBalance = orgSnap.data()?.credits?.balance ?? 0;
+      const newBalance = Math.max(0, currentBalance - creditsToDeduct);
+
+      transaction.update(orgRef, {
+        'credits.balance': newBalance,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      // Log credit transaction
+      const txRef = admin.firestore().collection('credit_transactions').doc();
+      transaction.set(txRef, {
+        id: txRef.id,
+        organizationId,
+        userId: createdBy,
+        amount: -creditsToDeduct,
+        balanceAfter: newBalance,
+        type: 'usage',
+        description: `Generated ${creditsToDeduct} stubs for ${categoryName}`,
+        metadata: { projectId, categoryId, feature: 'title_generation' },
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    });
+    console.log(`[GenerateTitles] Deducted ${creditsToDeduct} credits for stub generation`);
+  }
 }
 
 /**
@@ -1206,7 +1270,22 @@ async function processGenerateContent(
   taskRef: admin.firestore.DocumentReference,
   taskData: any
 ) {
-  const { organizationId, projectId, targetPostId, categoryName, categoryId } = taskData;
+  const { organizationId, projectId, targetPostId, categoryName, categoryId, createdBy } = taskData;
+
+  const ARTICLE_CREDIT_COST = 1;
+
+  // Credit check - 1 credit per article
+  const orgDoc = await admin.firestore().doc(`organizations/${organizationId}`).get();
+  const creditBalance = orgDoc.data()?.credits?.balance ?? 0;
+  if (creditBalance < ARTICLE_CREDIT_COST) {
+    console.error(`[GenerateContent] Insufficient credits. Required: ${ARTICLE_CREDIT_COST}, Available: ${creditBalance}`);
+    await taskRef.update({
+      status: TaskStatus.FAILED,
+      error: `Insufficient credits. Required: ${ARTICLE_CREDIT_COST}, Available: ${creditBalance}`,
+      completedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    return;
+  }
 
   // Get post data
   const postRef = admin.firestore().doc(
@@ -1317,6 +1396,18 @@ async function processGenerateContent(
     console.log(`[GenerateContent] Using keyword research with ${primaryKeywords.length} keywords`);
   }
 
+  // Build Google Deep Research context if available
+  let deepResearchContext = '';
+  if (category?.googleDeepResearch?.status === 'complete' && category.googleDeepResearch.content) {
+    const researchContent = category.googleDeepResearch.content;
+    // Include more of the research for content generation (up to 3000 chars)
+    const truncatedResearch = researchContent.length > 3000
+      ? researchContent.substring(0, 3000) + '...'
+      : researchContent;
+    deepResearchContext = `\n**EXPERT RESEARCH (use for accuracy and authority)**\n${truncatedResearch}`;
+    console.log(`[GenerateContent] Including Google Deep Research context`);
+  }
+
   await taskRef.update({ progress: 40 });
 
   // Determine content parameters
@@ -1343,6 +1434,7 @@ Search Intent: ${post.searchIntent || 'informational'}
 Target Word Count: 1,200-1,800 words
 
 ${keywordContext}
+${deepResearchContext}
 
 ---
 
@@ -1415,6 +1507,360 @@ Write the article now in clean Markdown format. Start directly with the hook.`;
   });
 
   console.log(`[GenerateContent] Content generated: ${content.length} chars for "${post.title}"`);
+
+  // Deduct credits - 1 per article generated
+  const userId = createdBy || post.createdBy || 'system';
+  await admin.firestore().runTransaction(async (transaction) => {
+    const orgRef = admin.firestore().doc(`organizations/${organizationId}`);
+    const orgSnap = await transaction.get(orgRef);
+    const currentBalance = orgSnap.data()?.credits?.balance ?? 0;
+    const newBalance = Math.max(0, currentBalance - ARTICLE_CREDIT_COST);
+
+    transaction.update(orgRef, {
+      'credits.balance': newBalance,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    // Log credit transaction
+    const txRef = admin.firestore().collection('credit_transactions').doc();
+    transaction.set(txRef, {
+      id: txRef.id,
+      organizationId,
+      userId,
+      amount: -ARTICLE_CREDIT_COST,
+      balanceAfter: newBalance,
+      type: 'usage',
+      description: `Generated article: ${post.title?.substring(0, 50) || 'Untitled'}`,
+      metadata: { projectId, postId: targetPostId, categoryId: catId, feature: 'article_generation' },
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  });
+  console.log(`[GenerateContent] Deducted ${ARTICLE_CREDIT_COST} credit for article generation`);
+}
+
+/**
+ * Generate category page content (introduction text for category landing pages)
+ */
+async function processGenerateCategoryPage(
+  taskRef: admin.firestore.DocumentReference,
+  taskData: any
+) {
+  const { organizationId, projectId, categoryId, categoryName, targetPostId, createdBy } = taskData;
+
+  const CATEGORY_PAGE_CREDIT_COST = 1;
+
+  console.log(`[GenerateCategoryPage] Starting for category: ${categoryName}`);
+
+  // Credit check
+  const orgDoc = await admin.firestore().doc(`organizations/${organizationId}`).get();
+  const creditBalance = orgDoc.data()?.credits?.balance ?? 0;
+
+  if (creditBalance < CATEGORY_PAGE_CREDIT_COST) {
+    throw new Error(`Insufficient credits. Required: ${CATEGORY_PAGE_CREDIT_COST}, Available: ${creditBalance}`);
+  }
+
+  await taskRef.update({ progress: 10 });
+
+  // Get post document
+  const postRef = admin.firestore().doc(
+    `organizations/${organizationId}/projects/${projectId}/posts/${targetPostId}`
+  );
+  const postDoc = await postRef.get();
+
+  if (!postDoc.exists) {
+    throw new Error('Category page post not found');
+  }
+
+  const post = postDoc.data()!;
+
+  // Update post to GENERATING status
+  await postRef.update({
+    status: PostStatus.GENERATING,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  await taskRef.update({ progress: 20 });
+
+  // Get category and project context
+  const [categoryDoc, projectDoc] = await Promise.all([
+    admin.firestore().doc(`organizations/${organizationId}/projects/${projectId}/categories/${categoryId}`).get(),
+    admin.firestore().doc(`organizations/${organizationId}/projects/${projectId}`).get()
+  ]);
+
+  const category = categoryDoc.data();
+  const project = projectDoc.data();
+
+  await taskRef.update({ progress: 30 });
+
+  // Build business context
+  let businessContext = '';
+  if (project?.businessProfile) {
+    const bp = project.businessProfile;
+    businessContext = [
+      bp.businessName ? `Business: ${bp.businessName}` : '',
+      bp.industry?.primary ? `Industry: ${bp.industry.primary}` : '',
+      bp.targetAudience?.primary ? `Target Audience: ${bp.targetAudience.primary}` : '',
+      bp.brandVoice?.tone ? `Tone: ${bp.brandVoice.tone}` : ''
+    ].filter(Boolean).join('\n');
+  }
+
+  const aiInstructions = post.categoryPageContent?.aiInstructions || category?.description || '';
+
+  // Build Google Deep Research context if available
+  let deepResearchContext = '';
+  if (category?.googleDeepResearch?.status === 'complete' && category.googleDeepResearch.content) {
+    const researchContent = category.googleDeepResearch.content;
+    // Use up to 2000 chars for category page intro
+    const truncatedResearch = researchContent.length > 2000
+      ? researchContent.substring(0, 2000) + '...'
+      : researchContent;
+    deepResearchContext = `**RESEARCH INSIGHTS (base content on this)**\n${truncatedResearch}\n\n`;
+    console.log(`[GenerateCategoryPage] Including Google Deep Research context`);
+  }
+
+  await taskRef.update({ progress: 40 });
+
+  // Generate content with Gemini
+  const ai = getGeminiClient();
+
+  const prompt = `You are an expert content writer creating a category landing page introduction for a website.
+
+${businessContext ? `**BUSINESS CONTEXT**\n${businessContext}\n\n` : ''}${deepResearchContext}**CATEGORY**
+Name: ${categoryName}
+${aiInstructions ? `Context/Instructions: ${aiInstructions}` : ''}
+
+---
+
+**TASK:** Write a compelling category page introduction that:
+1. Immediately explains what this content category is about
+2. Highlights the value readers will get from content in this category
+3. Builds trust and establishes authority
+4. Encourages exploration of articles within this category
+
+**REQUIREMENTS:**
+- 150-300 words
+- Start with a hook that connects to the reader's needs
+- Briefly describe what types of content they'll find here
+- End with a subtle call-to-action to explore the articles
+- Use H2 headings sparingly (1 max if needed)
+- Professional but approachable tone
+- Do NOT include the category name as a heading (it will be displayed separately)
+
+Return clean Markdown content only. No preamble, no explanation, just the content.`;
+
+  await taskRef.update({ progress: 50 });
+
+  const response = await withRetry(async () => {
+    return ai.models.generateContent({
+      model: 'gemini-2.0-flash',
+      contents: prompt
+    });
+  });
+
+  await taskRef.update({ progress: 70 });
+
+  let content = response.text || '';
+  content = stripPreamble(content);
+
+  await taskRef.update({ progress: 80 });
+
+  // Update post with generated content
+  await postRef.update({
+    content,
+    'categoryPageContent.introduction': content,
+    status: PostStatus.NEEDS_REVIEW,
+    generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  await taskRef.update({ progress: 90 });
+
+  // Deduct credit
+  await admin.firestore().runTransaction(async (transaction) => {
+    const orgRef = admin.firestore().doc(`organizations/${organizationId}`);
+    const orgSnap = await transaction.get(orgRef);
+    const currentBalance = orgSnap.data()?.credits?.balance ?? 0;
+    const newBalance = Math.max(0, currentBalance - CATEGORY_PAGE_CREDIT_COST);
+
+    transaction.update(orgRef, { 'credits.balance': newBalance });
+
+    // Log transaction
+    const txRef = admin.firestore().collection('credit_transactions').doc();
+    transaction.set(txRef, {
+      organizationId,
+      userId: createdBy,
+      amount: -CATEGORY_PAGE_CREDIT_COST,
+      balanceAfter: newBalance,
+      type: 'usage',
+      description: `Generated category page: ${categoryName}`,
+      metadata: {
+        projectId,
+        categoryId,
+        postId: targetPostId,
+        feature: 'category_page_generation'
+      },
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  });
+
+  console.log(`[GenerateCategoryPage] Completed for: ${categoryName}`);
+}
+
+/**
+ * Google Deep Research - Uses Gemini with Google Search grounding
+ * for expert-level research on a category
+ */
+async function processGoogleDeepResearch(
+  taskRef: admin.firestore.DocumentReference,
+  taskData: any
+) {
+  const { organizationId, projectId, categoryId, categoryName, createdBy } = taskData;
+
+  const DEEP_RESEARCH_CREDIT_COST = 20;
+
+  console.log(`[GoogleDeepResearch] Starting for category: ${categoryName}`);
+
+  // Credit check
+  const orgDoc = await admin.firestore().doc(`organizations/${organizationId}`).get();
+  const creditBalance = orgDoc.data()?.credits?.balance ?? 0;
+
+  if (creditBalance < DEEP_RESEARCH_CREDIT_COST) {
+    // Update category status to failed
+    const catRef = admin.firestore().doc(
+      `organizations/${organizationId}/projects/${projectId}/categories/${categoryId}`
+    );
+    await catRef.update({
+      'googleDeepResearch.status': 'failed',
+      'googleDeepResearch.error': `Insufficient credits. Required: ${DEEP_RESEARCH_CREDIT_COST}, Available: ${creditBalance}`,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    throw new Error(`Insufficient credits. Required: ${DEEP_RESEARCH_CREDIT_COST}, Available: ${creditBalance}`);
+  }
+
+  await taskRef.update({ progress: 10 });
+
+  // Get category and project context
+  const catRef = admin.firestore().doc(
+    `organizations/${organizationId}/projects/${projectId}/categories/${categoryId}`
+  );
+  const [categoryDoc, projectDoc] = await Promise.all([
+    catRef.get(),
+    admin.firestore().doc(`organizations/${organizationId}/projects/${projectId}`).get()
+  ]);
+
+  const category = categoryDoc.data();
+  const project = projectDoc.data();
+
+  await taskRef.update({ progress: 20 });
+
+  // Build business context
+  let businessContext = '';
+  if (project?.businessProfile) {
+    const bp = project.businessProfile;
+    businessContext = [
+      bp.businessName ? `Business: ${bp.businessName}` : '',
+      bp.businessSummary ? `About: ${bp.businessSummary}` : '',
+      bp.industry?.primary ? `Industry: ${bp.industry.primary}` : '',
+      bp.targetAudience?.primary ? `Target Audience: ${bp.targetAudience.primary}` : '',
+      bp.targetAudience?.painPoints ? `Pain Points: ${bp.targetAudience.painPoints.join(', ')}` : '',
+      bp.brandVoice?.uniqueSellingPoints ? `USPs: ${bp.brandVoice.uniqueSellingPoints.join(', ')}` : ''
+    ].filter(Boolean).join('\n');
+  }
+
+  await taskRef.update({ progress: 30 });
+
+  // Build the research prompt
+  const ai = getGeminiClient();
+
+  const researchPrompt = `You are an expert researcher conducting deep research on a topic to support content creation.
+
+${businessContext ? `**BUSINESS CONTEXT**\n${businessContext}\n\n` : ''}**CATEGORY TO RESEARCH**
+Name: ${categoryName}
+${category?.description ? `Description: ${category.description}` : ''}
+
+---
+
+**RESEARCH OBJECTIVES:**
+1. Identify current industry trends and best practices
+2. Find key statistics, data points, and authoritative sources
+3. Understand common questions and concerns from the target audience
+4. Analyze the competitive landscape and content opportunities
+5. Discover emerging topics and future directions
+6. Identify expert opinions and thought leadership angles
+
+**DELIVERABLE:**
+Provide a comprehensive research report that will help create authoritative, well-researched content. Include:
+
+1. **Key Industry Insights** - Current state, trends, and developments
+2. **Statistics & Data** - Relevant numbers, percentages, and metrics with sources
+3. **Audience Questions** - Common questions people ask about this topic
+4. **Content Opportunities** - Gaps in existing content, unique angles to explore
+5. **Expert Perspectives** - Key thought leaders and their viewpoints
+6. **Emerging Trends** - What's coming next in this space
+
+Be specific, cite sources where possible, and focus on information that would make content more authoritative and valuable.`;
+
+  await taskRef.update({ progress: 40 });
+
+  // Call Gemini with search grounding enabled
+  const response = await withRetry(async () => {
+    return ai.models.generateContent({
+      model: 'gemini-2.0-flash',
+      contents: researchPrompt,
+      config: {
+        tools: [{
+          googleSearch: {}
+        }]
+      }
+    });
+  });
+
+  await taskRef.update({ progress: 70 });
+
+  const researchContent = response.text || '';
+
+  await taskRef.update({ progress: 80 });
+
+  // Update category with research results
+  await catRef.update({
+    googleDeepResearch: {
+      content: researchContent,
+      generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      status: 'complete'
+    },
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  await taskRef.update({ progress: 90 });
+
+  // Deduct credits
+  await admin.firestore().runTransaction(async (transaction) => {
+    const orgRef = admin.firestore().doc(`organizations/${organizationId}`);
+    const orgSnap = await transaction.get(orgRef);
+    const currentBalance = orgSnap.data()?.credits?.balance ?? 0;
+    const newBalance = Math.max(0, currentBalance - DEEP_RESEARCH_CREDIT_COST);
+
+    transaction.update(orgRef, { 'credits.balance': newBalance });
+
+    // Log transaction
+    const txRef = admin.firestore().collection('credit_transactions').doc();
+    transaction.set(txRef, {
+      organizationId,
+      userId: createdBy,
+      amount: -DEEP_RESEARCH_CREDIT_COST,
+      balanceAfter: newBalance,
+      type: 'usage',
+      description: `Google Deep Research: ${categoryName}`,
+      metadata: {
+        projectId,
+        categoryId,
+        feature: 'google_deep_research'
+      },
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  });
+
+  console.log(`[GoogleDeepResearch] Completed for: ${categoryName}`);
 }
 
 /**
@@ -1425,6 +1871,21 @@ async function processGenerateImage(
   taskData: any
 ) {
   const { organizationId, projectId, targetPostId, createdBy } = taskData;
+
+  const IMAGE_CREDIT_COST = 5;
+
+  // Credit check - 5 credits per image
+  const orgDoc = await admin.firestore().doc(`organizations/${organizationId}`).get();
+  const creditBalance = orgDoc.data()?.credits?.balance ?? 0;
+  if (creditBalance < IMAGE_CREDIT_COST) {
+    console.error(`[GenerateImage] Insufficient credits. Required: ${IMAGE_CREDIT_COST}, Available: ${creditBalance}`);
+    await taskRef.update({
+      status: TaskStatus.FAILED,
+      error: `Insufficient credits. Required: ${IMAGE_CREDIT_COST}, Available: ${creditBalance}`,
+      completedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    return;
+  }
 
   // Get post data
   const postRef = admin.firestore().doc(
@@ -1520,6 +1981,34 @@ Return ONLY the prompt text, no explanation.`
   });
 
   console.log(`[GenerateImage] Image saved: ${storagePath}`);
+
+  // Deduct credits - 5 per image generated
+  await admin.firestore().runTransaction(async (transaction) => {
+    const orgRef = admin.firestore().doc(`organizations/${organizationId}`);
+    const orgSnap = await transaction.get(orgRef);
+    const currentBalance = orgSnap.data()?.credits?.balance ?? 0;
+    const newBalance = Math.max(0, currentBalance - IMAGE_CREDIT_COST);
+
+    transaction.update(orgRef, {
+      'credits.balance': newBalance,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    // Log credit transaction
+    const txRef = admin.firestore().collection('credit_transactions').doc();
+    transaction.set(txRef, {
+      id: txRef.id,
+      organizationId,
+      userId: createdBy,
+      amount: -IMAGE_CREDIT_COST,
+      balanceAfter: newBalance,
+      type: 'usage',
+      description: `Generated hero image`,
+      metadata: { projectId, postId: targetPostId, feature: 'image_generation' },
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  });
+  console.log(`[GenerateImage] Deducted ${IMAGE_CREDIT_COST} credits for image generation`);
 }
 
 /**

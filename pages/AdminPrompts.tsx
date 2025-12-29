@@ -114,7 +114,20 @@ Requirements:
 - Use {{tone}} tone
 - Include specific metrics where possible
 - Tell a compelling story
-- Use markdown formatting`
+- Use markdown formatting`,
+
+    [ContentType.CATEGORY_PAGE]: `Write a compelling category page introduction for: "{{topic}}"
+
+**REQUIREMENTS:**
+- 150-300 words
+- Start with a hook that connects to the reader's needs
+- Explain what this content category covers
+- Highlight the value readers will get
+- End with a subtle call-to-action to explore articles
+- Use {{tone}} tone
+- Professional but approachable
+
+Return clean Markdown content only.`
 };
 
 // DEFAULT PROMPTS - System Prompts

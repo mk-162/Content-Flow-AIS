@@ -1,15 +1,19 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { usePaneWidth } from '../hooks/usePaneWidth';
-import { Category, Post, PostStatus, GenerationTask, TaskStatus, TaskType, CategoryResearch, TIER_FEATURES, SubscriptionTier } from '../types';
+import { Category, Post, PostStatus, GenerationTask, TaskStatus, TaskType, CategoryResearch, TIER_FEATURES, SubscriptionTier, Organization } from '../types';
 import {
     Plus, ChevronRight, Sparkles, Search, Wand2,
-    X, Check, Play, Trash2, Loader2, FileText, AlertTriangle,
-    GripVertical, ArrowRight, Tag, User, Edit2, RefreshCw, Info, Target, TrendingUp
+    X, Check, Play, Trash2, FileText, AlertTriangle,
+    GripVertical, ArrowRight, Tag, User, Edit2, RefreshCw, Info, Target, TrendingUp,
+    FolderOpen, Eye, EyeOff, Save, ChevronDown, Zap, CheckCircle
 } from 'lucide-react';
 import { suggestCategories, CategorySuggestion } from '../services/geminiService';
 import { researchService, getExistingResearch, isResearchStale } from '../services/researchService';
 import { motion, AnimatePresence } from 'framer-motion';
+import { TiptapEditor, TiptapViewer } from './TiptapEditor';
+import { ImageInspectorControl } from './ImageInspectorControl';
+import { Timestamp } from 'firebase/firestore';
 import {
     DndContext,
     DragOverlay,
@@ -30,6 +34,17 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
+// Consistent loading bar indicator
+const LoadingBar: React.FC<{ className?: string }> = ({ className = '' }) => (
+    <div className={`h-1 bg-slate-700 rounded-full overflow-hidden ${className}`}>
+        <motion.div
+            className="h-full w-1/3 bg-cyan-500 rounded-full"
+            animate={{ x: ['0%', '200%'] }}
+            transition={{ duration: 1, repeat: Infinity, ease: 'easeInOut' }}
+        />
+    </div>
+);
+
 interface Props {
     categories: Category[];
     posts: Post[];
@@ -40,11 +55,68 @@ interface Props {
     onMoveCategory: (id: string, newParentId: string | null, reorderedSiblings: { id: string; order: number }[]) => void;
     onQueueTitles: (id: string, count: number, contextOverride?: string) => void;
     onQueueContent: (post: Post) => void;
+    onQueueCategoryPageRegenerate?: (post: Post) => void;
+    onQueueGoogleDeepResearch?: (categoryId: string) => void;
     onUpdatePost: (id: string, updates: Partial<Post>) => void;
     onDeletePost: (id: string) => void;
     organizationId?: string;
     projectId?: string;
+    organization?: Organization;
 }
+
+// ============================================================================
+// COLLAPSIBLE SECTION COMPONENT
+// ============================================================================
+const CollapsibleSection: React.FC<{
+    title: string;
+    icon: React.ReactNode;
+    badge?: React.ReactNode;
+    defaultExpanded?: boolean;
+    accentColor?: 'cyan' | 'purple' | 'emerald';
+    children: React.ReactNode;
+}> = ({ title, icon, badge, defaultExpanded = true, accentColor = 'cyan', children }) => {
+    const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+
+    const accentColors = {
+        cyan: 'text-cyan-400 border-cyan-500/30',
+        purple: 'text-purple-400 border-purple-500/30',
+        emerald: 'text-emerald-400 border-emerald-500/30'
+    };
+
+    return (
+        <div className="border-b border-slate-800">
+            <button
+                onClick={() => setIsExpanded(!isExpanded)}
+                className={`w-full px-6 py-4 flex items-center justify-between hover:bg-slate-900/50 transition-colors ${accentColors[accentColor]}`}
+            >
+                <div className="flex items-center gap-3">
+                    {icon}
+                    <span className="text-xs font-bold uppercase tracking-widest text-slate-400">{title}</span>
+                    {badge}
+                </div>
+                <ChevronDown
+                    size={16}
+                    className={`text-slate-500 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
+                />
+            </button>
+            <AnimatePresence initial={false}>
+                {isExpanded && (
+                    <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className="overflow-hidden"
+                    >
+                        <div className="px-6 pb-6">
+                            {children}
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
+    );
+};
 
 // ============================================================================
 // DELETE CONFIRMATION MODAL
@@ -153,8 +225,8 @@ const BulkGenerateModal: React.FC<{
                             <Sparkles className="text-cyan-400" size={24} />
                         </div>
                         <div>
-                            <h2 className="text-lg font-bold text-white">Generate Titles for Selected</h2>
-                            <p className="text-sm text-slate-500">{selectedIds.size} categor{selectedIds.size === 1 ? 'y' : 'ies'} selected</p>
+                            <h2 className="text-lg font-bold text-white">Generate Article Ideas</h2>
+                            <p className="text-sm text-slate-500">{selectedIds.size} content area{selectedIds.size === 1 ? '' : 's'} selected</p>
                         </div>
                     </div>
                 </div>
@@ -355,7 +427,7 @@ const SortableCategoryRow: React.FC<{
                     {/* Progress Indicator */}
                     {isGenerating && (
                         <div className="flex items-center gap-2 mr-3">
-                            <Loader2 size={14} className="animate-spin text-cyan-500" />
+                            <LoadingBar className="w-8" />
                             {progress > 0 && (
                                 <div className="w-12 h-1 bg-slate-700 overflow-hidden">
                                     <div
@@ -372,20 +444,10 @@ const SortableCategoryRow: React.FC<{
                         <button
                             onClick={(e) => {
                                 e.stopPropagation();
-                                onGenerate();
-                            }}
-                            className="w-7 h-7 flex items-center justify-center border border-cyan-800 text-cyan-400 hover:bg-cyan-950 hover:border-cyan-500 transition-colors"
-                            title="Generate Titles"
-                        >
-                            <Sparkles size={14} />
-                        </button>
-                        <button
-                            onClick={(e) => {
-                                e.stopPropagation();
                                 onAddSub();
                             }}
                             className="w-7 h-7 flex items-center justify-center border border-slate-700 text-slate-500 hover:text-white hover:bg-slate-800 hover:border-slate-500 transition-colors"
-                            title="Add Subcategory"
+                            title="Add sub-area"
                         >
                             <Plus size={14} />
                         </button>
@@ -626,11 +688,12 @@ const CategoryTree: React.FC<{
 const CategoryCreator: React.FC<{
     parentId: string | null,
     parentName?: string,
+    parentDescription?: string,
     onClose: () => void,
     onAddBatch: (cats: { name: string, description: string }[]) => void,
     organizationId?: string,
     projectId?: string
-}> = ({ parentId, parentName, onClose, onAddBatch, organizationId, projectId }) => {
+}> = ({ parentId, parentName, parentDescription, onClose, onAddBatch, organizationId, projectId }) => {
     const [mode, setMode] = useState<'AI_AUTO' | 'MANUAL'>('AI_AUTO');
     const [categoryName, setCategoryName] = useState("");
     const [categoryDescription, setCategoryDescription] = useState("");
@@ -654,7 +717,8 @@ const CategoryCreator: React.FC<{
         setError(null);
         try {
             // Pass empty query string to trigger context-based suggestions
-            const results = await suggestCategories("", parentName, organizationId, projectId);
+            // Include parent description for better hierarchy awareness
+            const results = await suggestCategories("", parentName, organizationId, projectId, parentDescription);
             setSuggestions(results);
             // Auto-select all by default
             setSelectedIndices(new Set(results.map((_, i) => i)));
@@ -748,11 +812,8 @@ const CategoryCreator: React.FC<{
                         <>
                             {isLoading ? (
                                 <div className="flex flex-col items-center justify-center py-12">
-                                    <div className="relative w-16 h-16 mb-4">
-                                        <div className="absolute inset-0 border-4 border-slate-800 rounded-full"></div>
-                                        <div className="absolute inset-0 border-4 border-cyan-500 rounded-full border-t-transparent animate-spin"></div>
-                                        <Sparkles className="absolute inset-0 m-auto text-cyan-400 animate-pulse" size={24} />
-                                    </div>
+                                    <Sparkles className="text-cyan-400 mb-4" size={32} />
+                                    <LoadingBar className="w-32 mb-4" />
                                     <h3 className="text-lg font-medium text-white mb-2">Analyzing Brand & Industry...</h3>
                                     <p className="text-sm text-slate-500 max-w-md text-center">
                                         Our AI is reviewing your project settings to suggest the most relevant content categories for your audience.
@@ -1038,8 +1099,8 @@ const GenModal: React.FC<{
     return (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50">
             <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="bg-slate-900 border border-slate-700 p-8 w-full max-w-lg shadow-2xl">
-                <h2 className="text-2xl font-bold text-white mb-2">Generate Titles</h2>
-                <p className="text-sm text-slate-500 mb-6">Category: {category.name}</p>
+                <h2 className="text-2xl font-bold text-white mb-2">Generate Article Ideas</h2>
+                <p className="text-sm text-slate-500 mb-6">Content Area: {category.name}</p>
 
                 {/* Research Status Card */}
                 <div className="mb-6 p-4 bg-slate-950 border border-slate-800">
@@ -1054,7 +1115,7 @@ const GenModal: React.FC<{
                             <span className="text-xs font-bold text-slate-400 uppercase">Keyword Research</span>
                         </div>
                         {loadingResearch ? (
-                            <Loader2 size={14} className="animate-spin text-slate-500" />
+                            <LoadingBar className="w-8" />
                         ) : (
                             <span className={`text-xs font-bold uppercase ${
                                 researchStatus === 'deep' ? 'text-green-400' :
@@ -1114,7 +1175,7 @@ const GenModal: React.FC<{
                                 className="flex items-center gap-2 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-slate-700 text-white text-xs font-bold uppercase transition-colors"
                             >
                                 {generatingResearch ? (
-                                    <><Loader2 size={12} className="animate-spin" /> Generating...</>
+                                    <><LoadingBar className="w-6" /> Generating...</>
                                 ) : (
                                     <><TrendingUp size={12} /> Research</>
                                 )}
@@ -1174,9 +1235,11 @@ const GenModal: React.FC<{
 // ============================================================================
 export const CategoryWorkspace: React.FC<Props> = ({
     categories, posts, tasks, onAddCategory, onUpdateCategory, onDeleteCategory, onMoveCategory,
-    onQueueTitles, onQueueContent, onUpdatePost, onDeletePost,
+    onQueueTitles, onQueueContent, onQueueCategoryPageRegenerate, onQueueGoogleDeepResearch,
+    onUpdatePost, onDeletePost,
     organizationId,
-    projectId
+    projectId,
+    organization
 }) => {
     const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
     const [selectedPostIds, setSelectedPostIds] = useState<Set<string>>(new Set());
@@ -1187,12 +1250,27 @@ export const CategoryWorkspace: React.FC<Props> = ({
     const [isGenModalOpen, setIsGenModalOpen] = useState(false);
     const [genCategory, setGenCategory] = useState<Category | null>(null);
 
+    // Category page editing state
+    const [categoryPageEditMode, setCategoryPageEditMode] = useState(false);
+    const [showAiInstructions, setShowAiInstructions] = useState(false);
+
     // Bulk action modals
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [showBulkGenerateModal, setShowBulkGenerateModal] = useState(false);
 
     // Layout Resizing - shared across workspaces
     const [leftPaneWidth, setLeftPaneWidth] = usePaneWidth('leftPane');
+
+    // Get the category page post for the selected category
+    const categoryPagePost = useMemo(() => {
+        if (!selectedCategoryId) return null;
+        return posts.find(p => p.isCategoryPage && p.categoryId === selectedCategoryId) || null;
+    }, [posts, selectedCategoryId]);
+
+    // Check if user has access to Google Deep Research
+    const tier = organization?.subscriptionTier || SubscriptionTier.FREE;
+    const tierFeatures = TIER_FEATURES[tier];
+    const canUseGoogleDeepResearch = tierFeatures.googleDeepResearchEnabled;
 
     // Search state
     const [searchQuery, setSearchQuery] = useState('');
@@ -1297,6 +1375,11 @@ export const CategoryWorkspace: React.FC<Props> = ({
             p.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
             (p.teaser || '').toLowerCase().includes(searchQuery.toLowerCase());
         return matchesCategory && matchesSearch && categoryWorkflowStatuses.includes(p.status);
+    }).sort((a, b) => {
+        // Sort oldest first so new titles appear at bottom (less disruptive)
+        const dateA = a.createdAt?.toMillis() || 0;
+        const dateB = b.createdAt?.toMillis() || 0;
+        return dateA - dateB;
     });
 
     const selectedCategory = categories.find(c => c.id === selectedCategoryId);
@@ -1334,18 +1417,24 @@ export const CategoryWorkspace: React.FC<Props> = ({
                     className="border-r border-slate-800 bg-[#020617] flex flex-col h-full flex-shrink-0 flex-grow-0"
                 >
                     {/* Header */}
-                    <div className="p-6 border-b border-slate-800 flex items-center justify-between sticky top-0 z-20 bg-[#020617]">
-                        <div>
-                            <h1 className="text-2xl font-bold text-white tracking-tight mb-1">Categories</h1>
-                            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Structure</p>
+                    <div className="p-6 border-b border-slate-800 sticky top-0 z-20 bg-[#020617]">
+                        <div className="flex items-center justify-between mb-2">
+                            <h1 className="text-2xl font-bold text-white tracking-tight">Content Areas</h1>
+                            <button
+                                onClick={() => { setCreatorParentId(null); setIsCreatorOpen(true); }}
+                                className="px-3 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold uppercase tracking-wider flex items-center gap-2 transition-colors group relative"
+                                title="Add content area"
+                            >
+                                <Plus size={16} />
+                                New Area
+                                <span className="absolute right-0 top-full mt-2 px-2 py-1 bg-slate-800 text-xs text-slate-300 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                                    Uses credits to generate ideas
+                                </span>
+                            </button>
                         </div>
-                        <button
-                            onClick={() => { setCreatorParentId(null); setIsCreatorOpen(true); }}
-                            className="w-10 h-10 bg-cyan-600 hover:bg-cyan-500 text-white flex items-center justify-center transition-colors"
-                            title="Add Category"
-                        >
-                            <Plus size={20} />
-                        </button>
+                        <p className="text-xs text-slate-500">
+                            Each content area will generate article ideas automatically.
+                        </p>
                     </div>
 
                     {/* Bulk Action Bar */}
@@ -1355,10 +1444,10 @@ export const CategoryWorkspace: React.FC<Props> = ({
                             <div className="flex items-center gap-3">
                                 <button
                                     onClick={() => setShowBulkGenerateModal(true)}
-                                    className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider bg-cyan-600 hover:bg-cyan-500 text-white transition-colors flex items-center gap-2"
+                                    className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider bg-slate-700 hover:bg-slate-600 text-white transition-colors flex items-center gap-2"
                                 >
                                     <Sparkles size={12} />
-                                    Generate Selected
+                                    Generate More
                                 </button>
                                 <button
                                     onClick={() => setShowDeleteModal(true)}
@@ -1397,16 +1486,16 @@ export const CategoryWorkspace: React.FC<Props> = ({
                     <div className="h-8 w-0.5 bg-slate-600 group-hover:bg-white" />
                 </div>
 
-                {/* COLUMN 2: DATA TABLE */}
+                {/* COLUMN 2: CONTENT SECTIONS */}
                 <div className="flex-1 flex flex-col h-full bg-[#0f172a] relative min-w-0">
                     {/* Header - Only show when category selected */}
                     {selectedCategoryId && (
-                        <div className="p-6 border-b border-slate-800 bg-[#0f172a] z-20 sticky top-0">
+                        <div className="px-6 py-4 border-b border-slate-800 bg-slate-900/50 z-20 sticky top-0">
                             {/* Breadcrumb as H1 */}
-                            <h1 className="text-xl font-bold text-white tracking-tight mb-4 flex items-center gap-2">
+                            <h1 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
                                 {breadcrumb.map((name, index) => (
                                     <React.Fragment key={index}>
-                                        <span className={`${index === breadcrumb.length - 1 ? 'text-cyan-400' : 'text-slate-500'}`}>
+                                        <span className={`${index === breadcrumb.length - 1 ? 'text-purple-400' : 'text-slate-500'}`}>
                                             {name}
                                         </span>
                                         {index < breadcrumb.length - 1 && (
@@ -1415,75 +1504,355 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                     </React.Fragment>
                                 ))}
                             </h1>
-
-                            {/* CATEGORY PROMPT EDITOR - Compact */}
-                            <div className="relative group">
-                                <textarea
-                                    value={selectedCategory?.description || ''}
-                                    onChange={(e) => onUpdateCategory(selectedCategoryId, { description: e.target.value })}
-                                    className="w-full bg-slate-900/50 border border-slate-800 focus:border-cyan-500 text-slate-300 text-sm leading-relaxed p-3 outline-none resize-none h-16 transition-all"
-                                    placeholder="Category context for AI generation..."
-                                />
-                            </div>
                         </div>
                     )}
 
-                    {/* Bulk Actions Toolbar - Only visible when items selected */}
-                    {selectedPostIds.size > 0 && (
-                        <div className="flex items-center justify-between bg-slate-900 p-2 border border-slate-800">
-                            <div className="flex items-center gap-4 px-2">
-                                <span className="text-sm font-mono text-cyan-400">{selectedPostIds.size} selected</span>
-                                <div className="h-4 w-px bg-slate-700" />
-                                <button onClick={() => {
-                                    const selectedPosts = Array.from(selectedPostIds)
-                                        .map(id => posts.find(p => p.id === id))
-                                        .filter(p => p?.status === PostStatus.PENDING) as Post[];
-
-                                    selectedPosts.forEach((post) => {
-                                        onQueueContent(post);
-                                    });
-                                    setSelectedPostIds(new Set());
-                                }} className="text-xs font-bold text-white hover:text-cyan-400 flex items-center uppercase">
-                                    <Sparkles size={14} className="mr-2" /> Generate All
-                                </button>
-                                <button onClick={() => {
-                                    Array.from(selectedPostIds).forEach((id) => {
-                                        onDeletePost(id);
-                                    });
-                                    setSelectedPostIds(new Set());
-                                }} className="text-xs font-bold text-white hover:text-red-400 flex items-center uppercase">
-                                    <Trash2 size={14} className="mr-2" /> Delete
-                                </button>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Data Table - now properly INSIDE Column 2 */}
-                    <div className="flex-1 overflow-y-auto custom-scrollbar bg-[#0f172a] pb-20">
-                        {filteredPosts.length === 0 && !isGeneratingTitles ? (
-                            <div className="h-full flex flex-col items-center justify-center p-12 text-center">
-                                <div className="w-20 h-20 bg-slate-800/50 rounded-full flex items-center justify-center mb-6">
-                                    <Sparkles className="text-slate-600" size={40} />
-                                </div>
-                                <h3 className="text-xl font-bold text-white mb-2">No Titles Generated Yet</h3>
-                                <p className="text-slate-500 max-w-md mb-8">
-                                    This category is empty. Generate some title ideas to get started with your content strategy.
-                                </p>
-                                <button
-                                    onClick={() => {
-                                        if (selectedCategory) {
-                                            setGenCategory(selectedCategory);
-                                            setIsGenModalOpen(true);
-                                        }
-                                    }}
-                                    disabled={!selectedCategory}
-                                    className="px-8 py-4 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-lg shadow-lg shadow-cyan-900/20 transition-all flex items-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+                    {/* Scrollable Content Sections */}
+                    <div className="flex-1 overflow-y-auto custom-scrollbar bg-[#0f172a]">
+                        {selectedCategoryId ? (
+                            <>
+                                {/* ========== CATEGORY PAGE SECTION ========== */}
+                                <CollapsibleSection
+                                    title="Category Page"
+                                    icon={<FolderOpen size={16} className="text-purple-400" />}
+                                    accentColor="purple"
+                                    badge={categoryPagePost && (
+                                        <span className={`px-2 py-0.5 text-[10px] font-bold uppercase ${
+                                            categoryPagePost.status === PostStatus.GENERATING ? 'bg-amber-500/20 text-amber-400' :
+                                            categoryPagePost.status === PostStatus.NEEDS_REVIEW ? 'bg-purple-500/20 text-purple-400' :
+                                            categoryPagePost.status === PostStatus.APPROVED ? 'bg-emerald-500/20 text-emerald-400' :
+                                            categoryPagePost.status === PostStatus.PUBLISHED ? 'bg-cyan-500/20 text-cyan-400' :
+                                            'bg-slate-700 text-slate-400'
+                                        }`}>
+                                            {categoryPagePost.status === PostStatus.GENERATING ? 'Generating' :
+                                             categoryPagePost.status === PostStatus.NEEDS_REVIEW ? 'Draft' :
+                                             categoryPagePost.status === PostStatus.APPROVED ? 'Ready' :
+                                             categoryPagePost.status === PostStatus.PUBLISHED ? 'Live' : 'Pending'}
+                                        </span>
+                                    )}
                                 >
-                                    <Sparkles size={20} />
-                                    Generate Titles for {selectedCategory?.name || 'Category'}
-                                </button>
-                            </div>
-                        ) : (
+                                    {categoryPagePost ? (
+                                        <div className="space-y-6">
+                                            {/* Generating State */}
+                                            {categoryPagePost.status === PostStatus.GENERATING && (
+                                                <div className="py-6 text-center border border-slate-800 bg-slate-950/50">
+                                                    <LoadingBar className="w-32 mx-auto mb-3" />
+                                                    <p className="text-slate-400 text-sm">Generating category page content...</p>
+                                                </div>
+                                            )}
+
+                                            {/* Hero Image */}
+                                            <div>
+                                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest block mb-3">Hero Image</label>
+                                                <ImageInspectorControl
+                                                    currentImage={categoryPagePost.heroImage}
+                                                    postTitle={categoryPagePost.title}
+                                                    postTeaser={categoryPagePost.categoryPageContent?.aiInstructions || ''}
+                                                    onImageUpdate={async (imageData) => {
+                                                        await onUpdatePost(categoryPagePost.id, { heroImage: imageData });
+                                                    }}
+                                                />
+                                            </div>
+
+                                            {/* Page Introduction */}
+                                            <div>
+                                                <div className="flex items-center justify-between mb-3">
+                                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Page Introduction</label>
+                                                    <div className="flex items-center gap-2">
+                                                        <button
+                                                            onClick={() => setCategoryPageEditMode(!categoryPageEditMode)}
+                                                            disabled={categoryPagePost.status === PostStatus.GENERATING}
+                                                            className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
+                                                                categoryPageEditMode
+                                                                    ? 'bg-purple-600 hover:bg-purple-500 text-white'
+                                                                    : 'bg-slate-700 hover:bg-slate-600 text-slate-200'
+                                                            } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                                        >
+                                                            {categoryPageEditMode ? <><Save size={12} /> Save</> : <><Edit2 size={12} /> Edit</>}
+                                                        </button>
+                                                        <button
+                                                            onClick={() => {
+                                                                if (confirm('This will regenerate the category page content using AI. Your current content will be overwritten. Continue?')) {
+                                                                    onQueueCategoryPageRegenerate?.(categoryPagePost);
+                                                                }
+                                                            }}
+                                                            disabled={categoryPagePost.status === PostStatus.GENERATING}
+                                                            className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                        >
+                                                            <RefreshCw size={12} className={categoryPagePost.status === PostStatus.GENERATING ? 'animate-spin' : ''} />
+                                                            Regenerate
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                {categoryPagePost.status === PostStatus.GENERATING ? (
+                                                    <div className="py-8 text-center text-slate-600">
+                                                        <p>Content is being generated...</p>
+                                                    </div>
+                                                ) : categoryPageEditMode ? (
+                                                    <TiptapEditor
+                                                        content={categoryPagePost.categoryPageContent?.introduction || categoryPagePost.content || ''}
+                                                        onChange={(val) => onUpdatePost(categoryPagePost.id, {
+                                                            content: val,
+                                                            categoryPageContent: {
+                                                                ...categoryPagePost.categoryPageContent,
+                                                                introduction: val
+                                                            }
+                                                        })}
+                                                        placeholder="Write the category page introduction..."
+                                                    />
+                                                ) : (categoryPagePost.categoryPageContent?.introduction || categoryPagePost.content) ? (
+                                                    <div className="bg-slate-950 border border-slate-800 p-4">
+                                                        <TiptapViewer content={categoryPagePost.categoryPageContent?.introduction || categoryPagePost.content || ''} />
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-center py-8 border-2 border-dashed border-slate-800">
+                                                        <p className="text-slate-500 mb-4">No content generated yet.</p>
+                                                        <button
+                                                            onClick={() => onQueueCategoryPageRegenerate?.(categoryPagePost)}
+                                                            className="px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white text-sm font-bold uppercase tracking-wider"
+                                                        >
+                                                            <Sparkles size={14} className="inline mr-2" />
+                                                            Generate with AI
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* AI Instructions (Private) - Collapsible */}
+                                            <div className="bg-slate-950/50 border border-slate-800 p-4">
+                                                <button
+                                                    onClick={() => setShowAiInstructions(!showAiInstructions)}
+                                                    className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase tracking-widest hover:text-slate-400 transition-colors"
+                                                >
+                                                    {showAiInstructions ? <EyeOff size={12} /> : <Eye size={12} />}
+                                                    AI Generation Instructions (Private)
+                                                </button>
+                                                <AnimatePresence>
+                                                    {showAiInstructions && (
+                                                        <motion.div
+                                                            initial={{ height: 0, opacity: 0 }}
+                                                            animate={{ height: 'auto', opacity: 1 }}
+                                                            exit={{ height: 0, opacity: 0 }}
+                                                            transition={{ duration: 0.2 }}
+                                                            className="overflow-hidden"
+                                                        >
+                                                            <textarea
+                                                                value={categoryPagePost.categoryPageContent?.aiInstructions || ''}
+                                                                onChange={(e) => onUpdatePost(categoryPagePost.id, {
+                                                                    categoryPageContent: {
+                                                                        ...categoryPagePost.categoryPageContent,
+                                                                        introduction: categoryPagePost.categoryPageContent?.introduction || '',
+                                                                        aiInstructions: e.target.value
+                                                                    }
+                                                                })}
+                                                                className="w-full mt-3 bg-slate-900 border border-slate-700 p-3 text-sm text-slate-300 min-h-[100px] focus:border-purple-500 outline-none resize-y"
+                                                                placeholder="Instructions for AI when generating/regenerating this page..."
+                                                            />
+                                                            <p className="text-xs text-slate-600 mt-2">
+                                                                These instructions are used when generating content but are not displayed on the published page.
+                                                            </p>
+                                                        </motion.div>
+                                                    )}
+                                                </AnimatePresence>
+                                            </div>
+
+                                            {/* Meta Data */}
+                                            <div className="space-y-4">
+                                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest block">SEO & Meta Data</label>
+                                                <div>
+                                                    <label className="text-xs text-slate-400 font-medium block mb-1">Meta Description</label>
+                                                    <textarea
+                                                        value={categoryPagePost.metaDescription || ''}
+                                                        onChange={(e) => onUpdatePost(categoryPagePost.id, { metaDescription: e.target.value })}
+                                                        className="w-full bg-slate-950 border border-slate-700 p-3 text-sm text-slate-200 focus:border-purple-500 outline-none resize-y min-h-[80px]"
+                                                        placeholder="Enter meta description for SEO..."
+                                                    />
+                                                    <div className="flex justify-end mt-1">
+                                                        <span className={`text-[10px] ${(categoryPagePost.metaDescription?.length || 0) > 160 ? 'text-red-500' : 'text-slate-600'}`}>
+                                                            {categoryPagePost.metaDescription?.length || 0}/160
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Approve/Launch Button */}
+                                            {categoryPagePost.status === PostStatus.NEEDS_REVIEW && (
+                                                <button
+                                                    onClick={() => onUpdatePost(categoryPagePost.id, {
+                                                        status: PostStatus.APPROVED,
+                                                        approvedAt: Timestamp.now()
+                                                    })}
+                                                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2"
+                                                >
+                                                    <CheckCircle size={16} />
+                                                    Approve for Launch
+                                                </button>
+                                            )}
+                                            {categoryPagePost.status === PostStatus.APPROVED && (
+                                                <div className="flex items-center gap-2 py-3 px-4 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm">
+                                                    <CheckCircle size={16} />
+                                                    <span>Ready to launch - will be published with your next site build</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <div className="text-center py-8 border-2 border-dashed border-slate-800">
+                                            <p className="text-slate-500">Category page will be created when articles are generated.</p>
+                                        </div>
+                                    )}
+                                </CollapsibleSection>
+
+                                {/* ========== RESEARCH SECTION ========== */}
+                                <CollapsibleSection
+                                    title="Research"
+                                    icon={<Target size={16} className="text-emerald-400" />}
+                                    accentColor="emerald"
+                                    defaultExpanded={false}
+                                    badge={selectedCategory?.googleDeepResearch?.status === 'complete' && (
+                                        <span className="px-2 py-0.5 text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-400">
+                                            Complete
+                                        </span>
+                                    )}
+                                >
+                                    <div className="space-y-4">
+                                        {/* Deep Research Toggle */}
+                                        {canUseGoogleDeepResearch ? (
+                                            <div className="flex items-center justify-between p-4 bg-slate-950 border border-slate-800">
+                                                <div className="flex items-center gap-3">
+                                                    <Zap size={18} className="text-amber-400" />
+                                                    <div>
+                                                        <p className="text-sm font-medium text-white">Google Deep Research</p>
+                                                        <p className="text-xs text-slate-500">Uses AI with Google Search for expert-level insights (20 credits)</p>
+                                                    </div>
+                                                </div>
+                                                <label className="relative inline-flex items-center cursor-pointer">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={selectedCategory?.enableGoogleDeepResearch || false}
+                                                        onChange={(e) => onUpdateCategory(selectedCategoryId, {
+                                                            enableGoogleDeepResearch: e.target.checked
+                                                        })}
+                                                        className="sr-only peer"
+                                                    />
+                                                    <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                                                </label>
+                                            </div>
+                                        ) : (
+                                            <div className="p-4 bg-slate-950 border border-slate-800 text-center">
+                                                <Zap size={24} className="text-slate-600 mx-auto mb-2" />
+                                                <p className="text-sm text-slate-400 mb-2">Google Deep Research is available on Professional plans</p>
+                                                <button className="text-xs text-cyan-400 hover:text-cyan-300 font-medium">
+                                                    Upgrade to unlock
+                                                </button>
+                                            </div>
+                                        )}
+
+                                        {/* Research Status & Action */}
+                                        {selectedCategory?.googleDeepResearch?.status === 'running' ? (
+                                            <div className="py-6 text-center">
+                                                <LoadingBar className="w-32 mx-auto mb-3" />
+                                                <p className="text-slate-400 text-sm">Researching {selectedCategory.name}...</p>
+                                                <p className="text-xs text-slate-600 mt-1">This may take up to a minute</p>
+                                            </div>
+                                        ) : selectedCategory?.googleDeepResearch?.status === 'complete' ? (
+                                            <div className="space-y-4">
+                                                <div className="bg-slate-950 border border-slate-800 p-4 max-h-48 overflow-y-auto custom-scrollbar">
+                                                    <p className="text-sm text-slate-300 whitespace-pre-wrap">
+                                                        {selectedCategory.googleDeepResearch.content.substring(0, 500)}
+                                                        {selectedCategory.googleDeepResearch.content.length > 500 && '...'}
+                                                    </p>
+                                                </div>
+                                                <button
+                                                    onClick={() => {
+                                                        if (categoryPagePost) {
+                                                            onQueueCategoryPageRegenerate?.(categoryPagePost);
+                                                        }
+                                                    }}
+                                                    disabled={!categoryPagePost || categoryPagePost.status === PostStatus.GENERATING}
+                                                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2"
+                                                >
+                                                    <RefreshCw size={14} />
+                                                    Update using deep research
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <button
+                                                onClick={() => onQueueGoogleDeepResearch?.(selectedCategoryId)}
+                                                disabled={!selectedCategory?.enableGoogleDeepResearch || !canUseGoogleDeepResearch}
+                                                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2"
+                                            >
+                                                <Target size={14} />
+                                                Run Research (20 credits)
+                                            </button>
+                                        )}
+                                    </div>
+                                </CollapsibleSection>
+
+                                {/* ========== ARTICLE IDEAS SECTION ========== */}
+                                <CollapsibleSection
+                                    title="Article Ideas"
+                                    icon={<FileText size={16} className="text-cyan-400" />}
+                                    accentColor="cyan"
+                                    badge={filteredPosts.length > 0 && (
+                                        <span className="px-2 py-0.5 text-[10px] font-bold bg-cyan-500/20 text-cyan-400">
+                                            {filteredPosts.length}
+                                        </span>
+                                    )}
+                                >
+                                    {/* Bulk Actions Toolbar */}
+                                    {selectedPostIds.size > 0 && (
+                                        <div className="flex items-center justify-between bg-slate-900 p-2 border border-slate-800 mb-4">
+                                            <div className="flex items-center gap-4 px-2">
+                                                <span className="text-sm font-mono text-cyan-400">{selectedPostIds.size} selected</span>
+                                                <div className="h-4 w-px bg-slate-700" />
+                                                <button onClick={() => {
+                                                    const selectedPosts = Array.from(selectedPostIds)
+                                                        .map(id => posts.find(p => p.id === id))
+                                                        .filter(p => p?.status === PostStatus.PENDING) as Post[];
+
+                                                    selectedPosts.forEach((post) => {
+                                                        onQueueContent(post);
+                                                    });
+                                                    setSelectedPostIds(new Set());
+                                                }} className="text-xs font-bold text-white hover:text-cyan-400 flex items-center uppercase">
+                                                    <Plus size={14} className="mr-2" /> Generate Posts
+                                                </button>
+                                                <button onClick={() => {
+                                                    Array.from(selectedPostIds).forEach((id) => {
+                                                        onDeletePost(id);
+                                                    });
+                                                    setSelectedPostIds(new Set());
+                                                }} className="text-xs font-bold text-white hover:text-red-400 flex items-center uppercase">
+                                                    <Trash2 size={14} className="mr-2" /> Delete
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {filteredPosts.length === 0 && !isGeneratingTitles ? (
+                                        <div className="flex flex-col items-center justify-center py-12 text-center">
+                                            <div className="w-16 h-16 bg-slate-800/50 rounded-full flex items-center justify-center mb-4">
+                                                <Sparkles className="text-slate-600" size={28} />
+                                            </div>
+                                            <h3 className="text-lg font-bold text-white mb-2">No Article Ideas Yet</h3>
+                                            <p className="text-slate-500 max-w-sm mb-6 text-sm">
+                                                Generate some article ideas to get started.
+                                            </p>
+                                            <button
+                                                onClick={() => {
+                                                    if (selectedCategory) {
+                                                        setGenCategory(selectedCategory);
+                                                        setIsGenModalOpen(true);
+                                                    }
+                                                }}
+                                                disabled={!selectedCategory}
+                                                className="px-6 py-3 bg-cyan-600 hover:bg-cyan-500 text-white font-bold uppercase tracking-wider shadow-lg shadow-cyan-900/20 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                                <Sparkles size={16} />
+                                                Generate Ideas
+                                            </button>
+                                        </div>
+                                    ) : (
                             <table className="w-full text-left border-collapse table-fixed">
                                 <thead className="bg-[#020617] sticky top-0 z-10 text-xs font-bold text-slate-500 uppercase tracking-widest border-b border-slate-800 font-mono shadow-sm">
                                     <tr>
@@ -1497,16 +1866,16 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                                 }}
                                             />
                                         </th>
-                                        <th className="p-4">
-                                            <div className="flex items-center gap-3">
+                                        <th className="p-4" colSpan={2}>
+                                            <div className="flex items-center justify-between">
+                                                <span>Article Ideas</span>
                                                 {isSearchExpanded ? (
-                                                    <div className="flex items-center gap-2 flex-1">
-                                                        <Search size={14} className="text-cyan-400 shrink-0" />
+                                                    <div className="flex items-center gap-2 bg-slate-800 px-3 py-1">
                                                         <input
                                                             value={searchQuery}
                                                             onChange={(e) => setSearchQuery(e.target.value)}
                                                             placeholder="Search titles..."
-                                                            className="flex-1 bg-transparent text-sm text-slate-300 placeholder-slate-600 focus:outline-none"
+                                                            className="bg-transparent text-sm text-slate-300 placeholder-slate-600 focus:outline-none w-40"
                                                             autoFocus
                                                         />
                                                         <button
@@ -1517,20 +1886,16 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                                         </button>
                                                     </div>
                                                 ) : (
-                                                    <>
-                                                        <button
-                                                            onClick={() => setIsSearchExpanded(true)}
-                                                            className="text-slate-500 hover:text-cyan-400 transition-colors"
-                                                            title="Search titles"
-                                                        >
-                                                            <Search size={14} />
-                                                        </button>
-                                                        <span>IDEA PROMPT</span>
-                                                    </>
+                                                    <button
+                                                        onClick={() => setIsSearchExpanded(true)}
+                                                        className="text-slate-500 hover:text-cyan-400 transition-colors p-1"
+                                                        title="Search titles"
+                                                    >
+                                                        <Search size={14} />
+                                                    </button>
                                                 )}
                                             </div>
                                         </th>
-                                        <th className="p-4 w-24 text-right">ACTIONS</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-800 text-sm text-slate-300 font-mono">
@@ -1557,63 +1922,67 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                                         className="appearance-none w-4 h-4 border border-slate-600 bg-slate-800 checked:bg-cyan-500 checked:border-cyan-500 cursor-pointer"
                                                     />
                                                 </td>
-                                                <td className="p-4 align-top">
+                                                <td className="p-4 align-top" colSpan={2}>
                                                     <div className="flex flex-col gap-3">
-                                                        <input
-                                                            value={post.title}
-                                                            onChange={(e) => onUpdatePost(post.id, { title: e.target.value })}
-                                                            className="w-full bg-transparent font-bold text-white text-lg focus:text-cyan-400 px-0 outline-none border-none placeholder-slate-600"
-                                                            placeholder="Enter Title..."
-                                                        />
+                                                        {/* Title row - title left, trash far right */}
+                                                        <div className="flex items-center gap-3">
+                                                            <input
+                                                                value={post.title}
+                                                                onChange={(e) => onUpdatePost(post.id, { title: e.target.value })}
+                                                                className="flex-1 bg-transparent font-bold text-white text-lg focus:text-cyan-400 px-0 outline-none border-none placeholder-slate-600"
+                                                                placeholder="Enter Title..."
+                                                            />
+                                                            <button
+                                                                onClick={() => onDeletePost(post.id)}
+                                                                className="p-2 text-slate-600 hover:text-red-400 transition-colors shrink-0"
+                                                                title="Delete this idea"
+                                                            >
+                                                                <Trash2 size={14} />
+                                                            </button>
+                                                        </div>
+                                                        {/* Description - secondary */}
                                                         <div className="relative">
                                                             <textarea
                                                                 value={post.teaser || ''}
                                                                 onChange={(e) => onUpdatePost(post.id, { teaser: e.target.value })}
                                                                 placeholder="Describe the post content, angle, or generation prompt..."
-                                                                className="w-full bg-[#020617] text-slate-400 text-sm leading-relaxed p-4 border border-slate-800 focus:border-cyan-500/50 outline-none resize-none h-32 custom-scrollbar"
+                                                                className="w-full bg-[#020617] text-slate-400 text-sm leading-relaxed p-4 border border-slate-800 focus:border-cyan-500/50 outline-none resize-none h-24 custom-scrollbar"
                                                             />
                                                         </div>
-                                                        <div className="flex items-center gap-4 text-xs">
-                                                            <div className="flex items-center gap-2 flex-1">
-                                                                <Tag size={14} className="text-slate-600 shrink-0" />
+                                                        {/* Tags row - tags left, Generate Post far right */}
+                                                        <div className="flex items-center gap-4">
+                                                            <div className="flex-1 relative">
+                                                                <div className="absolute left-3 top-1/2 -translate-y-1/2">
+                                                                    <Tag size={14} className="text-slate-600" />
+                                                                </div>
                                                                 <input
                                                                     value={Array.isArray(post.tags) ? post.tags.join(', ') : ''}
                                                                     onChange={(e) => onUpdatePost(post.id, { tags: e.target.value.split(',').map(s => s.trim()) })}
-                                                                    className="w-full bg-transparent text-slate-400 focus:text-cyan-400 outline-none border-b border-slate-800 focus:border-cyan-500 pb-1 placeholder-slate-700"
+                                                                    className="w-full bg-[#020617] text-slate-400 text-sm p-3 pl-9 border border-slate-800 focus:border-cyan-500/50 outline-none placeholder-slate-700"
                                                                     placeholder="comma, separated, tags"
                                                                 />
                                                             </div>
+                                                            <button
+                                                                onClick={() => onQueueContent(post)}
+                                                                className="px-4 py-3 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold uppercase tracking-wider transition-colors flex items-center gap-2 shrink-0"
+                                                                title="Write full article and move to Editorial Queue"
+                                                            >
+                                                                <Plus size={14} />
+                                                                Generate Post
+                                                            </button>
                                                         </div>
-                                                    </div>
-                                                </td>
-                                                <td className="p-4 align-top pt-6 text-right">
-                                                    <div className="flex items-center justify-end gap-2">
-                                                        <button
-                                                            onClick={() => onQueueContent(post)}
-                                                            className="w-8 h-8 flex items-center justify-center border border-cyan-800 text-cyan-400 hover:bg-cyan-950 hover:border-cyan-500 transition-colors"
-                                                            title="Generate Post"
-                                                        >
-                                                            <Sparkles size={16} />
-                                                        </button>
-                                                        <button
-                                                            onClick={() => onDeletePost(post.id)}
-                                                            className="w-8 h-8 flex items-center justify-center text-slate-600 hover:text-red-500 hover:bg-red-950/30 transition-colors"
-                                                            title="Delete"
-                                                        >
-                                                            <Trash2 size={16} />
-                                                        </button>
                                                     </div>
                                                 </td>
                                             </motion.tr>
                                         ))}
                                     </AnimatePresence>
-                                    {filteredPosts.length === 0 && isGeneratingTitles && (
+                                    {isGeneratingTitles && (
                                         <tr>
-                                            <td colSpan={3} className="p-12 text-center">
-                                                <div className="flex flex-col items-center gap-4">
-                                                    <Loader2 className="animate-spin text-cyan-400" size={32} />
-                                                    <span className="text-slate-400 font-mono text-sm uppercase tracking-wider">
-                                                        Generating Titles...
+                                            <td colSpan={2} className="p-4">
+                                                <div className="flex items-center gap-3 text-slate-500">
+                                                    <LoadingBar className="w-16" />
+                                                    <span className="text-sm">
+                                                        Generating next title...
                                                     </span>
                                                 </div>
                                             </td>
@@ -1621,6 +1990,20 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                     )}
                                 </tbody>
                             </table>
+                                    )}
+                                </CollapsibleSection>
+                            </>
+                        ) : (
+                            /* Empty State when no category selected */
+                            <div className="flex-1 flex flex-col items-center justify-center p-12 text-center">
+                                <div className="w-20 h-20 bg-slate-800/50 rounded-full flex items-center justify-center mb-6">
+                                    <FolderOpen className="text-slate-600" size={40} />
+                                </div>
+                                <h3 className="text-xl font-bold text-white mb-2">Select a Content Area</h3>
+                                <p className="text-slate-500 max-w-md">
+                                    Choose a content area from the left to view and manage its category page, research, and article ideas.
+                                </p>
+                            </div>
                         )}
                     </div>
                 </div>
@@ -1632,6 +2015,7 @@ export const CategoryWorkspace: React.FC<Props> = ({
                     <CategoryCreator
                         parentId={creatorParentId}
                         parentName={categories.find(c => c.id === creatorParentId)?.name}
+                        parentDescription={categories.find(c => c.id === creatorParentId)?.description}
                         onClose={() => setIsCreatorOpen(false)}
                         onAddBatch={(cats) => {
                             cats.forEach(c => onAddCategory(c.name, creatorParentId, c.description));

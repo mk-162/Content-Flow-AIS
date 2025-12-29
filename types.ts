@@ -87,7 +87,8 @@ export enum ContentType {
   ARTICLE = 'Article',
   SOCIAL_MEDIA = 'Social Media',
   EMAIL = 'Email',
-  CASE_STUDY = 'Case Study'
+  CASE_STUDY = 'Case Study',
+  CATEGORY_PAGE = 'Category Page'
 }
 
 // Hierarchical Prompt Overrides (Project > Org > Admin)
@@ -188,28 +189,33 @@ export interface TierFeatures {
   researchType: 'shallow' | 'deep';
   showKeywordMetrics: boolean;
   maxKeywordsPerResearch: number;
+  googleDeepResearchEnabled: boolean;  // Google Deep Research (20 credits)
 }
 
 export const TIER_FEATURES: Record<SubscriptionTier, TierFeatures> = {
   [SubscriptionTier.FREE]: {
     researchType: 'shallow',
     showKeywordMetrics: false,
-    maxKeywordsPerResearch: 10
+    maxKeywordsPerResearch: 10,
+    googleDeepResearchEnabled: false
   },
   [SubscriptionTier.STARTER]: {
     researchType: 'shallow',
     showKeywordMetrics: true,
-    maxKeywordsPerResearch: 20
+    maxKeywordsPerResearch: 20,
+    googleDeepResearchEnabled: false
   },
   [SubscriptionTier.PROFESSIONAL]: {
     researchType: 'deep',
     showKeywordMetrics: true,
-    maxKeywordsPerResearch: 50
+    maxKeywordsPerResearch: 50,
+    googleDeepResearchEnabled: true
   },
   [SubscriptionTier.ENTERPRISE]: {
     researchType: 'deep',
     showKeywordMetrics: true,
-    maxKeywordsPerResearch: 100
+    maxKeywordsPerResearch: 100,
+    googleDeepResearchEnabled: true
   }
 };
 
@@ -386,6 +392,12 @@ export interface Project {
       lastBuildTriggeredAt?: Timestamp;  // Last time a build was triggered
       lastBuildTriggeredBy?: string;     // userId who triggered the build
     };
+    // Auto-generation settings for stubs
+    autoGeneration?: {
+      enabled: boolean;                  // Master toggle (default true for new projects)
+      stubThreshold: number;             // Stubs per category (default 5, range 1-25)
+      migrationPromptShown?: boolean;    // Track if existing user saw migration prompt
+    };
   };
   businessProfile?: BusinessProfile;
   // Channel/Content type (from onboarding)
@@ -413,6 +425,16 @@ export interface Category {
   // Research tracking
   researchId?: string;           // Link to CategoryResearch document
   lastResearchAt?: Timestamp;    // When research was last generated
+  // Google Deep Research (PROFESSIONAL+ tier)
+  enableGoogleDeepResearch?: boolean;
+  googleDeepResearch?: {
+    content: string;
+    generatedAt: Timestamp;
+    status: 'pending' | 'running' | 'complete' | 'failed';
+    error?: string;
+  };
+  // Category page post reference
+  categoryPagePostId?: string;   // Link to the Post with isCategoryPage: true
 }
 
 // Posts
@@ -474,13 +496,21 @@ export interface Post {
   contentFormat?: ContentFormat;    // Content format type for diversity
   primaryAngle?: string;            // Main angle/hook of this post
   targetKeyword?: string;           // Primary keyword this post targets
+  // Category Page Content (when isCategoryPage is true)
+  isCategoryPage?: boolean;         // Discriminator for category pages vs regular posts
+  categoryPageContent?: {
+    introduction: string;           // Public page intro (WYSIWYG editable)
+    aiInstructions?: string;        // Private AI generation context
+  };
 }
 
 // Generation Queue
 export enum TaskType {
   GENERATE_TITLES = 'Generate Titles',
   GENERATE_CONTENT = 'Generate Content',
-  GENERATE_IMAGE = 'Generate Image'
+  GENERATE_IMAGE = 'Generate Image',
+  GENERATE_CATEGORY_PAGE = 'Generate Category Page',
+  GOOGLE_DEEP_RESEARCH = 'Google Deep Research'
 }
 
 export enum TaskStatus {

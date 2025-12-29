@@ -10,15 +10,17 @@ import { db } from '../lib/firebase';
 import { CreditTransaction, Organization, SubscriptionTier, TIER_LIMITS } from '../types';
 
 export const CREDIT_COSTS = {
-    TITLE_GENERATION: 1,   // Per batch of titles
+    TITLE_GENERATION: 1,   // Per stub generated
     ARTICLE_GENERATION: 1,
+    CATEGORY_PAGE_GENERATION: 1,  // Per category page intro generated
     IMAGE_GENERATION: 5,
     SHALLOW_RESEARCH: 2,   // AI-estimated keyword research
-    DEEP_RESEARCH: 8       // DataForSEO real keyword data
+    DEEP_RESEARCH: 8,      // DataForSEO real keyword data
+    GOOGLE_DEEP_RESEARCH: 20  // Google Deep Research (Gemini with Search grounding)
 };
 
 export const MONTHLY_ALLOWANCE: Record<SubscriptionTier, number> = {
-    [SubscriptionTier.FREE]: 10,
+    [SubscriptionTier.FREE]: 50,
     [SubscriptionTier.STARTER]: 100,
     [SubscriptionTier.PROFESSIONAL]: 500,
     [SubscriptionTier.ENTERPRISE]: 999999 // Effectively unlimited
