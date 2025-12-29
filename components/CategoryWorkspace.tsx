@@ -6,7 +6,7 @@ import {
     Plus, ChevronRight, Sparkles, Search, Wand2,
     X, Check, Play, Trash2, FileText, AlertTriangle,
     GripVertical, ArrowRight, Tag, User, Edit2, RefreshCw, Info, Target, TrendingUp,
-    FolderOpen, Eye, EyeOff, Save, ChevronDown, Zap, CheckCircle
+    FolderOpen, Eye, EyeOff, Save, ChevronDown, Zap, CheckCircle, Maximize2
 } from 'lucide-react';
 import { suggestCategories, CategorySuggestion } from '../services/geminiService';
 import { researchService, getExistingResearch, isResearchStale } from '../services/researchService';
@@ -1259,6 +1259,9 @@ export const CategoryWorkspace: React.FC<Props> = ({
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [showBulkGenerateModal, setShowBulkGenerateModal] = useState(false);
 
+    // Research report modal
+    const [showResearchModal, setShowResearchModal] = useState(false);
+
     // Layout Resizing - shared across workspaces
     const [leftPaneWidth, setLeftPaneWidth] = usePaneWidth('leftPane');
 
@@ -1760,23 +1763,29 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                                 {/* Research Results Header */}
                                                 <div className="flex items-center justify-between">
                                                     <span className="text-xs font-bold text-emerald-400 uppercase tracking-widest">Research Complete</span>
-                                                    <span className="text-xs text-slate-500">
-                                                        {selectedCategory.googleDeepResearch.content.length.toLocaleString()} chars
-                                                    </span>
+                                                    <button
+                                                        onClick={() => setShowResearchModal(true)}
+                                                        className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded transition-colors"
+                                                    >
+                                                        <Maximize2 size={12} />
+                                                        View Full Report
+                                                    </button>
                                                 </div>
-                                                {/* Research Content - Full Markdown */}
-                                                <details className="group" open>
-                                                    <summary className="cursor-pointer text-xs text-slate-400 hover:text-slate-300 flex items-center gap-2 mb-3">
-                                                        <ChevronDown size={12} className="group-open:rotate-180 transition-transform" />
-                                                        Research Report
-                                                    </summary>
+                                                {/* Research Preview */}
+                                                <div
+                                                    className="bg-slate-950 border border-slate-800 p-4 max-h-[200px] overflow-hidden relative cursor-pointer group"
+                                                    onClick={() => setShowResearchModal(true)}
+                                                >
                                                     <div
-                                                        className="bg-slate-950 border border-slate-800 p-5 max-h-[500px] overflow-y-auto custom-scrollbar prose prose-invert prose-sm prose-headings:text-slate-200 prose-headings:font-bold prose-h2:text-base prose-h2:mt-6 prose-h2:mb-3 prose-h3:text-sm prose-p:text-slate-300 prose-li:text-slate-300 prose-strong:text-white prose-ul:my-2 prose-li:my-0.5"
+                                                        className="prose prose-invert prose-sm prose-headings:text-slate-200 prose-headings:font-bold prose-h2:text-sm prose-p:text-slate-400 prose-li:text-slate-400 prose-strong:text-slate-300"
                                                         dangerouslySetInnerHTML={{
-                                                            __html: marked.parse(selectedCategory.googleDeepResearch.content) as string
+                                                            __html: marked.parse(selectedCategory.googleDeepResearch.content.substring(0, 800) + '...') as string
                                                         }}
                                                     />
-                                                </details>
+                                                    <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-slate-950 to-transparent flex items-end justify-center pb-2">
+                                                        <span className="text-xs text-emerald-400 group-hover:text-emerald-300">Click to view full report</span>
+                                                    </div>
+                                                </div>
                                                 <button
                                                     onClick={() => {
                                                         if (categoryPagePost) {
@@ -2072,6 +2081,51 @@ export const CategoryWorkspace: React.FC<Props> = ({
                         onConfirm={handleBulkGenerate}
                         onCancel={() => setShowBulkGenerateModal(false)}
                     />
+                )}
+
+                {/* Full-Width Research Report Modal */}
+                {showResearchModal && selectedCategory?.googleDeepResearch?.content && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm">
+                        <div className="bg-slate-900 border border-slate-800 w-full max-w-5xl max-h-[90vh] overflow-hidden shadow-2xl flex flex-col mx-4">
+                            {/* Header */}
+                            <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+                                <div className="flex items-center gap-3">
+                                    <Target size={20} className="text-emerald-400" />
+                                    <div>
+                                        <h2 className="text-lg font-bold text-white">Research Report</h2>
+                                        <p className="text-xs text-slate-400">{selectedCategory.name}</p>
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={() => setShowResearchModal(false)}
+                                    className="p-2 hover:bg-slate-800 rounded-lg transition-colors"
+                                >
+                                    <X size={20} className="text-slate-400" />
+                                </button>
+                            </div>
+                            {/* Content */}
+                            <div className="flex-1 overflow-y-auto custom-scrollbar p-8">
+                                <div
+                                    className="prose prose-invert prose-lg max-w-none prose-headings:text-white prose-headings:font-bold prose-h2:text-xl prose-h2:mt-8 prose-h2:mb-4 prose-h3:text-lg prose-h3:mt-6 prose-p:text-slate-300 prose-p:leading-relaxed prose-li:text-slate-300 prose-strong:text-white prose-ul:my-3 prose-li:my-1"
+                                    dangerouslySetInnerHTML={{
+                                        __html: marked.parse(selectedCategory.googleDeepResearch.content) as string
+                                    }}
+                                />
+                            </div>
+                            {/* Footer */}
+                            <div className="px-6 py-4 border-t border-slate-800 bg-slate-950 flex items-center justify-between">
+                                <span className="text-xs text-slate-500">
+                                    {selectedCategory.googleDeepResearch.content.length.toLocaleString()} characters
+                                </span>
+                                <button
+                                    onClick={() => setShowResearchModal(false)}
+                                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-sm font-medium rounded transition-colors"
+                                >
+                                    Close
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 )}
             </AnimatePresence>
         </>

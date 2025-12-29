@@ -874,16 +874,44 @@ const withRetry = async <T>(
 
 // Helper: Strip common AI preambles from generated content
 const stripPreamble = (content: string): string => {
-  const patterns = [
-    /^(Sure|Of course|Certainly|Here's|Here is|I'd be happy to|Absolutely)[^.]*\.\s*/i,
-    /^(Here's the|Below is|The following)[^:]*:\s*/i,
-    /^```markdown\s*/i,
-    /\s*```$/i
+  let result = content.trim();
+
+  // Remove markdown code fences
+  result = result.replace(/^```markdown\s*/i, '').replace(/\s*```$/i, '');
+
+  // Find the first structural element (heading, bold section header, or numbered list)
+  // This catches content that starts with preambles like "Okay, I'm ready to..."
+  const structuralPatterns = [
+    /^#{1,3}\s+/m,           // Markdown headings (# ## ###)
+    /^\*\*\d+\./m,           // Bold numbered items (**1.)
+    /^\*\*[A-Z][^*]+\*\*/m,  // Bold section headers (**Key Insights**)
+    /^\d+\.\s+\*\*/m,        // Numbered items with bold (1. **Title**)
+    /^##\s+/m,               // Double hash heading
   ];
-  let result = content;
-  for (const pattern of patterns) {
-    result = result.replace(pattern, '');
+
+  let firstStructureIndex = -1;
+  for (const pattern of structuralPatterns) {
+    const match = result.search(pattern);
+    if (match !== -1 && (firstStructureIndex === -1 || match < firstStructureIndex)) {
+      firstStructureIndex = match;
+    }
   }
+
+  // If we found a structural element, strip everything before it
+  if (firstStructureIndex > 0) {
+    result = result.substring(firstStructureIndex);
+  } else {
+    // Fallback to pattern-based removal for simpler preambles
+    const patterns = [
+      /^(Okay|Sure|Of course|Certainly|Here's|Here is|I'd be happy to|Absolutely|I'm ready|I will)[^.]*\.\s*/gi,
+      /^(Here's the|Below is|The following)[^:]*:\s*/gi,
+      /^[^#\n*1-9]*(?=\n\n)/,  // Any text before first double newline
+    ];
+    for (const pattern of patterns) {
+      result = result.replace(pattern, '');
+    }
+  }
+
   return result.trim();
 };
 
