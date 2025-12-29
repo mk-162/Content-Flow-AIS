@@ -1798,7 +1798,13 @@ Provide a comprehensive research report that will help create authoritative, wel
 5. **Expert Perspectives** - Key thought leaders and their viewpoints
 6. **Emerging Trends** - What's coming next in this space
 
-Be specific, cite sources where possible, and focus on information that would make content more authoritative and valuable.`;
+**IMPORTANT FORMATTING RULES:**
+- Start directly with the first section heading (e.g., "## Key Industry Insights")
+- Do NOT include any preamble, introduction, or "I will..." statements
+- Do NOT include phrases like "Here's the research" or "Okay, I'm ready"
+- Use clean Markdown formatting with ## for section headings
+- Be specific, cite sources where possible
+- Focus on actionable information that would make content more authoritative`;
 
   await taskRef.update({ progress: 40 });
 
@@ -1817,7 +1823,9 @@ Be specific, cite sources where possible, and focus on information that would ma
 
   await taskRef.update({ progress: 70 });
 
-  const researchContent = response.text || '';
+  let researchContent = response.text || '';
+  // Strip any preamble the model might have added
+  researchContent = stripPreamble(researchContent);
 
   await taskRef.update({ progress: 80 });
 
