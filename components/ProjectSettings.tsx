@@ -17,13 +17,16 @@ import {
     Loader2,
     Building2,
     ChevronDown,
-    ArrowLeft
+    ArrowLeft,
+    Zap
 } from 'lucide-react';
-import { Project, ContentType, PromptType, PromptOverrides, BusinessProfile } from '../types';
-import { doc, updateDoc, collection, getDocs, writeBatch, query, where } from 'firebase/firestore';
+import { Project, ContentType, PromptType, PromptOverrides, BusinessProfile, Category, TaskType, TIER_FEATURES, SubscriptionTier } from '../types';
+import { doc, updateDoc, collection, getDocs, writeBatch, query, where, addDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { TaskStatus } from '../types';
 import { useOrganization } from '../contexts/OrganizationContext';
+import { CREDIT_COSTS } from '../services/creditService';
+import { Target } from 'lucide-react';
 import { testWordPressConnection } from '../services/wordpressService';
 
 interface Props {
@@ -77,8 +80,37 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
     const [wpTesting, setWpTesting] = useState(false);
     const [wpTestResult, setWpTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
+    // Form State - Auto-Generation
+    const [autoGenEnabled, setAutoGenEnabled] = useState(project.settings?.autoGeneration?.enabled ?? true);
+    const [stubThreshold, setStubThreshold] = useState(project.settings?.autoGeneration?.stubThreshold ?? 5);
+
+    // Deep Research State
+    const [categories, setCategories] = useState<Category[]>([]);
+    const [researchRunning, setResearchRunning] = useState(false);
+    const [researchProgress, setResearchProgress] = useState<string | null>(null);
+
     // UI State - Collapsible Sections
     const [showBusinessContext, setShowBusinessContext] = useState(false);
+
+    // Check tier for deep research access
+    const tier = currentOrg?.subscriptionTier || SubscriptionTier.FREE;
+    const canUseDeepResearch = TIER_FEATURES[tier].googleDeepResearchEnabled;
+
+    // Fetch categories for deep research
+    useEffect(() => {
+        const fetchCategories = async () => {
+            if (!project.organizationId || !project.id) return;
+            try {
+                const catsRef = collection(db, `organizations/${project.organizationId}/projects/${project.id}/categories`);
+                const snapshot = await getDocs(catsRef);
+                const cats = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Category));
+                setCategories(cats);
+            } catch (error) {
+                console.error('Error fetching categories:', error);
+            }
+        };
+        fetchCategories();
+    }, [project.organizationId, project.id]);
 
     const handleProfileUpdate = (path: string, value: any) => {
         setBusinessProfile(prev => updateNested(prev, path, value));
@@ -112,6 +144,11 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
                 'settings.publishVelocity': Number(velocity),
                 'settings.positioningStatement': positioning,
                 'settings.rules': rules,
+                'settings.autoGeneration': {
+                    enabled: autoGenEnabled,
+                    stubThreshold: stubThreshold,
+                    migrationPromptShown: project.settings?.autoGeneration?.migrationPromptShown
+                },
                 'settings.wordpress': wpSiteUrl ? {
                     siteUrl: wpSiteUrl,
                     username: wpUsername,
@@ -195,6 +232,68 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
             setSuccessMsg('Failed to clear queue'); // Re-using success msg for simplicity or add error state
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleRunAllDeepResearch = async () => {
+        if (!currentOrg || !project || categories.length === 0) return;
+
+        // Filter categories that don't have complete research
+        const catsToResearch = categories.filter(cat =>
+            cat.googleDeepResearch?.status !== 'complete' &&
+            cat.googleDeepResearch?.status !== 'running'
+        );
+
+        if (catsToResearch.length === 0) {
+            setSuccessMsg('All categories already have research');
+            return;
+        }
+
+        const totalCredits = catsToResearch.length * CREDIT_COSTS.GOOGLE_DEEP_RESEARCH;
+        const confirmed = confirm(
+            `This will run deep research on ${catsToResearch.length} categories.\n\nCost: ${totalCredits} credits (${CREDIT_COSTS.GOOGLE_DEEP_RESEARCH} per category)\n\nContinue?`
+        );
+
+        if (!confirmed) return;
+
+        setResearchRunning(true);
+        setResearchProgress(`Starting research on ${catsToResearch.length} categories...`);
+
+        try {
+            for (let i = 0; i < catsToResearch.length; i++) {
+                const cat = catsToResearch[i];
+                setResearchProgress(`Queuing ${i + 1}/${catsToResearch.length}: ${cat.name}`);
+
+                // Update category status
+                const catRef = doc(db, `organizations/${project.organizationId}/projects/${project.id}/categories`, cat.id);
+                await updateDoc(catRef, {
+                    'googleDeepResearch.status': 'running',
+                    enableGoogleDeepResearch: true,
+                    updatedAt: Timestamp.now()
+                });
+
+                // Queue research task
+                await addDoc(collection(db, 'generationQueue'), {
+                    type: TaskType.GOOGLE_DEEP_RESEARCH,
+                    organizationId: project.organizationId,
+                    projectId: project.id,
+                    categoryId: cat.id,
+                    categoryName: cat.name,
+                    status: TaskStatus.QUEUED,
+                    progress: 0,
+                    createdBy: 'bulk-research',
+                    startedAt: Timestamp.now(),
+                });
+            }
+
+            setResearchProgress(null);
+            setSuccessMsg(`Queued deep research for ${catsToResearch.length} categories`);
+        } catch (error) {
+            console.error('Error running bulk research:', error);
+            setResearchProgress(null);
+            setSuccessMsg('Failed to queue research');
+        } finally {
+            setResearchRunning(false);
         }
     };
 
@@ -478,6 +577,152 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
                             </p>
                         </div>
                     </div>
+                </section>
+
+                {/* Auto-Generation Settings */}
+                <section className="bg-slate-900 border border-slate-800 p-6 space-y-6">
+                    <div className="flex items-center gap-3 text-emerald-400 mb-2">
+                        <Zap size={20} />
+                        <h2 className="text-lg font-bold text-slate-200">Auto-Generation</h2>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-300">
+                                        Enable Auto-Generation
+                                    </label>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Automatically generate stubs when categories fall below threshold
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setAutoGenEnabled(!autoGenEnabled)}
+                                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                        autoGenEnabled ? 'bg-emerald-500' : 'bg-slate-700'
+                                    }`}
+                                >
+                                    <span
+                                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                                            autoGenEnabled ? 'translate-x-5' : 'translate-x-0'
+                                        }`}
+                                    />
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="space-y-4">
+                            <label className="block text-sm font-medium text-slate-400">
+                                Stub Threshold per Category
+                            </label>
+                            <div className="space-y-3">
+                                <input
+                                    type="range"
+                                    min="1"
+                                    max="25"
+                                    value={stubThreshold}
+                                    onChange={(e) => setStubThreshold(Number(e.target.value))}
+                                    disabled={!autoGenEnabled}
+                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500 disabled:opacity-50"
+                                />
+                                <div className="flex justify-between text-xs text-slate-500">
+                                    <span>1</span>
+                                    <span className="text-emerald-400 font-bold text-lg">{stubThreshold}</span>
+                                    <span>25</span>
+                                </div>
+                            </div>
+                            <p className="text-xs text-slate-500 leading-relaxed">
+                                When a category has fewer than {stubThreshold} stub{stubThreshold !== 1 ? 's' : ''},
+                                new stubs will be auto-generated. Each stub costs 1 credit.
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
+                {/* Deep Research Section */}
+                <section className="bg-slate-900 border border-slate-800 p-6 space-y-6">
+                    <div className="flex items-center gap-3 text-amber-400 mb-2">
+                        <Target size={20} />
+                        <h2 className="text-lg font-bold text-slate-200">Google Deep Research</h2>
+                        {!canUseDeepResearch && (
+                            <span className="px-2 py-0.5 text-[10px] font-bold uppercase bg-slate-700 text-slate-400">
+                                Professional+
+                            </span>
+                        )}
+                    </div>
+
+                    {canUseDeepResearch ? (
+                        <div className="space-y-4">
+                            <p className="text-slate-400 text-sm">
+                                Run expert-level research on all categories using AI with Google Search.
+                                This research improves the quality of generated titles, articles, and category pages.
+                            </p>
+
+                            {/* Category Status Summary */}
+                            <div className="bg-slate-950 border border-slate-700 p-4">
+                                <div className="grid grid-cols-3 gap-4 text-center">
+                                    <div>
+                                        <div className="text-2xl font-bold text-slate-200">{categories.length}</div>
+                                        <div className="text-xs text-slate-500 uppercase tracking-wider">Categories</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-2xl font-bold text-emerald-400">
+                                            {categories.filter(c => c.googleDeepResearch?.status === 'complete').length}
+                                        </div>
+                                        <div className="text-xs text-slate-500 uppercase tracking-wider">Researched</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-2xl font-bold text-amber-400">
+                                            {categories.filter(c => c.googleDeepResearch?.status !== 'complete').length}
+                                        </div>
+                                        <div className="text-xs text-slate-500 uppercase tracking-wider">Pending</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Progress */}
+                            {researchProgress && (
+                                <div className="flex items-center gap-3 p-3 bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                                    <Loader2 size={16} className="animate-spin" />
+                                    <span className="text-sm">{researchProgress}</span>
+                                </div>
+                            )}
+
+                            {/* Action Button */}
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <p className="text-slate-300 font-medium">Run Research on All Categories</p>
+                                    <p className="text-xs text-slate-500">
+                                        {CREDIT_COSTS.GOOGLE_DEEP_RESEARCH} credits per category • Skips already-researched
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={handleRunAllDeepResearch}
+                                    disabled={researchRunning || categories.length === 0}
+                                    className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold text-sm uppercase tracking-wider transition-colors flex items-center gap-2"
+                                >
+                                    {researchRunning ? (
+                                        <Loader2 size={16} className="animate-spin" />
+                                    ) : (
+                                        <Target size={16} />
+                                    )}
+                                    Run All Research
+                                </button>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="text-center py-6">
+                            <Target size={32} className="text-slate-600 mx-auto mb-3" />
+                            <p className="text-slate-400 mb-2">
+                                Google Deep Research is available on Professional and Enterprise plans.
+                            </p>
+                            <p className="text-xs text-slate-500">
+                                Upgrade to access AI-powered research with real-time Google Search data.
+                            </p>
+                        </div>
+                    )}
                 </section>
 
                 {/* AI Context Settings */}
