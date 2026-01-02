@@ -1,7 +1,16 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Category, Post, Project, PostStatus, TaskType, TaskStatus } from '../types';
 import { collection, addDoc, Timestamp, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+
+// Circuit breaker: track failures per category to prevent infinite retry loops
+interface FailureRecord {
+    count: number;
+    lastFailedAt: number;
+}
+
+const FAILURE_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes cooldown after failure
+const MAX_FAILURES_BEFORE_COOLDOWN = 2; // Allow 2 failures before cooldown
 
 interface AutoGenerationState {
     categoriesBelowThreshold: Array<{ category: Category; currentCount: number; needed: number }>;
@@ -23,10 +32,71 @@ export function useAutoGeneration(
     orgId: string | undefined,
     userId: string | undefined,
     creditBalance: number,
-    pendingTasks: Array<{ categoryId?: string; type: string; status: string }>,
+    pendingTasks: Array<{ categoryId?: string; type: string; status: string; error?: string }>,
     notify: (message: string) => void
 ): UseAutoGenerationResult {
     const [isGenerating, setIsGenerating] = useState(false);
+    const failureRecords = useRef<Map<string, FailureRecord>>(new Map());
+    const processedFailedTaskIds = useRef<Set<string>>(new Set());
+
+    // Track failed tasks and update failure records (circuit breaker)
+    useEffect(() => {
+        const failedTasks = pendingTasks.filter(
+            t => t.type === TaskType.GENERATE_TITLES &&
+                 t.status === TaskStatus.FAILED &&
+                 t.categoryId &&
+                 !processedFailedTaskIds.current.has(`${t.categoryId}-${t.status}`)
+        );
+
+        for (const task of failedTasks) {
+            if (task.categoryId) {
+                processedFailedTaskIds.current.add(`${task.categoryId}-${task.status}`);
+                const existing = failureRecords.current.get(task.categoryId) || { count: 0, lastFailedAt: 0 };
+                failureRecords.current.set(task.categoryId, {
+                    count: existing.count + 1,
+                    lastFailedAt: Date.now()
+                });
+                console.log(`[useAutoGeneration] Circuit breaker: ${task.categoryId} failures = ${existing.count + 1}`);
+            }
+        }
+
+        // Cleanup: remove entries for tasks that are no longer in pendingTasks to prevent memory growth
+        // Keep the set size bounded by removing stale entries
+        if (processedFailedTaskIds.current.size > 100) {
+            const currentFailedCategoryIds = new Set(
+                pendingTasks
+                    .filter(t => t.status === TaskStatus.FAILED && t.categoryId)
+                    .map(t => `${t.categoryId}-${t.status}`)
+            );
+
+            for (const key of processedFailedTaskIds.current) {
+                if (!currentFailedCategoryIds.has(key)) {
+                    processedFailedTaskIds.current.delete(key);
+                }
+            }
+        }
+    }, [pendingTasks]);
+
+    // Check if a category is in cooldown and cleanup expired records
+    // Note: This function has a side effect - it removes expired cooldown records
+    const checkAndCleanupCooldown = useCallback((categoryId: string): boolean => {
+        const record = failureRecords.current.get(categoryId);
+        if (!record) return false;
+
+        const timeSinceFailure = Date.now() - record.lastFailedAt;
+
+        // Still in cooldown - return true without cleanup
+        if (record.count >= MAX_FAILURES_BEFORE_COOLDOWN && timeSinceFailure < FAILURE_COOLDOWN_MS) {
+            return true;
+        }
+
+        // Cooldown expired - cleanup the record and return false
+        if (timeSinceFailure >= FAILURE_COOLDOWN_MS) {
+            failureRecords.current.delete(categoryId);
+        }
+
+        return false;
+    }, []);
 
     // Calculate which categories are below threshold
     const { categoriesBelowThreshold, totalStubsNeeded } = useMemo(() => {
@@ -52,7 +122,10 @@ export function useAutoGeneration(
                     (t.status === TaskStatus.QUEUED || t.status === TaskStatus.PROCESSING)
             );
 
-            if (stubCount < threshold && !hasPendingTask) {
+            // Check circuit breaker - skip categories in cooldown after repeated failures
+            const inCooldown = checkAndCleanupCooldown(category.id);
+
+            if (stubCount < threshold && !hasPendingTask && !inCooldown) {
                 const needed = threshold - stubCount;
                 results.push({ category, currentCount: stubCount, needed });
             }
@@ -60,7 +133,7 @@ export function useAutoGeneration(
 
         const total = results.reduce((sum, r) => sum + r.needed, 0);
         return { categoriesBelowThreshold: results, totalStubsNeeded: total };
-    }, [categories, posts, project, pendingTasks]);
+    }, [categories, posts, project, pendingTasks, checkAndCleanupCooldown]);
 
     // Determine if migration prompt should be shown
     const showMigrationPrompt = useMemo(() => {

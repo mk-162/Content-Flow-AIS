@@ -536,19 +536,29 @@ const stripTitleHeading = (content: string, title: string): string => {
   // Escape special regex characters in title
   const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-  // Strip markdown H1: # Title (exact or close match)
+  // 1. Strip markdown H1: # Title (exact or close match at start)
   cleaned = cleaned.replace(new RegExp(`^#\\s*${escapedTitle}\\s*\\n*`, 'im'), '');
 
-  // Strip markdown H2: ## Title (if it appears right at the start after H1 removal)
+  // 2. Strip markdown H2: ## Title (exact match at start)
   cleaned = cleaned.replace(new RegExp(`^##\\s*${escapedTitle}\\s*\\n*`, 'im'), '');
 
-  // Also strip any H1 at the very beginning (fallback - AI sometimes varies the title slightly)
-  cleaned = cleaned.replace(/^#\s+[^\n]+\n+/, '');
+  // 3. Strip variations like "# Title: Quick Answer" or "## Title - Summary"
+  cleaned = cleaned.replace(new RegExp(`^##?\\s*${escapedTitle}[:\\-\\s][^\\n]*\\n*`, 'im'), '');
 
-  // If content now starts with ## that looks like a duplicate title (short, no period), strip it
+  // 4. Fallback: strip any H1 at the very beginning (title should always be H1)
+  cleaned = cleaned.replace(/^#\s+[^\n]+\n*/, '');
+
+  // 5. If it starts with a short H2 that repeats the title or is a generic label, strip it
   const h2Match = cleaned.match(/^##\s+([^\n]+)\n/);
-  if (h2Match && h2Match[1].length < 100 && !h2Match[1].includes('.')) {
-    cleaned = cleaned.replace(/^##\s+[^\n]+\n+/, '');
+  if (h2Match) {
+    const h2Text = h2Match[1];
+    const isShort = h2Text.length < 100;
+    const isTitleRepeat = h2Text.toLowerCase().includes(title.toLowerCase().substring(0, 20));
+    const isGeneric = /quick answer|summary|overview|introduction|article overview/i.test(h2Text);
+
+    if (isShort && (isTitleRepeat || isGeneric)) {
+      cleaned = cleaned.replace(/^##\s+[^\n]+\n+/, '');
+    }
   }
 
   return cleaned.trim();
@@ -1023,7 +1033,9 @@ export const getCategorySuggestions = async (categoryName: string): Promise<stri
   }
 };
 
-export interface CategorySuggestion {
+// Note: This is different from CategorySuggestion in types.ts which has more fields
+// This simpler interface is used for raw AI responses before transformation
+export interface AICategorySuggestion {
   name: string;
   description: string;
   reason: string;
@@ -1035,7 +1047,7 @@ export const suggestCategories = async (
   organizationId?: string,
   projectId?: string,
   parentCategoryDescription?: string // NEW: Pass parent's description for context
-): Promise<CategorySuggestion[]> => {
+): Promise<AICategorySuggestion[]> => {
   try {
     const ai = getClient();
     const adminConfig = await getAdminConfig();
@@ -1044,6 +1056,7 @@ export const suggestCategories = async (
     // Build comprehensive business context from project
     let fullContext = '';
     let existingCategoriesContext = '';
+    let hierarchyLevel = parentCategoryName ? 'subcategory' : 'top-level';
 
     if (organizationId && projectId) {
       try {
@@ -1118,14 +1131,37 @@ export const suggestCategories = async (
 
           fullContext = contextParts.join('\n');
 
-          // Build existing categories context
+          // Build existing categories as a HIERARCHY TREE for better context
           if (!categoriesSnap.empty) {
-            const categories = categoriesSnap.docs.map(d => {
-              const data = d.data();
-              return `- ${data.name}${data.description ? `: ${data.description}` : ''}`;
-            });
-            if (categories.length > 0) {
-              existingCategoriesContext = `\n**EXISTING CATEGORIES (for reference, don't duplicate):**\n${categories.slice(0, 10).join('\n')}`;
+            const allCategories = categoriesSnap.docs.map(d => ({
+              id: d.id,
+              name: d.data().name,
+              description: d.data().description || '',
+              parentId: d.data().parentId || null
+            }));
+
+            // Build tree structure
+            const buildTree = (parentId: string | null, indent: string = ''): string[] => {
+              const children = allCategories
+                .filter(c => c.parentId === parentId)
+                .sort((a, b) => a.name.localeCompare(b.name));
+
+              const lines: string[] = [];
+              children.forEach(cat => {
+                lines.push(`${indent}${indent ? '└─ ' : '• '}${cat.name}${cat.description ? ` — ${cat.description.substring(0, 80)}...` : ''}`);
+                lines.push(...buildTree(cat.id, indent + '  '));
+              });
+              return lines;
+            };
+
+            const treeLines = buildTree(null);
+            if (treeLines.length > 0) {
+              existingCategoriesContext = `
+**EXISTING CATEGORY HIERARCHY (DO NOT DUPLICATE THESE - suggest NEW categories only):**
+${treeLines.slice(0, 25).join('\n')}
+${treeLines.length > 25 ? `\n... and ${treeLines.length - 25} more categories` : ''}
+
+⚠️ CRITICAL: Do NOT suggest any category that already exists above. Each suggestion must be UNIQUE and DIFFERENT from what's already there.`;
             }
           }
         }
@@ -1173,10 +1209,11 @@ export const suggestCategories = async (
       }
 
       // Force description requirement even for admin prompts
-      prompt += "\n\nIMPORTANT: You must provide a clear, specific description for each category explaining WHAT content belongs, WHO it helps, and WHY it matters to them.";
+      prompt += "\n\nIMPORTANT: You must provide a clear, specific description for each category. NEVER start with 'This category focuses on...', 'This section covers...', or 'Content related to...'. Instead, dive straight into what the content IS with active, evocative language.";
     } else {
       // Fallback prompt with comprehensive context
       if (parentCategoryName) {
+        // SUBCATEGORY MODE - Creating children under a parent
         prompt = `You are an Editorial Director breaking down a content category into compelling subcategories.
 
 ${fullContext || 'No business context available - use the parent category name to infer the business domain.'}
@@ -1188,68 +1225,106 @@ ${parentCategoryDescription ? `   Vision: "${parentCategoryDescription}"` : ''}
 
 ---
 
-**TASK:** Create 6 distinct subcategories that bring "${parentCategoryName}" to life.
+**TASK:** Create 6 distinct SUBCATEGORIES that live WITHIN "${parentCategoryName}".
 ${query ? `Focus specifically on: "${query}"` : ''}
 
 **SUBCATEGORY REQUIREMENTS:**
-1. Each subcategory must feel like a natural, exciting extension of the parent
-2. Subcategories should address DISTINCT aspects - no overlap
-3. Think: What specific content would make someone's eyes light up?
-4. Mix practical guides with inspirational/storytelling angles
+1. These are SPECIFIC NICHES within the parent - not separate top-level themes
+2. Each must clearly belong under "${parentCategoryName}" - if it could be its own top-level category, it's TOO BROAD
+3. Subcategories should address DISTINCT aspects - no overlap with each other
+4. Think: "What specific slice of ${parentCategoryName} would make someone's eyes light up?"
+5. Mix practical guides with inspirational/storytelling angles
 
-**DESCRIPTION REQUIREMENTS - THIS IS CRITICAL:**
+**HIERARCHY LOGIC - CRITICAL:**
+- Parent categories are BROAD themes (e.g., "Nutrition", "Training", "Gear")
+- Subcategories are SPECIFIC topics WITHIN that theme (e.g., under "Nutrition": "Race Day Fueling", "Recovery Meals", "Hydration Science")
+- If your suggestion could stand alone as a major theme, it's TOO BROAD for a subcategory
+- Example: "Training" is a top-level category. "Interval Workouts" is a subcategory of Training.
+
+**DESCRIPTION REQUIREMENTS:**
 Each description must be a compelling EDITORIAL BRIEF (3-4 sentences) that:
 - Paints a vivid picture of what content belongs here
 - Uses evocative, magazine-quality language that SELLS the category
 - Includes specific content hooks, themes, and story angles
 - Describes the reader transformation - what they'll discover, learn, or experience
-- Makes a content creator EXCITED to write for this subcategory
 
-**EXAMPLE GOOD DESCRIPTION:**
-"Pre-ride fueling strategies and meal planning for peak performance. From race-day breakfast rituals to carb-loading timelines, this is the science of eating for endurance—made practical. Covers glycogen optimization, gut-friendly foods, hydration timing, and the meals elite cyclists swear by. For riders who want to start strong and finish stronger."
+**DESCRIPTION ANTI-PATTERNS - NEVER USE THESE OPENINGS:**
+❌ "This category focuses on..."
+❌ "This section covers..."
+❌ "Here you'll find..."
+❌ "Content related to..."
+❌ "Everything about..."
+❌ "A collection of..."
 
-**EXAMPLE BAD DESCRIPTION:**
-"Content about nutrition before rides." (too generic, no vision, doesn't inspire)
+Instead, DIVE STRAIGHT INTO the content with active, evocative language. Start with WHAT the content IS, not meta-descriptions ABOUT the category.
+
+**EXAMPLE GOOD SUBCATEGORY (under "Nutrition"):**
+Name: "Race Day Fueling"
+Description: "Pre-ride fueling strategies and meal planning for peak performance. From race-day breakfast rituals to carb-loading timelines, this is the science of eating for endurance—made practical. Covers glycogen optimization, gut-friendly foods, hydration timing, and the meals elite cyclists swear by."
+
+**EXAMPLE BAD SUBCATEGORY (too broad - should be top-level):**
+Name: "Training"
+Description: "Everything about training." (This is a top-level theme, not a subcategory!)
 
 **RETURN FORMAT:** JSON array with:
-- "name": Subcategory name (2-4 words, evocative)
-- "description": Rich editorial brief (3-4 sentences - make it COMPELLING)
-- "reason": Why this subcategory will captivate readers`;
+- "name": Subcategory name (2-4 words, specific to parent theme)
+- "description": Rich editorial brief (3-4 sentences)
+- "reason": Why this fits as a subcategory of "${parentCategoryName}"`;
       } else {
-        prompt = `You are an Editorial Director creating compelling content categories for a media brand.
+        // TOP-LEVEL MODE - Creating root categories
+        prompt = `You are an Editorial Director creating the main content pillars for a media brand.
 
 ${fullContext || 'No business context available - ask for clarification about the business.'}
 ${existingCategoriesContext}
 
 ---
 
-**TASK:** Create 6 distinct content categories that will excite readers and inspire great content.
+**TASK:** Create 6 distinct TOP-LEVEL CONTENT PILLARS that will organize the entire content strategy.
 ${query ? `Focus on topics related to: "${query}"` : ''}
 
-**CATEGORY REQUIREMENTS:**
-1. Each category should feel like a gateway to exploration - not just a filing system
-2. Categories must be specific to this business's world - no generic "Tips & Tricks"
-3. Think editorially: what would make someone EXCITED to dive into this category?
-4. Mix practical utility with storytelling potential
+**TOP-LEVEL CATEGORY REQUIREMENTS:**
+1. These are MAJOR THEMES that can contain many subtopics - think "pillars" or "sections"
+2. Each should be BROAD enough to have 5-10 subcategories underneath it
+3. Categories must be mutually exclusive - no overlap between them
+4. Together they should cover the key areas your audience cares about
+5. Think like a magazine editor: these are your main SECTIONS
 
-**DESCRIPTION REQUIREMENTS - THIS IS CRITICAL:**
+**HIERARCHY LOGIC - CRITICAL:**
+- Top-level categories are BROAD organizational themes, NOT specific niches
+- Examples of GOOD top-level categories: "Nutrition", "Training", "Gear & Equipment", "Travel & Routes", "Lifestyle"
+- Examples of BAD top-level categories (too specific): "Protein Supplements", "Hill Climbing Tips", "Bike Lights"
+- If your suggestion is so specific it can't have subcategories, it's NOT a top-level category
+- Think: "Could this category have 5-10 distinct subtopics?" If not, it's too narrow.
+
+**DESCRIPTION REQUIREMENTS:**
 Each description must be a compelling EDITORIAL BRIEF (3-4 sentences) that:
-- Paints a vivid picture of what content belongs here
-- Uses evocative, magazine-quality language
-- Includes specific content angles, themes, and story hooks
+- Paints a vivid picture of the SCOPE of content that belongs here
+- Describes the types of subtopics that would live under this category
 - Mentions the TYPE of reader this serves and what transformation they'll experience
 - Makes someone WANT to explore this category
 
-**EXAMPLE GOOD DESCRIPTION:**
-"Epic multi-day routes and weekend escapes across Britain's most dramatic landscapes. From coastal cliff paths to moorland climbs, canal towpaths to forest singletrack—each route framed as an experience, not just a ride. Features terrain insights, elevation profiles, seasonal timing, café stops, wild camping spots, and the 'type of rider' each adventure suits. Where bikepacking meets storytelling."
+**DESCRIPTION ANTI-PATTERNS - NEVER USE THESE OPENINGS:**
+❌ "This category focuses on..."
+❌ "This section covers..."
+❌ "Here you'll find..."
+❌ "Content related to..."
+❌ "Everything about..."
+❌ "A collection of..."
 
-**EXAMPLE BAD DESCRIPTION:**
-"Content about cycling routes in the UK." (too generic, no editorial vision, doesn't inspire)
+Instead, DIVE STRAIGHT INTO the content with active, evocative language. Start with WHAT the content IS, not meta-descriptions ABOUT the category.
+
+**EXAMPLE GOOD TOP-LEVEL CATEGORY:**
+Name: "Nutrition & Fueling"
+Description: "Fuel your rides from the inside out. Pre-ride meals, mid-ride nutrition, post-workout recovery, and everyday eating habits—the science of performance nutrition made practical. Race day strategies, supplement deep-dives, hydration science, and recipes built for athletes who demand more from their bodies."
+
+**EXAMPLE BAD TOP-LEVEL CATEGORY (too specific):**
+Name: "Energy Gels"
+Description: "Reviews of energy gels." (This is a subtopic of Nutrition, not a top-level category!)
 
 **RETURN FORMAT:** JSON array of objects with:
-- "name": Category name (2-4 words, evocative and specific)
-- "description": Rich editorial brief (3-4 sentences - make it INSPIRING)
-- "reason": Why this category will captivate the target audience`;
+- "name": Category name (1-3 words, broad theme)
+- "description": Rich editorial brief describing the scope (3-4 sentences)
+- "reason": Why this works as a major content pillar`;
       }
     }
 
@@ -1264,10 +1339,11 @@ Each description must be a compelling EDITORIAL BRIEF (3-4 sentences) that:
             items: {
               type: Type.OBJECT,
               properties: {
-                name: { type: Type.STRING },
-                description: { type: Type.STRING },
-                reason: { type: Type.STRING }
-              }
+                name: { type: Type.STRING, description: "Category name (2-4 words)" },
+                description: { type: Type.STRING, description: "Rich editorial brief (3-4 sentences) explaining what content belongs here" },
+                reason: { type: Type.STRING, description: "Why this category fits" }
+              },
+              required: ["name", "description", "reason"]
             }
           }
         }
@@ -1282,7 +1358,7 @@ Each description must be a compelling EDITORIAL BRIEF (3-4 sentences) that:
       console.log('[Gemini] Parsed categories:', results.length, 'items');
       return results.map((r: any) => ({
         name: r.name || 'Untitled Category',
-        description: r.description || `Content related to ${r.name}`,
+        description: r.description || '', // Let UI handle empty - don't use generic fallback
         reason: r.reason || 'Relevant to business context'
       }));
     } catch (parseError) {

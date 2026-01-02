@@ -15,6 +15,7 @@ import { KeywordData } from '../types';
 let apiCredentialsCache: { login: string; password: string } | null = null;
 let credentialsCacheTime = 0;
 const CREDENTIALS_TTL = 30 * 60 * 1000; // 30 minutes
+const API_TIMEOUT_MS = 30000; // 30 second timeout
 
 /**
  * Get DataForSEO API credentials from admin config
@@ -64,6 +65,10 @@ const apiRequest = async (endpoint: string, data: any[]): Promise<any> => {
 
   const authString = btoa(`${credentials.login}:${credentials.password}`);
 
+  // Create abort controller for timeout
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+
   try {
     const response = await fetch(`https://api.dataforseo.com/v3${endpoint}`, {
       method: 'POST',
@@ -71,8 +76,11 @@ const apiRequest = async (endpoint: string, data: any[]): Promise<any> => {
         'Authorization': `Basic ${authString}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(data)
+      body: JSON.stringify(data),
+      signal: controller.signal
     });
+
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -89,6 +97,11 @@ const apiRequest = async (endpoint: string, data: any[]): Promise<any> => {
 
     return result;
   } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      console.error('[DataForSEO] Request timed out after', API_TIMEOUT_MS / 1000, 'seconds');
+      throw new Error('Keyword data request timed out. The service is temporarily slow - please try again in a moment.');
+    }
     console.error('[DataForSEO] Request failed:', error);
     throw error;
   }
@@ -101,7 +114,7 @@ const apiRequest = async (endpoint: string, data: any[]): Promise<any> => {
 export const getKeywordData = async (
   keywords: string[],
   location: string = 'United States',
-  language: string = 'en'
+  language: string = 'English'
 ): Promise<KeywordData[]> => {
   if (!keywords.length) return [];
 
@@ -113,12 +126,23 @@ export const getKeywordData = async (
       keywords: keywords.slice(0, 100), // API limit: 100 keywords per request
       location_name: location,
       language_name: language,
-      date_from: getDateMonthsAgo(12), // Get 12 months of data
-      include_serp_info: false,
-      include_clickstream_data: false
     }];
 
     const result = await apiRequest('/keywords_data/google_ads/search_volume/live', requestData);
+
+    // Debug: log full response structure
+    console.log('[DataForSEO] Response structure:', {
+      hasTask: !!result.tasks?.[0],
+      taskStatus: result.tasks?.[0]?.status_message,
+      taskStatusCode: result.tasks?.[0]?.status_code,
+      resultCount: result.tasks?.[0]?.result?.length || 0,
+      firstResult: result.tasks?.[0]?.result?.[0] ? JSON.stringify(result.tasks[0].result[0]).substring(0, 500) : 'no results'
+    });
+
+    // If we have a task but no results, log the full task for debugging
+    if (result.tasks?.[0] && (!result.tasks[0].result || result.tasks[0].result.length === 0)) {
+      console.warn('[DataForSEO] Task completed but no results. Full task:', JSON.stringify(result.tasks[0]).substring(0, 1000));
+    }
 
     // Parse results
     const keywordResults: KeywordData[] = [];
@@ -129,15 +153,15 @@ export const getKeywordData = async (
           keywordResults.push({
             keyword: item.keyword,
             searchVolume: item.search_volume ?? null,
-            difficulty: item.keyword_info?.competition_level === 'LOW' ? 25 :
-                       item.keyword_info?.competition_level === 'MEDIUM' ? 50 :
-                       item.keyword_info?.competition_level === 'HIGH' ? 75 : null,
+            difficulty: item.competition_index ? Math.round(item.competition_index * 100) : null,
             cpc: item.cpc ?? null,
             trend: determineTrend(item.monthly_searches),
             source: 'dataforseo'
           });
         }
       }
+    } else if (result.tasks?.[0]?.status_message) {
+      console.warn('[DataForSEO] Task error:', result.tasks[0].status_message);
     }
 
     console.log(`[DataForSEO] Retrieved data for ${keywordResults.length} keywords`);
@@ -286,8 +310,8 @@ const getDateMonthsAgo = (months: number): string => {
 };
 
 // Helper: Determine trend from monthly search data
-const determineTrend = (monthlySearches: any[]): 'rising' | 'stable' | 'declining' | undefined => {
-  if (!monthlySearches || monthlySearches.length < 3) return undefined;
+const determineTrend = (monthlySearches: any[]): 'rising' | 'stable' | 'declining' | null => {
+  if (!monthlySearches || monthlySearches.length < 3) return null;
 
   const recent = monthlySearches.slice(0, 3);
   const older = monthlySearches.slice(-3);
@@ -295,7 +319,7 @@ const determineTrend = (monthlySearches: any[]): 'rising' | 'stable' | 'declinin
   const recentAvg = recent.reduce((sum: number, m: any) => sum + (m.search_volume || 0), 0) / recent.length;
   const olderAvg = older.reduce((sum: number, m: any) => sum + (m.search_volume || 0), 0) / older.length;
 
-  if (olderAvg === 0) return undefined;
+  if (olderAvg === 0) return null;
 
   const change = (recentAvg - olderAvg) / olderAvg;
 

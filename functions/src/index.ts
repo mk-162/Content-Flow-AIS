@@ -850,25 +850,39 @@ const getGeminiClient = () => {
   return new GoogleGenAI({ apiKey });
 };
 
-// Helper: Retry with exponential backoff
+// Helper: Retry with exponential backoff (handles rate limits gracefully)
 const withRetry = async <T>(
   fn: () => Promise<T>,
-  retries: number = 3,
-  baseDelay: number = 1000
+  retries: number = 4,
+  baseDelay: number = 2000
 ): Promise<T> => {
   try {
     return await fn();
   } catch (error: any) {
     if (retries === 0) throw error;
-    const isRetryable =
-      error?.message?.includes('503') ||
-      error?.message?.includes('UNAVAILABLE') ||
-      error?.message?.includes('overloaded') ||
-      error?.message?.includes('429');
-    if (!isRetryable) throw error;
-    console.warn(`Request failed. Retrying in ${baseDelay}ms... (${retries} attempts left)`);
-    await new Promise(resolve => setTimeout(resolve, baseDelay));
-    return withRetry(fn, retries - 1, baseDelay * 2);
+    const errorMsg = error?.message?.toLowerCase() || '';
+
+    // Check for rate limit / quota errors (use longer delays)
+    const isRateLimited =
+      errorMsg.includes('429') ||
+      errorMsg.includes('rate limit') ||
+      errorMsg.includes('resource_exhausted') ||
+      errorMsg.includes('quota');
+
+    // Check for temporary service errors
+    const isTemporaryError =
+      errorMsg.includes('503') ||
+      errorMsg.includes('unavailable') ||
+      errorMsg.includes('overloaded') ||
+      errorMsg.includes('connection error');
+
+    if (!isRateLimited && !isTemporaryError) throw error;
+
+    // Use longer delays for rate limits (30s base, up to 4 min)
+    const delay = isRateLimited ? Math.max(baseDelay, 30000) : baseDelay;
+    console.warn(`Request failed (${isRateLimited ? 'rate limited' : 'temporary error'}). Retrying in ${delay/1000}s... (${retries} attempts left)`);
+    await new Promise(resolve => setTimeout(resolve, delay));
+    return withRetry(fn, retries - 1, delay * 2);
   }
 };
 
@@ -916,13 +930,277 @@ const stripPreamble = (content: string): string => {
 };
 
 /**
+ * Strip title headings from generated content.
+ * Since the title is stored separately in the database, having it in the 
+ * markdown body causes duplication in the UI.
+ */
+const stripTitleHeading = (content: string, title: string): string => {
+  let cleaned = content.trim();
+
+  // Escape special regex characters in title
+  const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // 1. Strip markdown H1: # Title (exact or close match at start)
+  cleaned = cleaned.replace(new RegExp(`^#\\s*${escapedTitle}\\s*\\n*`, 'im'), '');
+
+  // 2. Strip markdown H2: ## Title (exact match at start)
+  cleaned = cleaned.replace(new RegExp(`^##\\s*${escapedTitle}\\s*\\n*`, 'im'), '');
+
+  // 3. Strip variations like "# Title: Quick Answer" or "## Title - Summary"
+  cleaned = cleaned.replace(new RegExp(`^##?\\s*${escapedTitle}[:\\-\\s][^\\n]*\\n*`, 'im'), '');
+
+  // 4. Fallback: strip any H1 at the very beginning (title should always be H1)
+  cleaned = cleaned.replace(/^#\s+[^\n]+\n*/, '');
+
+  // 5. If it starts with a short H2 that repeats the title or is a generic label, strip it
+  const h2Match = cleaned.match(/^##\s+([^\n]+)\n/);
+  if (h2Match) {
+    const h2Text = h2Match[1];
+    const isShort = h2Text.length < 100;
+    const isTitleRepeat = h2Text.toLowerCase().includes(title.toLowerCase().substring(0, 20));
+    const isGeneric = /quick answer|summary|overview|introduction|article overview/i.test(h2Text);
+    
+    if (isShort && (isTitleRepeat || isGeneric)) {
+      cleaned = cleaned.replace(/^##\s+[^\n]+\n+/, '');
+    }
+  }
+
+  return cleaned.trim();
+};
+
+/**
+ * Extract citations (markdown links) from research content
+ * Returns both the citations list and the research content with preserved links
+ */
+interface Citation {
+  text: string;
+  url: string;
+}
+
+const extractCitationsFromResearch = (researchContent: string): { citations: Citation[], summary: string } => {
+  const citations: Citation[] = [];
+  const seenUrls = new Set<string>();
+
+  // Match markdown links: [text](url)
+  const linkPattern = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
+  let match;
+
+  while ((match = linkPattern.exec(researchContent)) !== null) {
+    const [, text, url] = match;
+    // Deduplicate by URL
+    if (!seenUrls.has(url)) {
+      seenUrls.add(url);
+      citations.push({ text: text.trim(), url });
+    }
+  }
+
+  // Create a summary that preserves the research structure but limits length
+  // Include full content up to 4000 chars (increased to preserve more context with links)
+  const summary = researchContent.length > 4000
+    ? researchContent.substring(0, 4000) + '...'
+    : researchContent;
+
+  return { citations, summary };
+};
+
+/**
+ * Format citations for prompt injection
+ */
+const formatCitationsForPrompt = (citations: Citation[], maxCitations: number = 20): string => {
+  if (citations.length === 0) return '';
+
+  const limitedCitations = citations.slice(0, maxCitations);
+  const citationList = limitedCitations.map((c, i) => `${i + 1}. [${c.text}](${c.url})`).join('\n');
+
+  return `\n**AUTHORITATIVE SOURCES (cite relevant ones in your content)**
+The following sources were found during research. Include relevant citations as markdown links where they add credibility:
+${citationList}
+${citations.length > maxCitations ? `\n(${citations.length - maxCitations} more sources available)` : ''}`;
+};
+
+/**
+ * Build research context from category's Google Deep Research data
+ * Consolidates the repeated pattern of extracting citations and formatting context
+ */
+interface ResearchContext {
+  deepResearchContext: string;
+  citationsContext: string;
+}
+
+const buildResearchContext = (
+  category: { googleDeepResearch?: { status?: string; content?: string } } | null | undefined,
+  promptPrefix: string,
+  maxCitations: number = 15
+): ResearchContext => {
+  if (!category?.googleDeepResearch?.status || category.googleDeepResearch.status !== 'complete' || !category.googleDeepResearch.content) {
+    return { deepResearchContext: '', citationsContext: '' };
+  }
+
+  const researchContent = category.googleDeepResearch.content;
+  const { citations, summary } = extractCitationsFromResearch(researchContent);
+
+  const deepResearchContext = `\n${promptPrefix}\n${summary}`;
+  const citationsContext = citations.length > 0 ? formatCitationsForPrompt(citations, maxCitations) : '';
+
+  return { deepResearchContext, citationsContext };
+};
+
+/**
+ * Generate seed keywords for a category using AI
+ * Called by processGenerateTitles when keywords don't exist yet
+ */
+const generateCategoryKeywords = async (
+  categoryId: string,
+  categoryName: string,
+  categoryDescription: string,
+  projectData: any,
+  organizationId: string,
+  projectId: string
+): Promise<{ primaryKeywords: any[], relatedKeywords: any[], questionsToAnswer: string[], isFallback?: boolean, error?: string }> => {
+  console.log(`[Keywords] Generating keywords for category: ${categoryName}`);
+
+  const ai = getGeminiClient();
+
+  // Build brand context from project
+  const brandContext = [
+    projectData?.name && `Brand/Site: ${projectData.name}`,
+    projectData?.description && `Description: ${projectData.description}`,
+    projectData?.websiteUrl && `Website: ${projectData.websiteUrl}`,
+    projectData?.settings?.positioningStatement && `Positioning: ${projectData.settings.positioningStatement}`,
+    projectData?.businessProfile?.businessName && `Business: ${projectData.businessProfile.businessName}`,
+    projectData?.businessProfile?.businessSummary && `About: ${projectData.businessProfile.businessSummary}`,
+  ].filter(Boolean).join('\n');
+
+  const prompt = `You are an SEO keyword research expert. Generate search keywords for this content category.
+
+CATEGORY: ${categoryName}
+${categoryDescription ? `DESCRIPTION: ${categoryDescription}` : ''}
+
+BRAND CONTEXT:
+${brandContext || 'General content site'}
+
+Generate a comprehensive keyword research report with:
+1. primaryKeywords: 15-20 main keywords (mix of head terms and long-tail)
+2. relatedKeywords: 10-15 related/semantic keywords
+3. questionsToAnswer: 8-10 questions people search for
+
+Focus on keywords that are:
+- Relevant to both the category AND the brand's target audience
+- A mix of informational, commercial, and transactional intent
+- Include "how to", "what is", "best", "vs" variations
+
+Return ONLY valid JSON in this exact format:
+{
+  "primaryKeywords": [{"keyword": "example keyword", "searchVolume": null, "difficulty": null}],
+  "relatedKeywords": [{"keyword": "related example", "searchVolume": null}],
+  "questionsToAnswer": ["How do I...?", "What is the best...?"]
+}`;
+
+  try {
+    const response = await withRetry(async () => {
+      return ai.models.generateContent({
+        model: "gemini-2.0-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          temperature: 0.7,
+        }
+      });
+    });
+
+    const text = response.text || '{}';
+    const parsed = JSON.parse(text);
+
+    const result = {
+      primaryKeywords: parsed.primaryKeywords || [],
+      relatedKeywords: parsed.relatedKeywords || [],
+      questionsToAnswer: parsed.questionsToAnswer || []
+    };
+
+    console.log(`[Keywords] Generated ${result.primaryKeywords.length} primary keywords, ${result.questionsToAnswer.length} questions`);
+
+    // Save to categoryResearch document
+    const researchRef = admin.firestore().doc(`categoryResearch/${categoryId}`);
+    await researchRef.set({
+      id: categoryId,
+      categoryId: categoryId,
+      projectId: projectId,
+      organizationId: organizationId,
+      researchType: 'shallow',
+      primaryKeywords: result.primaryKeywords,
+      relatedKeywords: result.relatedKeywords,
+      questionsToAnswer: result.questionsToAnswer,
+      contentGaps: [],
+      coveredTopics: [],
+      suggestedTopics: [],
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      keywordsFetchedAt: admin.firestore.FieldValue.serverTimestamp(),
+      source: 'auto_generated'
+    });
+
+    console.log(`[Keywords] Saved keywords for category: ${categoryName}`);
+    return result;
+
+  } catch (error: any) {
+    console.error('[Keywords] Failed to generate keywords:', error);
+
+    // Fallback: generate basic keywords from category name
+    const fallbackKeywords = [
+      { keyword: categoryName, searchVolume: null, difficulty: null },
+      { keyword: `${categoryName} guide`, searchVolume: null, difficulty: null },
+      { keyword: `${categoryName} tips`, searchVolume: null, difficulty: null },
+      { keyword: `how to ${categoryName}`, searchVolume: null, difficulty: null },
+      { keyword: `best ${categoryName}`, searchVolume: null, difficulty: null },
+      { keyword: `${categoryName} for beginners`, searchVolume: null, difficulty: null },
+      { keyword: `${categoryName} strategies`, searchVolume: null, difficulty: null },
+      { keyword: `${categoryName} examples`, searchVolume: null, difficulty: null },
+    ];
+
+    const fallbackQuestions = [
+      `What is ${categoryName}?`,
+      `How to ${categoryName}?`,
+      `Why is ${categoryName} important?`,
+      `What are the best ${categoryName} practices?`,
+    ];
+
+    // Save fallback to categoryResearch - clearly marked as error fallback
+    const researchRef = admin.firestore().doc(`categoryResearch/${categoryId}`);
+    await researchRef.set({
+      id: categoryId,
+      categoryId: categoryId,
+      projectId: projectId,
+      organizationId: organizationId,
+      researchType: 'shallow',
+      primaryKeywords: fallbackKeywords,
+      relatedKeywords: [],
+      questionsToAnswer: fallbackQuestions,
+      contentGaps: [],
+      coveredTopics: [],
+      suggestedTopics: [],
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      keywordsFetchedAt: admin.firestore.FieldValue.serverTimestamp(),
+      source: 'fallback_error',
+      error: `Keyword generation failed: ${error.message || 'Unknown error'}. Using placeholder keywords.`
+    });
+
+    return {
+      primaryKeywords: fallbackKeywords,
+      relatedKeywords: [],
+      questionsToAnswer: fallbackQuestions,
+      isFallback: true,
+      error: error.message || 'Unknown error'
+    };
+  }
+};
+
+/**
  * Process generation queue - triggered when task status changes to QUEUED
  * Handles title generation, content generation, and image generation
  */
 export const processGenerationQueue = functions
   .region('europe-west2')
   .runWith({
-    timeoutSeconds: 300, // 5 minutes max
+    timeoutSeconds: 540, // 9 minutes max - needed for Deep Research
     memory: '1GB'
   })
   .firestore.document('generationQueue/{taskId}')
@@ -935,7 +1213,16 @@ export const processGenerationQueue = functions
       return null;
     }
 
-    console.log(`[QueueProcessor] Processing task: ${taskId}, type: ${taskData.type}`);
+    // Skip if task is scheduled for later (rate limit retry)
+    if (taskData.nextRetryAt) {
+      const nextRetryTime = taskData.nextRetryAt.toDate ? taskData.nextRetryAt.toDate() : new Date(taskData.nextRetryAt);
+      if (nextRetryTime > new Date()) {
+        console.log(`[QueueProcessor] Task ${taskId} scheduled for retry at ${nextRetryTime.toISOString()}, skipping for now`);
+        return null;
+      }
+    }
+
+    console.log(`[QueueProcessor] Processing task: ${taskId}, type: ${taskData.type}${taskData.retryCount ? ` (retry #${taskData.retryCount})` : ''}`);
 
     const taskRef = admin.firestore().doc(`generationQueue/${taskId}`);
 
@@ -975,11 +1262,48 @@ export const processGenerationQueue = functions
     } catch (error: any) {
       console.error(`[QueueProcessor] Task ${taskId} failed:`, error);
 
-      // Mark as failed
+      const errorMsg = (error.message || 'Unknown error').toLowerCase();
+      const MAX_TASK_RETRIES = 3;
+      const currentRetryCount = taskData.retryCount || 0;
+
+      // Check if this is a retryable error (rate limit or temporary)
+      const isRetryableError =
+        errorMsg.includes('429') ||
+        errorMsg.includes('rate limit') ||
+        errorMsg.includes('resource_exhausted') ||
+        errorMsg.includes('quota') ||
+        errorMsg.includes('503') ||
+        errorMsg.includes('unavailable') ||
+        errorMsg.includes('overloaded') ||
+        errorMsg.includes('connection error') ||
+        errorMsg.includes('timed out');
+
+      // Auto-retry retryable errors (up to MAX_TASK_RETRIES times)
+      if (isRetryableError && currentRetryCount < MAX_TASK_RETRIES) {
+        const retryDelay = Math.min(60000 * Math.pow(2, currentRetryCount), 300000); // 1min, 2min, 4min (max 5min)
+        const nextRetryAt = new Date(Date.now() + retryDelay);
+        console.log(`[QueueProcessor] Task ${taskId} will auto-retry in ${retryDelay/1000}s (attempt ${currentRetryCount + 1}/${MAX_TASK_RETRIES})`);
+
+        await taskRef.update({
+          status: TaskStatus.QUEUED,
+          progress: 0,
+          retryCount: currentRetryCount + 1,
+          lastError: error.message || 'Unknown error',
+          nextRetryAt: admin.firestore.Timestamp.fromDate(nextRetryAt),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        return; // Don't mark as failed, will be picked up again
+      }
+
+      // Mark as failed (permanent error or max retries exceeded)
+      const failReason = currentRetryCount >= MAX_TASK_RETRIES
+        ? `${error.message} (failed after ${MAX_TASK_RETRIES} retries)`
+        : error.message || 'Unknown error';
+
       await taskRef.update({
         status: TaskStatus.FAILED,
         progress: 0,
-        error: error.message || 'Unknown error',
+        error: failReason,
         failedAt: admin.firestore.FieldValue.serverTimestamp()
       });
 
@@ -995,6 +1319,45 @@ export const processGenerationQueue = functions
       }
     }
 
+    return null;
+  });
+
+/**
+ * Scheduled function to pick up delayed retry tasks
+ * Runs every 2 minutes to check for tasks that are ready for retry
+ */
+export const processDelayedRetries = functions
+  .region('europe-west2')
+  .runWith({ timeoutSeconds: 60, memory: '256MB' })
+  .pubsub.schedule('every 2 minutes')
+  .onRun(async () => {
+    const now = admin.firestore.Timestamp.now();
+
+    // Find QUEUED tasks with nextRetryAt in the past
+    const tasksSnapshot = await admin.firestore()
+      .collection('generationQueue')
+      .where('status', '==', TaskStatus.QUEUED)
+      .where('nextRetryAt', '<=', now)
+      .limit(5) // Process up to 5 at a time to avoid overwhelming the API
+      .get();
+
+    if (tasksSnapshot.empty) {
+      return null;
+    }
+
+    console.log(`[DelayedRetries] Found ${tasksSnapshot.size} tasks ready for retry`);
+
+    // Trigger processing by clearing nextRetryAt (which will make them eligible for immediate processing)
+    const batch = admin.firestore().batch();
+    for (const doc of tasksSnapshot.docs) {
+      batch.update(doc.ref, {
+        nextRetryAt: admin.firestore.FieldValue.delete(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    }
+    await batch.commit();
+
+    console.log(`[DelayedRetries] Triggered retry for ${tasksSnapshot.size} tasks`);
     return null;
   });
 
@@ -1074,10 +1437,49 @@ async function processGenerateTitles(
 
   await taskRef.update({ progress: 30 });
 
-  // Build keyword research context
+  // CRITICAL: Generate keywords FIRST if they don't exist
+  // This ensures stubs are created with proper SEO keyword targeting
+  let research: any = researchDoc.exists ? researchDoc.data() : null;
+
+  if (!research || !research.primaryKeywords || research.primaryKeywords.length === 0) {
+    console.log(`[GenerateTitles] No keywords found for ${categoryName} - generating keywords FIRST`);
+    await taskRef.update({ progress: 35, status: TaskStatus.PROCESSING });
+
+    try {
+      const generatedKeywords = await generateCategoryKeywords(
+        categoryId,
+        categoryName,
+        categoryDescription,
+        project,
+        organizationId,
+        projectId
+      );
+
+      // Use the freshly generated keywords
+      research = {
+        primaryKeywords: generatedKeywords.primaryKeywords,
+        relatedKeywords: generatedKeywords.relatedKeywords,
+        questionsToAnswer: generatedKeywords.questionsToAnswer
+      };
+
+      console.log(`[GenerateTitles] Keywords generated successfully - proceeding with title generation`);
+    } catch (keywordError: any) {
+      console.warn(`[GenerateTitles] Keyword generation failed, proceeding without: ${keywordError.message}`);
+      research = {
+        primaryKeywords: [],
+        relatedKeywords: [],
+        questionsToAnswer: [],
+        keywordsFailed: true,
+        keywordError: keywordError.message || 'Unknown error'
+      };
+    }
+  }
+
+  await taskRef.update({ progress: 45 });
+
+  // Build keyword research context (now using either existing or freshly generated keywords)
   let keywordContext = '';
-  if (researchDoc.exists) {
-    const research = researchDoc.data() || {};
+  if (research && research.primaryKeywords && research.primaryKeywords.length > 0) {
     const keywordParts: string[] = [];
     keywordParts.push('**KEYWORD RESEARCH**');
 
@@ -1114,20 +1516,25 @@ async function processGenerateTitles(
     console.log(`[GenerateTitles] Using keyword research with ${primaryKeywords.length} keywords`);
   }
 
-  // Build Google Deep Research context if available
+  // Build Google Deep Research context if available (with citations)
   let deepResearchContext = '';
+  let citationsContext = '';
   if (categoryData?.googleDeepResearch?.status === 'complete' && categoryData.googleDeepResearch.content) {
-    // Include a summary of the research to inform title generation
     const researchContent = categoryData.googleDeepResearch.content;
-    // Truncate to first 2000 chars to keep prompt manageable
-    const truncatedResearch = researchContent.length > 2000
-      ? researchContent.substring(0, 2000) + '...'
-      : researchContent;
-    deepResearchContext = `\n**EXPERT RESEARCH INSIGHTS**\nUse these insights to create more authoritative, well-researched titles:\n${truncatedResearch}`;
+    const { citations, summary } = extractCitationsFromResearch(researchContent);
+
+    // Include research summary for context
+    deepResearchContext = `\n**EXPERT RESEARCH INSIGHTS**\nUse these insights to create more authoritative, well-researched titles:\n${summary}`;
+
+    // Include citations - titles can reference topics from cited sources
+    if (citations.length > 0) {
+      citationsContext = `\n**CITED SOURCES FROM RESEARCH**\nThese authoritative sources inform our content strategy. Create titles that could reference insights from these sources:\n${citations.slice(0, 10).map((c, i) => `${i + 1}. ${c.text}`).join('\n')}`;
+      console.log(`[GenerateTitles] Found ${citations.length} citations in research`);
+    }
     console.log(`[GenerateTitles] Including Google Deep Research context`);
   }
 
-  await taskRef.update({ progress: 40 });
+  await taskRef.update({ progress: 50 });
 
   // Build existing titles context for deduplication
   const existingTitles = existingPostsSnap.docs.map(d => d.data().title).filter(Boolean);
@@ -1150,6 +1557,7 @@ ${categoryDescription ? `Description: ${categoryDescription}` : ''}
 
 ${keywordContext}
 ${deepResearchContext}
+${citationsContext}
 ${existingTitlesContext}
 
 ---
@@ -1289,6 +1697,18 @@ Return as JSON array.`;
     });
     console.log(`[GenerateTitles] Deducted ${creditsToDeduct} credits for stub generation`);
   }
+
+  // Record degraded mode if keywords failed - this surfaces to the user
+  if (research?.keywordsFailed) {
+    await taskRef.update({
+      result: {
+        degradedMode: true,
+        warning: 'Titles generated without keyword optimization due to keyword generation failure.',
+        keywordError: research.keywordError
+      }
+    });
+    console.warn(`[GenerateTitles] Completed in degraded mode - keywords failed: ${research.keywordError}`);
+  }
 }
 
 /**
@@ -1424,15 +1844,13 @@ async function processGenerateContent(
     console.log(`[GenerateContent] Using keyword research with ${primaryKeywords.length} keywords`);
   }
 
-  // Build Google Deep Research context if available
-  let deepResearchContext = '';
-  if (category?.googleDeepResearch?.status === 'complete' && category.googleDeepResearch.content) {
-    const researchContent = category.googleDeepResearch.content;
-    // Include more of the research for content generation (up to 3000 chars)
-    const truncatedResearch = researchContent.length > 3000
-      ? researchContent.substring(0, 3000) + '...'
-      : researchContent;
-    deepResearchContext = `\n**EXPERT RESEARCH (use for accuracy and authority)**\n${truncatedResearch}`;
+  // Build Google Deep Research context if available (with citations)
+  const { deepResearchContext, citationsContext } = buildResearchContext(
+    category,
+    '**EXPERT RESEARCH (use for accuracy and authority)**',
+    15
+  );
+  if (deepResearchContext) {
     console.log(`[GenerateContent] Including Google Deep Research context`);
   }
 
@@ -1463,6 +1881,7 @@ Target Word Count: 1,200-1,800 words
 
 ${keywordContext}
 ${deepResearchContext}
+${citationsContext}
 
 ---
 
@@ -1484,6 +1903,7 @@ ${deepResearchContext}
    - Include specific examples from the ${categoryName} industry
    - Use bullet points for lists of 3+ items
    - Add H3 subsections where needed for depth
+   - **CITATIONS**: If authoritative sources are provided above, naturally weave 2-4 relevant citations into the content as markdown links. Link to sources when citing statistics, research findings, or expert opinions. Example: "According to [Source Name](url), cyclists who..."
 
 4. **Expert Insight** (100-150 words)
    - Share a unique perspective or insider knowledge
@@ -1525,6 +1945,7 @@ Write the article now in clean Markdown format. Start directly with the hook.`;
 
   let content = response.text || 'Could not generate content.';
   content = stripPreamble(content);
+  content = stripTitleHeading(content, post.title);
 
   // Update post with generated content
   await postRef.update({
@@ -1634,15 +2055,13 @@ async function processGenerateCategoryPage(
 
   const aiInstructions = post.categoryPageContent?.aiInstructions || category?.description || '';
 
-  // Build Google Deep Research context if available
-  let deepResearchContext = '';
-  if (category?.googleDeepResearch?.status === 'complete' && category.googleDeepResearch.content) {
-    const researchContent = category.googleDeepResearch.content;
-    // Use up to 2000 chars for category page intro
-    const truncatedResearch = researchContent.length > 2000
-      ? researchContent.substring(0, 2000) + '...'
-      : researchContent;
-    deepResearchContext = `**RESEARCH INSIGHTS (base content on this)**\n${truncatedResearch}\n\n`;
+  // Build Google Deep Research context if available (with citations)
+  const { deepResearchContext, citationsContext } = buildResearchContext(
+    category,
+    '**RESEARCH INSIGHTS (base content on this)**',
+    10
+  );
+  if (deepResearchContext) {
     console.log(`[GenerateCategoryPage] Including Google Deep Research context`);
   }
 
@@ -1653,7 +2072,7 @@ async function processGenerateCategoryPage(
 
   const prompt = `You are an expert content writer creating a category landing page introduction for a website.
 
-${businessContext ? `**BUSINESS CONTEXT**\n${businessContext}\n\n` : ''}${deepResearchContext}**CATEGORY**
+${businessContext ? `**BUSINESS CONTEXT**\n${businessContext}\n\n` : ''}${deepResearchContext ? `${deepResearchContext}\n\n` : ''}${citationsContext ? `${citationsContext}\n\n` : ''}**CATEGORY**
 Name: ${categoryName}
 ${aiInstructions ? `Context/Instructions: ${aiInstructions}` : ''}
 
@@ -1673,6 +2092,7 @@ ${aiInstructions ? `Context/Instructions: ${aiInstructions}` : ''}
 - Use H2 headings sparingly (1 max if needed)
 - Professional but approachable tone
 - Do NOT include the category name as a heading (it will be displayed separately)
+- If authoritative sources are provided above, you may include 1-2 relevant citations as markdown links to establish credibility
 
 Return clean Markdown content only. No preamble, no explanation, just the content.`;
 
@@ -1689,6 +2109,7 @@ Return clean Markdown content only. No preamble, no explanation, just the conten
 
   let content = response.text || '';
   content = stripPreamble(content);
+  content = stripTitleHeading(content, categoryName);
 
   await taskRef.update({ progress: 80 });
 
@@ -1745,6 +2166,8 @@ async function processGoogleDeepResearch(
   const { organizationId, projectId, categoryId, categoryName, createdBy } = taskData;
 
   const DEEP_RESEARCH_CREDIT_COST = 20;
+  const POLL_INTERVAL_MS = 15000; // 15 seconds between polls
+  const MAX_POLL_ATTEMPTS = 32; // 32 * 15s = 8 minutes max (with buffer for setup)
 
   console.log(`[GoogleDeepResearch] Starting for category: ${categoryName}`);
 
@@ -1753,7 +2176,6 @@ async function processGoogleDeepResearch(
   const creditBalance = orgDoc.data()?.credits?.balance ?? 0;
 
   if (creditBalance < DEEP_RESEARCH_CREDIT_COST) {
-    // Update category status to failed
     const catRef = admin.firestore().doc(
       `organizations/${organizationId}/projects/${projectId}/categories/${categoryId}`
     );
@@ -1765,7 +2187,7 @@ async function processGoogleDeepResearch(
     throw new Error(`Insufficient credits. Required: ${DEEP_RESEARCH_CREDIT_COST}, Available: ${creditBalance}`);
   }
 
-  await taskRef.update({ progress: 10 });
+  await taskRef.update({ progress: 5 });
 
   // Get category and project context
   const catRef = admin.firestore().doc(
@@ -1779,83 +2201,253 @@ async function processGoogleDeepResearch(
   const category = categoryDoc.data();
   const project = projectDoc.data();
 
-  await taskRef.update({ progress: 20 });
+  await taskRef.update({ progress: 10 });
 
-  // Build business context
-  let businessContext = '';
-  if (project?.businessProfile) {
-    const bp = project.businessProfile;
-    businessContext = [
-      bp.businessName ? `Business: ${bp.businessName}` : '',
-      bp.businessSummary ? `About: ${bp.businessSummary}` : '',
-      bp.industry?.primary ? `Industry: ${bp.industry.primary}` : '',
-      bp.targetAudience?.primary ? `Target Audience: ${bp.targetAudience.primary}` : '',
-      bp.targetAudience?.painPoints ? `Pain Points: ${bp.targetAudience.painPoints.join(', ')}` : '',
-      bp.brandVoice?.uniqueSellingPoints ? `USPs: ${bp.brandVoice.uniqueSellingPoints.join(', ')}` : ''
-    ].filter(Boolean).join('\n');
+  // Build rich business context for better research targeting
+  const bp = project?.businessProfile;
+  const businessContextParts: string[] = [];
+
+  if (bp?.businessName) businessContextParts.push(`Business: ${bp.businessName}`);
+  if (bp?.businessSummary) businessContextParts.push(`About: ${bp.businessSummary}`);
+  if (bp?.websiteUrl || project?.websiteUrl) businessContextParts.push(`Website: ${bp?.websiteUrl || project?.websiteUrl}`);
+
+  // Industry context
+  let industryStr = bp?.industry?.primary || '';
+  if (bp?.industry?.secondary) industryStr += ` > ${bp.industry.secondary}`;
+  if (bp?.industry?.tertiary) industryStr += ` > ${bp.industry.tertiary}`;
+  if (industryStr) businessContextParts.push(`Industry: ${industryStr}`);
+
+  // Offerings
+  if (bp?.offerings?.categories?.length) {
+    const label = bp.offerings.type === 'products' ? 'Products' : bp.offerings.type === 'services' ? 'Services' : 'Offerings';
+    businessContextParts.push(`${label}: ${bp.offerings.categories.join(', ')}`);
   }
 
-  await taskRef.update({ progress: 30 });
+  // Target audience
+  if (bp?.targetAudience?.primary) businessContextParts.push(`Target Audience: ${bp.targetAudience.primary}`);
+  if (bp?.targetAudience?.painPoints?.length) {
+    businessContextParts.push(`Audience Pain Points: ${bp.targetAudience.painPoints.join('; ')}`);
+  }
 
-  // Build the research prompt
-  const ai = getGeminiClient();
+  // Competitors
+  if (bp?.competitors?.length) {
+    businessContextParts.push(`Key Competitors: ${bp.competitors.map((c: any) => c.name || c).join(', ')}`);
+  }
 
-  const researchPrompt = `You are an expert researcher conducting deep research on a topic to support content creation.
+  const businessContext = businessContextParts.join('\n');
 
-${businessContext ? `**BUSINESS CONTEXT**\n${businessContext}\n\n` : ''}**CATEGORY TO RESEARCH**
-Name: ${categoryName}
-${category?.description ? `Description: ${category.description}` : ''}
+  await taskRef.update({ progress: 15 });
 
+  // Fetch existing keywords if available (from CategoryResearch)
+  let keywordContext = '';
+  try {
+    const researchDoc = await admin.firestore()
+      .doc(`organizations/${organizationId}/projects/${projectId}/categoryResearch/${categoryId}`)
+      .get();
+
+    if (researchDoc.exists) {
+      const researchData = researchDoc.data();
+      const keywords = researchData?.primaryKeywords || [];
+      if (keywords.length > 0) {
+        const topKeywords = keywords
+          .slice(0, 20)
+          .map((kw: any) => {
+            const vol = kw.searchVolume ? ` (${kw.searchVolume.toLocaleString()}/mo)` : '';
+            return `- ${kw.keyword}${vol}`;
+          })
+          .join('\n');
+        keywordContext = `\nTARGET KEYWORDS (prioritize these in research):\n${topKeywords}\n`;
+      }
+    }
+  } catch (err) {
+    console.warn('[GoogleDeepResearch] Could not fetch keywords:', err);
+  }
+
+  // Build the research prompt - HIGHLY SPECIFIC for SEO content research
+  const researchPrompt = `Research topic for SEO content strategy: "${categoryName}"
+
+BUSINESS CONTEXT:
+${businessContext || 'General audience in this topic area'}
+
+CATEGORY DESCRIPTION:
+${category?.description || `Content about ${categoryName}`}
+${keywordContext}
 ---
 
-**RESEARCH OBJECTIVES:**
-1. Identify current industry trends and best practices
-2. Find key statistics, data points, and authoritative sources
-3. Understand common questions and concerns from the target audience
-4. Analyze the competitive landscape and content opportunities
-5. Discover emerging topics and future directions
-6. Identify expert opinions and thought leadership angles
+RESEARCH MISSION:
+Conduct comprehensive market research to inform an SEO content strategy for the topic "${categoryName}". This research will guide the creation of blog articles, guides, and educational content.
 
-**DELIVERABLE:**
-Provide a comprehensive research report that will help create authoritative, well-researched content. Include:
+RESEARCH DELIVERABLES REQUIRED:
 
-1. **Key Industry Insights** - Current state, trends, and developments
-2. **Statistics & Data** - Relevant numbers, percentages, and metrics with sources
-3. **Audience Questions** - Common questions people ask about this topic
-4. **Content Opportunities** - Gaps in existing content, unique angles to explore
-5. **Expert Perspectives** - Key thought leaders and their viewpoints
-6. **Emerging Trends** - What's coming next in this space
+## 1. SEARCH LANDSCAPE ANALYSIS
+- What are people actively searching for related to "${categoryName}"?
+- What questions do they ask? (use "People Also Ask" type queries)
+- What are the most searched subtopics and related terms?
+- What is the search intent? (informational, commercial, transactional)
 
-**IMPORTANT FORMATTING RULES:**
-- Start directly with the first section heading (e.g., "## Key Industry Insights")
-- Do NOT include any preamble, introduction, or "I will..." statements
-- Do NOT include phrases like "Here's the research" or "Okay, I'm ready"
-- Use clean Markdown formatting with ## for section headings
-- Be specific, cite sources where possible
-- Focus on actionable information that would make content more authoritative`;
+## 2. AUDIENCE INSIGHTS
+- Who is searching for this topic? Demographics, experience levels
+- What problems are they trying to solve?
+- What objections or concerns do they have?
+- What's their buyer journey stage?
 
-  await taskRef.update({ progress: 40 });
+## 3. COMPETITIVE CONTENT ANALYSIS
+- What content currently ranks well for this topic?
+- What format do top-ranking articles use? (listicles, guides, comparisons)
+- What angles are competitors missing?
+- What unique perspectives could differentiate new content?
 
-  // Call Gemini with search grounding enabled
-  const response = await withRetry(async () => {
-    return ai.models.generateContent({
-      model: 'gemini-2.0-flash',
-      contents: researchPrompt,
-      config: {
-        tools: [{
-          googleSearch: {}
-        }]
-      }
+## 4. DATA & STATISTICS
+- Current market data, trends, statistics with dates and sources
+- Industry benchmarks and metrics
+- Survey results or research findings
+- Growth trends and projections
+
+## 5. EXPERT SOURCES & AUTHORITIES
+- Who are the recognized experts in this space?
+- What authoritative sources publish on this topic?
+- What certifications, standards, or governing bodies exist?
+- Academic research or studies to reference
+
+## 6. CONTENT OPPORTUNITIES
+- Specific article topics that would perform well
+- Questions that lack good answers online
+- Trending subtopics with growing interest
+- Seasonal or timely angles to consider
+
+## 7. KEYWORDS & TOPICS
+- Primary keyword themes to target
+- Long-tail variations with specific intent
+- Related topics to build topical authority
+- Question-based keywords for featured snippets
+
+FORMATTING REQUIREMENTS:
+- Start directly with "## 1. SEARCH LANDSCAPE ANALYSIS"
+- Use clear markdown formatting with ## for main sections
+- Include specific examples, not generic statements
+- Cite sources with [Source Name] inline where possible
+- Focus on ACTIONABLE insights for content creation
+- Be specific to "${categoryName}" - avoid generic advice`;
+
+  await taskRef.update({ progress: 20 });
+
+  // Initialize Gemini client for Interactions API
+  const ai = getGeminiClient();
+
+  console.log(`[GoogleDeepResearch] Starting Deep Research agent for: ${categoryName}`);
+
+  // Start the Deep Research agent in background mode
+  let interactionId: string;
+  try {
+    const interaction = await (ai as any).interactions.create({
+      agent: 'deep-research-pro-preview-12-2025',
+      input: researchPrompt,
+      background: true
     });
-  });
+    interactionId = interaction.id;
+    console.log(`[GoogleDeepResearch] Started interaction: ${interactionId}`);
+  } catch (err: any) {
+    console.error(`[GoogleDeepResearch] Failed to start Deep Research:`, err);
+    throw new Error(`Failed to start Deep Research: ${err.message}`);
+  }
 
-  await taskRef.update({ progress: 70 });
+  await taskRef.update({ progress: 25 });
 
-  let researchContent = response.text || '';
+  // Poll for completion
+  let pollAttempt = 0;
+  let researchContent = '';
+  let consecutiveErrors = 0;
+  const MAX_CONSECUTIVE_ERRORS = 3; // Fail fast after 3 consecutive errors
+
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  // Helper to check if error is permanent (should not retry)
+  const isPermanentError = (err: any): boolean => {
+    const message = err.message?.toLowerCase() || '';
+    const status = err.status || err.statusCode || err.code;
+
+    // Auth/permission errors
+    if (status === 401 || status === 403 || message.includes('unauthorized') ||
+        message.includes('authentication') || message.includes('permission')) {
+      return true;
+    }
+    // Invalid request errors
+    if (status === 400 || status === 404 || message.includes('invalid') ||
+        message.includes('not found')) {
+      return true;
+    }
+    // API quota/billing errors
+    if (status === 402 || message.includes('quota') || message.includes('billing')) {
+      return true;
+    }
+    return false;
+  };
+
+  while (pollAttempt < MAX_POLL_ATTEMPTS) {
+    pollAttempt++;
+
+    try {
+      const result = await (ai as any).interactions.get(interactionId);
+      consecutiveErrors = 0; // Reset on successful poll
+
+      console.log(`[GoogleDeepResearch] Poll ${pollAttempt}: status=${result.status || result.state}`);
+
+      // Calculate progress (25% to 90% during polling)
+      const progressPct = 25 + Math.min(65, (pollAttempt / MAX_POLL_ATTEMPTS) * 65);
+      await taskRef.update({ progress: Math.round(progressPct) });
+
+      const status = result.status || result.state;
+
+      if (status === 'completed' || status === 'COMPLETED') {
+        // Extract the final output
+        if (result.outputs && result.outputs.length > 0) {
+          researchContent = result.outputs[result.outputs.length - 1].text || '';
+        } else if (result.text) {
+          researchContent = result.text;
+        }
+        console.log(`[GoogleDeepResearch] Research completed. Length: ${researchContent.length}`);
+        break;
+      } else if (status === 'failed' || status === 'FAILED') {
+        throw new Error(`Deep Research failed: ${result.error || 'Unknown error'}`);
+      }
+
+      // Still running, wait before next poll
+      await sleep(POLL_INTERVAL_MS);
+
+    } catch (pollErr: any) {
+      consecutiveErrors++;
+      console.error(`[GoogleDeepResearch] Poll error (${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}):`, pollErr.message);
+
+      // Fail immediately on permanent errors (auth, invalid request, etc.)
+      if (isPermanentError(pollErr)) {
+        console.error(`[GoogleDeepResearch] Permanent error detected, failing immediately`);
+        throw pollErr;
+      }
+
+      // Fail after too many consecutive errors
+      if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        console.error(`[GoogleDeepResearch] Too many consecutive errors, failing`);
+        throw new Error(`Deep Research polling failed after ${consecutiveErrors} consecutive errors: ${pollErr.message}`);
+      }
+
+      // Fail on last attempt
+      if (pollAttempt >= MAX_POLL_ATTEMPTS - 1) {
+        throw pollErr;
+      }
+
+      // Wait before retry with slight backoff for errors
+      await sleep(POLL_INTERVAL_MS * Math.min(consecutiveErrors, 2));
+    }
+  }
+
+  if (!researchContent) {
+    throw new Error('Deep Research timed out after 8 minutes - the research may still be processing. Try again later.');
+  }
+
+  await taskRef.update({ progress: 90 });
+
   // Strip any preamble the model might have added
   researchContent = stripPreamble(researchContent);
-
-  await taskRef.update({ progress: 80 });
 
   // Update category with research results
   await catRef.update({

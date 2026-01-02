@@ -70,6 +70,13 @@ export const MainWorkspace: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
   const [showMigrationModal, setShowMigrationModal] = useState(false);
+  const [isAddingCategory, setIsAddingCategory] = useState(false);
+  const [generatingPostIds, setGeneratingPostIds] = useState<Set<string>>(new Set());
+  const [notifiedFailedTasks, setNotifiedFailedTasks] = useState<Set<string>>(new Set());
+  const [notifiedDegradedTasks, setNotifiedDegradedTasks] = useState<Set<string>>(new Set());
+  const initialLoadCompleteRef = React.useRef(false);
+  const initialFailedTaskIdsRef = React.useRef<Set<string>>(new Set());
+  const initialDegradedTaskIdsRef = React.useRef<Set<string>>(new Set());
 
   const notify = (msg: string, type: 'success' | 'info' = 'info') => {
     const id = Math.random().toString(36);
@@ -87,7 +94,7 @@ export const MainWorkspace: React.FC = () => {
     currentOrg?.id,
     user?.id,
     currentOrg?.credits?.balance ?? 0,
-    tasks.map(t => ({ categoryId: t.categoryId, type: t.type, status: t.status })),
+    tasks.map(t => ({ categoryId: t.categoryId, type: t.type, status: t.status, error: t.error })),
     notify
   );
 
@@ -107,11 +114,26 @@ export const MainWorkspace: React.FC = () => {
     }
   }, [currentOrg, currentProject, navigate]);
 
-  // Clear data when org/project changes to prevent stale data from other projects
+  // Clear data and show loading when org/project changes to prevent stale data flash
+  const prevOrgIdRef = React.useRef(currentOrg?.id);
+  const prevProjectIdRef = React.useRef(currentProject?.id);
+
   useEffect(() => {
-    setCategories([]);
-    setPosts([]);
-    setTasks([]);
+    const orgChanged = prevOrgIdRef.current !== currentOrg?.id;
+    const projectChanged = prevProjectIdRef.current !== currentProject?.id;
+
+    if (orgChanged || projectChanged) {
+      setCategories([]);
+      setPosts([]);
+      setTasks([]);
+      // Show loading during transition to prevent empty state flash
+      if (currentOrg && currentProject) {
+        setLoading(true);
+      }
+    }
+
+    prevOrgIdRef.current = currentOrg?.id;
+    prevProjectIdRef.current = currentProject?.id;
   }, [currentOrg?.id, currentProject?.id]);
 
   // Real-time listener for categories
@@ -131,10 +153,13 @@ export const MainWorkspace: React.FC = () => {
           ...doc.data(),
         })) as Category[];
         setCategories(categoriesData);
+        // Clear loading state after first data arrives
+        setLoading(false);
       },
       (error) => {
         console.error('Error listening to categories:', error);
         notify('Error loading categories', 'info');
+        setLoading(false);
       }
     );
 
@@ -196,68 +221,191 @@ export const MainWorkspace: React.FC = () => {
     return unsubscribe;
   }, [currentOrg, currentProject]);
 
-  // Cleanup: Reset orphaned posts and stale tasks
+  // Monitor for failed tasks and notify user (only NEW failures, not historical ones)
   useEffect(() => {
-    if (!currentOrg || !currentProject || !user || !posts.length || !tasks) return;
+    const failedTasks = tasks.filter(t => t.status === TaskStatus.FAILED);
 
-    const cleanupStaleItems = async () => {
+    // On first load, capture existing failed task IDs without notifying
+    if (!initialLoadCompleteRef.current && failedTasks.length > 0) {
+      initialFailedTaskIdsRef.current = new Set(failedTasks.map(t => t.id));
+      initialLoadCompleteRef.current = true;
+      return;
+    }
+
+    // Mark initial load complete even if no failed tasks
+    if (!initialLoadCompleteRef.current) {
+      initialLoadCompleteRef.current = true;
+    }
+
+    for (const task of failedTasks) {
+      // Skip tasks that existed on initial load (historical failures)
+      if (initialFailedTaskIdsRef.current.has(task.id)) continue;
+      // Skip already notified tasks
+      if (notifiedFailedTasks.has(task.id)) continue;
+
+      // Show notification based on error type with user-friendly messages
+      const errorMsg = task.error || 'Unknown error';
+      const errorLower = errorMsg.toLowerCase();
+      const taskName = task.categoryName || 'task';
+
+      let userMessage: string;
+      if (errorLower.includes('insufficient credits')) {
+        userMessage = 'Generation failed: Insufficient credits. Add more credits to continue.';
+        setIsCreditModalOpen(true);
+      } else if (errorLower.includes('timed out') || errorLower.includes('timeout')) {
+        userMessage = `"${taskName}" timed out. The AI is busy - please try again.`;
+      } else if (errorLower.includes('rate limit') || errorLower.includes('quota')) {
+        userMessage = `"${taskName}" hit rate limit. Please wait a moment and retry.`;
+      } else if (errorLower.includes('network') || errorLower.includes('fetch')) {
+        userMessage = `Network error for "${taskName}". Check your connection and retry.`;
+      } else if (errorLower.includes('parse') || errorLower.includes('json')) {
+        userMessage = `"${taskName}" failed: AI response was invalid. Please retry.`;
+      } else if (errorLower.includes('permission') || errorLower.includes('unauthorized')) {
+        userMessage = `Permission denied for "${taskName}". You may need to re-login.`;
+      } else if (errorLower.includes('unknown task type')) {
+        userMessage = `"${taskName}" failed: Backend needs update. Please redeploy Cloud Functions.`;
+      } else if (errorLower.includes('connection error') || errorLower.includes('openai api error')) {
+        userMessage = `"${taskName}" failed: AI service temporarily unavailable. Please retry.`;
+      } else {
+        // Fallback: show first 80 chars but ensure we don't cut mid-word
+        const maxLen = 80;
+        const truncated = errorMsg.length > maxLen
+          ? errorMsg.substring(0, errorMsg.lastIndexOf(' ', maxLen) || maxLen) + '...'
+          : errorMsg;
+        userMessage = `"${taskName}" failed: ${truncated}`;
+      }
+
+      notify(userMessage, 'info');
+      setNotifiedFailedTasks(prev => new Set([...prev, task.id]));
+    }
+  }, [tasks, notifiedFailedTasks]);
+
+  // Monitor for completed tasks with degraded mode (only NEW, not historical)
+  useEffect(() => {
+    const degradedTasks = tasks.filter(
+      t => t.status === TaskStatus.COMPLETED &&
+           t.result?.degradedMode === true
+    );
+
+    // Capture initial degraded task IDs on first load without notifying
+    if (initialDegradedTaskIdsRef.current.size === 0 && degradedTasks.length > 0) {
+      initialDegradedTaskIdsRef.current = new Set(degradedTasks.map(t => t.id));
+      return;
+    }
+
+    for (const task of degradedTasks) {
+      // Skip tasks that existed on initial load
+      if (initialDegradedTaskIdsRef.current.has(task.id)) continue;
+      // Skip already notified tasks
+      if (notifiedDegradedTasks.has(task.id)) continue;
+
+      const taskName = task.categoryName || 'task';
+      notify(
+        `"${taskName}" titles generated without keyword optimization. SEO quality may be affected.`,
+        'info'
+      );
+      setNotifiedDegradedTasks(prev => new Set([...prev, task.id]));
+    }
+  }, [tasks, notifiedDegradedTasks]);
+
+  // Cleanup: Reset orphaned posts and stale tasks (runs periodically, not on every state change)
+  const cleanedUpItemsRef = React.useRef<Set<string>>(new Set());
+  const lastCleanupRef = React.useRef<number>(0);
+  const tasksRef = React.useRef(tasks);
+  const postsRef = React.useRef(posts);
+
+  // Keep refs up to date
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
+  useEffect(() => { postsRef.current = posts; }, [posts]);
+
+  useEffect(() => {
+    if (!currentOrg || !currentProject || !user) return;
+
+    const runCleanup = async () => {
+      // Throttle: only run cleanup every 30 seconds max
+      const now = Date.now();
+      if (now - lastCleanupRef.current < 30000) return;
+      lastCleanupRef.current = now;
+
+      const currentTasks = tasksRef.current;
+      const currentPosts = postsRef.current;
+
       // 1. Reset stale PROCESSING tasks (older than 5 minutes)
-      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-      const staleTasks = tasks.filter(t =>
+      const fiveMinutesAgo = new Date(now - 5 * 60 * 1000);
+      const staleTasks = currentTasks.filter(t =>
         t.status === TaskStatus.PROCESSING &&
-        t.startedAt.toDate() < fiveMinutesAgo
+        t.startedAt && t.startedAt.toDate() < fiveMinutesAgo &&
+        !cleanedUpItemsRef.current.has(`task-${t.id}`)
       );
 
       for (const task of staleTasks) {
         console.log(`[Cleanup] Resetting stale PROCESSING task: ${task.id}`);
-        const taskRef = doc(db, 'generationQueue', task.id);
-        await updateDoc(taskRef, {
-          status: TaskStatus.FAILED,
-          error: 'Task timed out (stale)',
-        });
-
-        // Reset associated post if it's a content generation task
-        if (task.type === TaskType.GENERATE_CONTENT && task.targetPostId) {
-          const postRef = doc(
-            db,
-            `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`,
-            task.targetPostId
-          );
-          await updateDoc(postRef, {
-            status: PostStatus.PENDING,
-            updatedAt: Timestamp.now(),
+        cleanedUpItemsRef.current.add(`task-${task.id}`);
+        try {
+          const taskRef = doc(db, 'generationQueue', task.id);
+          await updateDoc(taskRef, {
+            status: TaskStatus.FAILED,
+            error: 'Task timed out (stale)',
           });
+
+          // Reset associated post if it's a content generation task
+          if (task.type === TaskType.GENERATE_CONTENT && task.targetPostId) {
+            const postRef = doc(
+              db,
+              `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`,
+              task.targetPostId
+            );
+            await updateDoc(postRef, {
+              status: PostStatus.PENDING,
+              updatedAt: Timestamp.now(),
+            });
+          }
+        } catch (err) {
+          console.error('[Cleanup] Failed to reset task:', err);
         }
       }
 
       // 2. Reset orphaned posts stuck in GENERATING with no active task
-      const generatingPosts = posts.filter(p => p.status === PostStatus.GENERATING);
+      const generatingPosts = currentPosts.filter(p =>
+        p.status === PostStatus.GENERATING &&
+        !cleanedUpItemsRef.current.has(`post-${p.id}`)
+      );
 
       for (const post of generatingPosts) {
-        const hasActiveTask = tasks.some(
+        const hasActiveTask = currentTasks.some(
           t => t.targetPostId === post.id &&
           (t.status === TaskStatus.QUEUED || t.status === TaskStatus.PROCESSING)
         );
 
         if (!hasActiveTask) {
           console.log(`[Cleanup] Resetting orphaned post: ${post.title}`);
-          const postRef = doc(
-            db,
-            `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`,
-            post.id
-          );
-          await updateDoc(postRef, {
-            status: PostStatus.PENDING,
-            updatedAt: Timestamp.now(),
-          });
+          cleanedUpItemsRef.current.add(`post-${post.id}`);
+          try {
+            const postRef = doc(
+              db,
+              `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`,
+              post.id
+            );
+            await updateDoc(postRef, {
+              status: PostStatus.PENDING,
+              updatedAt: Timestamp.now(),
+            });
+          } catch (err) {
+            console.error('[Cleanup] Failed to reset post:', err);
+          }
         }
       }
     };
 
-    // Run cleanup after a short delay to ensure tasks have loaded
-    const timeout = setTimeout(cleanupStaleItems, 2000);
-    return () => clearTimeout(timeout);
-  }, [currentOrg, currentProject, user, posts, tasks]);
+    // Run cleanup once after initial load, then periodically
+    const initialTimeout = setTimeout(runCleanup, 3000);
+    const interval = setInterval(runCleanup, 60000); // Check every 60 seconds
+
+    return () => {
+      clearTimeout(initialTimeout);
+      clearInterval(interval);
+    };
+  }, [currentOrg?.id, currentProject?.id, user?.id]); // Only re-setup on org/project change
 
   // Queue Processing now happens server-side via Cloud Function (processGenerationQueue)
   // The client just displays task status from Firestore real-time updates
@@ -266,93 +414,129 @@ export const MainWorkspace: React.FC = () => {
   const addCategory = async (name: string, parentId: string | null, description?: string) => {
     if (!currentOrg || !currentProject || !user) return;
 
+    // Debounce: prevent duplicate submissions
+    if (isAddingCategory) {
+      notify('Category creation in progress...', 'info');
+      return;
+    }
+
+    // Validate parent category exists (if specified)
+    if (parentId !== null) {
+      const parentExists = categories.some(c => c.id === parentId);
+      if (!parentExists) {
+        notify('Parent category not found', 'info');
+        return;
+      }
+    }
+
+    // Check for duplicate name at same level
+    const normalizedName = name.trim().toLowerCase();
+    const duplicateExists = categories.some(
+      c => c.name.trim().toLowerCase() === normalizedName && c.parentId === parentId
+    );
+    if (duplicateExists) {
+      notify(`Category "${name}" already exists at this level`, 'info');
+      return;
+    }
+
+    setIsAddingCategory(true);
+
     try {
-      const categoriesRef = collection(
+      const batch = writeBatch(db);
+      const now = Timestamp.now();
+
+      // 1. Create category document
+      const categoryRef = doc(collection(
         db,
         `organizations/${currentOrg.id}/projects/${currentProject.id}/categories`
-      );
+      ));
 
-      const newCategoryRef = await addDoc(categoriesRef, {
+      batch.set(categoryRef, {
         projectId: currentProject.id,
         organizationId: currentOrg.id,
-        name,
-        description: description || 'Enter a description...',
+        name: name.trim(),
+        description: description?.trim() || '',
         parentId,
-        createdAt: Timestamp.now(),
-        updatedAt: Timestamp.now(),
+        createdAt: now,
+        updatedAt: now,
       });
 
-      notify(`Added category: ${name}`, 'success');
-
-      // Auto-create category page post
-      const postsRef = collection(
-        db,
-        `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`
-      );
-
-      // Check credits before creating category page
+      // 2. Create category page post
       const creditBalance = currentOrg.credits?.balance ?? 0;
       const hasCreditsForCategoryPage = creditBalance >= 1;
 
-      const categoryPageRef = await addDoc(postsRef, {
+      const categoryPageRef = doc(collection(
+        db,
+        `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`
+      ));
+
+      batch.set(categoryPageRef, {
         projectId: currentProject.id,
         organizationId: currentOrg.id,
-        categoryId: newCategoryRef.id,
-        title: name,
+        categoryId: categoryRef.id,
+        title: name.trim(),
         contentType: ContentType.CATEGORY_PAGE,
         isCategoryPage: true,
-        // Set to GENERATING if we'll queue it, so it shows in Content Engine immediately
         status: hasCreditsForCategoryPage ? PostStatus.GENERATING : PostStatus.PENDING,
         createdBy: user.id,
-        createdAt: Timestamp.now(),
-        updatedAt: Timestamp.now(),
+        createdAt: now,
+        updatedAt: now,
         categoryPageContent: {
           introduction: '',
-          aiInstructions: description || ''
+          aiInstructions: description?.trim() || ''
         }
       });
 
-      // Auto-queue category page generation
+      // 3. Queue category page generation (if credits available)
       if (hasCreditsForCategoryPage) {
-        await addDoc(collection(db, 'generationQueue'), {
+        const taskRef = doc(collection(db, 'generationQueue'));
+        batch.set(taskRef, {
           type: TaskType.GENERATE_CATEGORY_PAGE,
           organizationId: currentOrg.id,
           projectId: currentProject.id,
-          categoryId: newCategoryRef.id,
-          categoryName: name,
+          categoryId: categoryRef.id,
+          categoryName: name.trim(),
           targetPostId: categoryPageRef.id,
           status: TaskStatus.QUEUED,
           progress: 0,
           createdBy: user.id,
-          startedAt: Timestamp.now(),
+          startedAt: now,
         });
       }
 
-      // Auto-generate stubs for new category if enabled (defaults to true)
+      // 4. Queue auto-generation stubs (if enabled and has credits)
       const autoGenSettings = currentProject.settings?.autoGeneration;
-      const autoGenEnabled = autoGenSettings?.enabled ?? true; // Default to enabled
-      if (autoGenEnabled) {
-        const threshold = autoGenSettings?.stubThreshold ?? 5;
+      const autoGenEnabled = autoGenSettings?.enabled ?? true;
+      const threshold = autoGenSettings?.stubThreshold ?? 5;
 
-        if (creditBalance >= threshold + 1) { // +1 for category page
-          await addDoc(collection(db, 'generationQueue'), {
-            type: TaskType.GENERATE_TITLES,
-            organizationId: currentOrg.id,
-            projectId: currentProject.id,
-            categoryId: newCategoryRef.id,
-            categoryName: name,
-            status: TaskStatus.QUEUED,
-            progress: 0,
-            createdBy: user.id,
-            startedAt: Timestamp.now(),
-            requestedCount: threshold,
-          });
-          notify(`Auto-generating ${threshold} stubs for ${name}`);
-        }
+      if (autoGenEnabled && creditBalance >= threshold + 1) {
+        const stubTaskRef = doc(collection(db, 'generationQueue'));
+        batch.set(stubTaskRef, {
+          type: TaskType.GENERATE_TITLES,
+          organizationId: currentOrg.id,
+          projectId: currentProject.id,
+          categoryId: categoryRef.id,
+          categoryName: name.trim(),
+          status: TaskStatus.QUEUED,
+          progress: 0,
+          createdBy: user.id,
+          startedAt: now,
+          requestedCount: threshold,
+        });
+      }
+
+      // Commit all operations atomically
+      await batch.commit();
+
+      notify(`Added category: ${name}`, 'success');
+      if (autoGenEnabled && creditBalance >= threshold + 1) {
+        notify(`Auto-generating ${threshold} stubs for ${name}`);
       }
     } catch (error) {
       console.error('Error adding category:', error);
       notify('Failed to add category', 'info');
+    } finally {
+      setIsAddingCategory(false);
     }
   };
 
@@ -459,6 +643,12 @@ export const MainWorkspace: React.FC = () => {
   const queueContentGeneration = async (post: Post) => {
     if (!currentOrg || !currentProject || !user) return;
 
+    // Debounce: prevent duplicate submissions for same post
+    if (generatingPostIds.has(post.id)) {
+      notify('Generation already in progress for this post', 'info');
+      return;
+    }
+
     // Check balance
     const hasCredits = await creditService.checkBalance(currentOrg.id, CREDIT_COSTS.ARTICLE_GENERATION);
     if (!hasCredits) {
@@ -466,6 +656,9 @@ export const MainWorkspace: React.FC = () => {
       setIsCreditModalOpen(true);
       return;
     }
+
+    // Mark as generating to prevent duplicates
+    setGeneratingPostIds(prev => new Set([...prev, post.id]));
 
     const cat = categories.find((c) => c.id === post.categoryId);
 
@@ -508,6 +701,15 @@ export const MainWorkspace: React.FC = () => {
     } catch (error) {
       console.error('Error queuing content:', error);
       notify('Failed to queue content', 'info');
+    } finally {
+      // Remove from generating set after a short delay
+      setTimeout(() => {
+        setGeneratingPostIds(prev => {
+          const next = new Set(prev);
+          next.delete(post.id);
+          return next;
+        });
+      }, 2000);
     }
   };
 
@@ -579,6 +781,7 @@ export const MainWorkspace: React.FC = () => {
       );
       await updateDoc(catRef, {
         'googleDeepResearch.status': 'running',
+        'googleDeepResearch.startedAt': Timestamp.now(),
         updatedAt: Timestamp.now(),
       });
 
@@ -602,7 +805,62 @@ export const MainWorkspace: React.FC = () => {
     }
   };
 
-  const updatePostFields = async (postId: string, updates: Partial<Post>) => {
+  // Create category page for existing category that doesn't have one
+  const createCategoryPage = async (categoryId: string, categoryName: string, description?: string) => {
+    if (!currentOrg || !currentProject || !user) return;
+
+    try {
+      const postsRef = collection(
+        db,
+        `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`
+      );
+
+      // Check credits before creating category page
+      const creditBalance = currentOrg.credits?.balance ?? 0;
+      const hasCreditsForCategoryPage = creditBalance >= 1;
+
+      const categoryPageRef = await addDoc(postsRef, {
+        projectId: currentProject.id,
+        organizationId: currentOrg.id,
+        categoryId: categoryId,
+        title: categoryName,
+        contentType: ContentType.CATEGORY_PAGE,
+        isCategoryPage: true,
+        status: hasCreditsForCategoryPage ? PostStatus.GENERATING : PostStatus.PENDING,
+        createdBy: user.id,
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+        categoryPageContent: {
+          introduction: '',
+          aiInstructions: description || ''
+        }
+      });
+
+      // Auto-queue category page generation if we have credits
+      if (hasCreditsForCategoryPage) {
+        await addDoc(collection(db, 'generationQueue'), {
+          type: TaskType.GENERATE_CATEGORY_PAGE,
+          organizationId: currentOrg.id,
+          projectId: currentProject.id,
+          categoryId: categoryId,
+          categoryName: categoryName,
+          targetPostId: categoryPageRef.id,
+          status: TaskStatus.QUEUED,
+          progress: 0,
+          createdBy: user.id,
+          startedAt: Timestamp.now(),
+        });
+        notify('Category page created and queued for generation');
+      } else {
+        notify('Category page created (no credits for auto-generation)');
+      }
+    } catch (error) {
+      console.error('Error creating category page:', error);
+      notify('Failed to create category page', 'info');
+    }
+  };
+
+  const updatePostFields = async (postId: string, updates: Partial<Post>): Promise<void> => {
     if (!currentOrg || !currentProject) return;
 
     try {
@@ -621,9 +879,21 @@ export const MainWorkspace: React.FC = () => {
         ...updates,
         ...(shouldUpdateTimestamp && { updatedAt: Timestamp.now() }),
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating post:', error);
-      notify('Failed to update post', 'info');
+      // Provide specific error message based on error type
+      const errorMsg = error?.message?.toLowerCase() || '';
+      let userMessage = 'Failed to update post. Changes were not saved.';
+      if (errorMsg.includes('permission') || errorMsg.includes('unauthorized')) {
+        userMessage = 'Permission denied. You may not have access to edit this post.';
+      } else if (errorMsg.includes('network') || errorMsg.includes('offline')) {
+        userMessage = 'Network error. Check your connection and try again.';
+      } else if (errorMsg.includes('not found') || errorMsg.includes('no document')) {
+        userMessage = 'Post not found. It may have been deleted.';
+      }
+      notify(userMessage, 'info');
+      // Re-throw so callers can handle errors (e.g., for rollback)
+      throw error;
     }
   };
 
@@ -669,9 +939,16 @@ export const MainWorkspace: React.FC = () => {
       await updateDoc(postRef, updateData);
 
       if (status === PostStatus.PUBLISHED) notify('Post published!', 'success');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating post status:', error);
-      notify('Failed to update post status', 'info');
+      const errorMsg = error?.message?.toLowerCase() || '';
+      let userMessage = 'Failed to update post status. Please try again.';
+      if (errorMsg.includes('permission')) {
+        userMessage = 'Permission denied. You may not have access to change this post.';
+      } else if (errorMsg.includes('network')) {
+        userMessage = 'Network error. Check your connection and try again.';
+      }
+      notify(userMessage, 'info');
     }
   };
 
@@ -840,6 +1117,7 @@ export const MainWorkspace: React.FC = () => {
               categories={categories}
               posts={posts}
               tasks={tasks}
+              isAddingCategory={isAddingCategory}
               onAddCategory={addCategory}
               onUpdateCategory={updateCategory}
               onDeleteCategory={deleteCategory}
@@ -848,11 +1126,13 @@ export const MainWorkspace: React.FC = () => {
               onQueueContent={queueContentGeneration}
               onQueueCategoryPageRegenerate={queueCategoryPageRegenerate}
               onQueueGoogleDeepResearch={queueGoogleDeepResearch}
+              onCreateCategoryPage={createCategoryPage}
               onUpdatePost={updatePostFields}
               onDeletePost={deletePost}
               organizationId={currentOrg?.id}
               projectId={currentProject?.id}
               organization={currentOrg || undefined}
+              project={currentProject || undefined}
             />
           </div>
         )}

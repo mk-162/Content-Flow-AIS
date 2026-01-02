@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { doc, setDoc, writeBatch, Timestamp } from 'firebase/firestore';
+import { doc, setDoc, getDoc, writeBatch, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { OnboardingProvider, useOnboarding } from '../contexts/OnboardingContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -56,12 +56,10 @@ const EXISTING_USER_STEPS: OnboardingStep[] = [
   'channel_recommendations',
 ];
 
-// Legacy project mode (same as client for now)
+// Project mode for logged-in users creating new project (no account creation needed)
 const PROJECT_MODE_STEPS: OnboardingStep[] = [
-  'url_input',
   'profile_review',
   'channel_recommendations',
-  'account_creation',
 ];
 
 // Get visible steps based on mode
@@ -208,8 +206,10 @@ const OnboardingContent: React.FC = () => {
   const currentStep = session?.currentStep || 'url_input';
   const CurrentStepComponent = StepComponents[currentStep];
 
-  // Check if this is an existing user creating a new project (from URL param or logged-in state)
-  const isExistingUserMode = searchParams.get('mode') === 'existing';
+  // Check if this is an existing user creating a new project
+  // Auto-detect: if user is logged in, treat as existing user mode (skip account creation)
+  const modeParam = searchParams.get('mode');
+  const isExistingUserMode = modeParam === 'existing' || modeParam === 'project' || (!!user && !authLoading);
 
   // For existing user mode, wait for all data to load
   const isLoadingExistingData = isExistingUserMode && (authLoading || orgLoading || projectsLoading);
@@ -510,6 +510,20 @@ const OnboardingContent: React.FC = () => {
           const batch = writeBatch(db);
           batch.set(doc(db, `organizations/${orgId}/projects`, projectId), newProject);
           batch.set(doc(db, 'projectMembers', projMembershipId), projMembership);
+
+          // Mark the selected channel as used in the organization
+          if (selectedChannel) {
+            const orgRef = doc(db, 'organizations', orgId);
+            const orgSnap = await getDoc(orgRef);
+            const currentUsedIds = orgSnap.data()?.usedChannelRecommendationIds || [];
+            if (!currentUsedIds.includes(selectedChannel.id)) {
+              batch.update(orgRef, {
+                usedChannelRecommendationIds: [...currentUsedIds, selectedChannel.id],
+                updatedAt: Timestamp.now(),
+              });
+            }
+          }
+
           await batch.commit();
 
           // Set current project in localStorage

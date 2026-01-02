@@ -9,9 +9,10 @@ import {
   getDoc,
   onSnapshot,
   Timestamp,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Project, ProjectContextType, ProjectMember, ProjectMemberRole, ProjectType, GlobalRole, CloneProjectOptions, Category } from '../types';
+import { Project, ProjectContextType, ProjectMember, ProjectMemberRole, ProjectType, GlobalRole, CloneProjectOptions, Category, ChannelRecommendation } from '../types';
 import { useAuth } from './AuthContext';
 import { useOrganization } from './OrganizationContext';
 import { useImpersonation } from './ImpersonationContext';
@@ -398,12 +399,107 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children }) =>
     }
   };
 
+  // Create project from a channel recommendation (used by Channel Shortcuts)
+  const createProjectFromChannel = async (
+    channel: ChannelRecommendation,
+    options: { createCategories?: boolean } = { createCategories: true }
+  ): Promise<string> => {
+    if (!user) throw new Error('Must be authenticated to create project');
+    if (!currentOrg) throw new Error('Must select an organization');
+
+    try {
+      const projectId = `proj_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      const newProject: Omit<Project, 'id'> = {
+        organizationId: currentOrg.id,
+        name: channel.title,
+        description: channel.description,
+        channelType: channel.channelType,
+        suggestedCategories: channel.suggestedCategories,
+        createdBy: user.id,
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+        settings: {
+          autoPublish: false,
+        },
+      };
+
+      // Use batch write for atomicity
+      const batch = writeBatch(db);
+
+      // Create project
+      batch.set(
+        doc(db, `organizations/${currentOrg.id}/projects`, projectId),
+        newProject
+      );
+
+      // Add user as project admin
+      const membershipId = `${projectId}_${user.id}`;
+      batch.set(doc(db, 'projectMembers', membershipId), {
+        organizationId: currentOrg.id,
+        projectId,
+        userId: user.id,
+        role: ProjectMemberRole.ADMIN,
+        addedBy: user.id,
+        addedAt: Timestamp.now(),
+      });
+
+      // Create categories from suggestedCategories if requested
+      if (options.createCategories && channel.suggestedCategories?.length) {
+        channel.suggestedCategories.forEach((categoryName, index) => {
+          const categoryId = `cat_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 9)}`;
+          batch.set(
+            doc(db, `organizations/${currentOrg.id}/projects/${projectId}/categories`, categoryId),
+            {
+              projectId,
+              organizationId: currentOrg.id,
+              name: categoryName,
+              description: '',
+              parentId: null,
+              order: index,
+              createdAt: Timestamp.now(),
+              updatedAt: Timestamp.now(),
+            }
+          );
+        });
+      }
+
+      // Mark recommendation as used in Organization
+      const currentUsedIds = currentOrg.usedChannelRecommendationIds || [];
+      if (!currentUsedIds.includes(channel.id)) {
+        batch.update(doc(db, 'organizations', currentOrg.id), {
+          usedChannelRecommendationIds: [...currentUsedIds, channel.id],
+          updatedAt: Timestamp.now(),
+        });
+      }
+
+      await batch.commit();
+
+      // Update local state
+      const createdProject: Project = {
+        id: projectId,
+        ...newProject,
+      };
+      setCurrentProjectState(createdProject);
+      localStorage.setItem(`currentProjectId_${currentOrg.id}`, projectId);
+
+      // Refresh projects list
+      fetchProjects();
+
+      return projectId;
+    } catch (error: any) {
+      console.error('Error creating project from channel:', error);
+      throw new Error(error.message || 'Failed to create project from channel');
+    }
+  };
+
   const value: ProjectContextType = {
     currentProject,
     projects,
     setCurrentProject,
     createProject,
     cloneProject,
+    createProjectFromChannel,
     loading,
   };
 

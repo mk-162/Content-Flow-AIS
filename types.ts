@@ -139,7 +139,7 @@ export interface KeywordData {
   searchVolume: number | null;    // Monthly searches (null if unknown)
   difficulty: number | null;       // 0-100 scale (null if unknown)
   cpc: number | null;              // Cost per click in USD
-  trend?: 'rising' | 'stable' | 'declining';
+  trend: 'rising' | 'stable' | 'declining' | null;  // null if unknown (Firestore doesn't accept undefined)
   source: KeywordSource;
 }
 
@@ -182,6 +182,7 @@ export interface CategoryResearch {
   createdAt: Timestamp;
   expiresAt: Timestamp;
   creditCost: number;
+  keywordsFetchedAt?: Timestamp;  // When keywords were last fetched from DataForSEO
 }
 
 // Tier-specific feature configuration
@@ -289,6 +290,8 @@ export interface Organization {
   archivedAt?: Timestamp;
   // Channel recommendations from onboarding (for upsell)
   channelRecommendations?: ChannelRecommendation[];
+  // Track which channel recommendations have been converted to projects
+  usedChannelRecommendationIds?: string[];
 }
 
 // Credit Transaction
@@ -398,6 +401,8 @@ export interface Project {
       stubThreshold: number;             // Stubs per category (default 5, range 1-25)
       migrationPromptShown?: boolean;    // Track if existing user saw migration prompt
     };
+    // Deep Research (expensive - 20 credits, OFF by default)
+    enableDeepResearch?: boolean;        // Must be explicitly enabled per project
   };
   businessProfile?: BusinessProfile;
   // Channel/Content type (from onboarding)
@@ -430,6 +435,7 @@ export interface Category {
   googleDeepResearch?: {
     content: string;
     generatedAt: Timestamp;
+    startedAt?: Timestamp;  // When research was initiated (for timer display)
     status: 'pending' | 'running' | 'complete' | 'failed';
     error?: string;
   };
@@ -535,6 +541,10 @@ export interface GenerationTask {
   targetPostId?: string;
   error?: string;
   result?: any;
+  // Auto-retry fields
+  retryCount?: number;
+  lastError?: string;
+  nextRetryAt?: Timestamp;
 }
 
 // Invitations
@@ -945,6 +955,10 @@ export interface ProjectContextType {
     newName: string,
     newDescription: string,
     options: CloneProjectOptions
+  ) => Promise<string>;
+  createProjectFromChannel: (
+    channel: ChannelRecommendation,
+    options?: { createCategories?: boolean }
   ) => Promise<string>;
   loading: boolean;
 }
