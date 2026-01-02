@@ -85,6 +85,7 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
     const [stubThreshold, setStubThreshold] = useState(project.settings?.autoGeneration?.stubThreshold ?? 5);
 
     // Deep Research State
+    const [enableDeepResearch, setEnableDeepResearch] = useState(project.settings?.enableDeepResearch ?? false);
     const [categories, setCategories] = useState<Category[]>([]);
     const [researchRunning, setResearchRunning] = useState(false);
     const [researchProgress, setResearchProgress] = useState<string | null>(null);
@@ -149,6 +150,7 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
                     stubThreshold: stubThreshold,
                     migrationPromptShown: project.settings?.autoGeneration?.migrationPromptShown
                 },
+                'settings.enableDeepResearch': enableDeepResearch,
                 'settings.wordpress': wpSiteUrl ? {
                     siteUrl: wpSiteUrl,
                     username: wpUsername,
@@ -198,7 +200,7 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
                 updatedAt: new Date()
             });
             // Redirect or notify parent
-            window.location.href = '/projects'; // Simple redirect for now
+            navigate('/projects');
         } catch (error) {
             console.error('Error archiving project:', error);
             setLoading(false);
@@ -268,6 +270,7 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
                 const catRef = doc(db, `organizations/${project.organizationId}/projects/${project.id}/categories`, cat.id);
                 await updateDoc(catRef, {
                     'googleDeepResearch.status': 'running',
+                    'googleDeepResearch.startedAt': Timestamp.now(),
                     enableGoogleDeepResearch: true,
                     updatedAt: Timestamp.now()
                 });
@@ -600,14 +603,12 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
                                 <button
                                     type="button"
                                     onClick={() => setAutoGenEnabled(!autoGenEnabled)}
-                                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                                        autoGenEnabled ? 'bg-emerald-500' : 'bg-slate-700'
-                                    }`}
+                                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${autoGenEnabled ? 'bg-emerald-500' : 'bg-slate-700'
+                                        }`}
                                 >
                                     <span
-                                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                                            autoGenEnabled ? 'translate-x-5' : 'translate-x-0'
-                                        }`}
+                                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${autoGenEnabled ? 'translate-x-5' : 'translate-x-0'
+                                            }`}
                                     />
                                 </button>
                             </div>
@@ -655,62 +656,87 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
 
                     {canUseDeepResearch ? (
                         <div className="space-y-4">
-                            <p className="text-slate-400 text-sm">
-                                Run expert-level research on all categories using AI with Google Search.
-                                This research improves the quality of generated titles, articles, and category pages.
-                            </p>
-
-                            {/* Category Status Summary */}
-                            <div className="bg-slate-950 border border-slate-700 p-4">
-                                <div className="grid grid-cols-3 gap-4 text-center">
-                                    <div>
-                                        <div className="text-2xl font-bold text-slate-200">{categories.length}</div>
-                                        <div className="text-xs text-slate-500 uppercase tracking-wider">Categories</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-2xl font-bold text-emerald-400">
-                                            {categories.filter(c => c.googleDeepResearch?.status === 'complete').length}
-                                        </div>
-                                        <div className="text-xs text-slate-500 uppercase tracking-wider">Researched</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-2xl font-bold text-amber-400">
-                                            {categories.filter(c => c.googleDeepResearch?.status !== 'complete').length}
-                                        </div>
-                                        <div className="text-xs text-slate-500 uppercase tracking-wider">Pending</div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Progress */}
-                            {researchProgress && (
-                                <div className="flex items-center gap-3 p-3 bg-amber-500/10 border border-amber-500/20 text-amber-400">
-                                    <Loader2 size={16} className="animate-spin" />
-                                    <span className="text-sm">{researchProgress}</span>
-                                </div>
-                            )}
-
-                            {/* Action Button */}
-                            <div className="flex items-center justify-between">
+                            {/* Enable Toggle */}
+                            <div className="flex items-center justify-between p-4 bg-slate-950 border border-slate-700">
                                 <div>
-                                    <p className="text-slate-300 font-medium">Run Research on All Categories</p>
+                                    <p className="text-slate-200 font-medium">Enable Deep Research</p>
                                     <p className="text-xs text-slate-500">
-                                        {CREDIT_COSTS.GOOGLE_DEEP_RESEARCH} credits per category • Skips already-researched
+                                        Shows research panel on category pages • 20 credits per research
                                     </p>
                                 </div>
                                 <button
-                                    onClick={handleRunAllDeepResearch}
-                                    disabled={researchRunning || categories.length === 0}
-                                    className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold text-sm uppercase tracking-wider transition-colors flex items-center gap-2"
+                                    type="button"
+                                    onClick={() => setEnableDeepResearch(!enableDeepResearch)}
+                                    className={`relative w-12 h-6 rounded-full transition-colors ${enableDeepResearch ? 'bg-amber-500' : 'bg-slate-700'
+                                        }`}
                                 >
-                                    {researchRunning ? (
-                                        <Loader2 size={16} className="animate-spin" />
-                                    ) : (
-                                        <Target size={16} />
-                                    )}
-                                    Run All Research
+                                    <span
+                                        className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${enableDeepResearch ? 'translate-x-6' : ''
+                                            }`}
+                                    />
                                 </button>
                             </div>
+
+                            {enableDeepResearch && (
+                                <>
+                                    <p className="text-slate-400 text-sm">
+                                        Run expert-level research on all categories using AI with Google Search.
+                                        This research improves the quality of generated titles, articles, and category pages.
+                                    </p>
+
+                                    {/* Category Status Summary */}
+                                    <div className="bg-slate-950 border border-slate-700 p-4">
+                                        <div className="grid grid-cols-3 gap-4 text-center">
+                                            <div>
+                                                <div className="text-2xl font-bold text-slate-200">{categories.length}</div>
+                                                <div className="text-xs text-slate-500 uppercase tracking-wider">Categories</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-2xl font-bold text-emerald-400">
+                                                    {categories.filter(c => c.googleDeepResearch?.status === 'complete').length}
+                                                </div>
+                                                <div className="text-xs text-slate-500 uppercase tracking-wider">Researched</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-2xl font-bold text-amber-400">
+                                                    {categories.filter(c => c.googleDeepResearch?.status !== 'complete').length}
+                                                </div>
+                                                <div className="text-xs text-slate-500 uppercase tracking-wider">Pending</div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Progress */}
+                                    {researchProgress && (
+                                        <div className="flex items-center gap-3 p-3 bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                                            <Loader2 size={16} className="animate-spin" />
+                                            <span className="text-sm">{researchProgress}</span>
+                                        </div>
+                                    )}
+
+                                    {/* Action Button */}
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <p className="text-slate-300 font-medium">Run Research on All Categories</p>
+                                            <p className="text-xs text-slate-500">
+                                                {CREDIT_COSTS.GOOGLE_DEEP_RESEARCH} credits per category • Skips already-researched
+                                            </p>
+                                        </div>
+                                        <button
+                                            onClick={handleRunAllDeepResearch}
+                                            disabled={researchRunning || categories.length === 0}
+                                            className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold text-sm uppercase tracking-wider transition-colors flex items-center gap-2"
+                                        >
+                                            {researchRunning ? (
+                                                <Loader2 size={16} className="animate-spin" />
+                                            ) : (
+                                                <Target size={16} />
+                                            )}
+                                            Run All Research
+                                        </button>
+                                    </div>
+                                </>
+                            )}
                         </div>
                     ) : (
                         <div className="text-center py-6">
