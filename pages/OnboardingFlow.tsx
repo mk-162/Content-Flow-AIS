@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { doc, setDoc, getDoc, writeBatch, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { OnboardingProvider, useOnboarding } from '../contexts/OnboardingContext';
@@ -584,20 +584,20 @@ const OnboardingContent: React.FC = () => {
             {user ? (
               <>
                 <span className="text-sm text-slate-500">{user.email}</span>
-                <a
-                  href="/projects"
+                <Link
+                  to="/projects"
                   className="text-sm text-cyan-400 hover:text-cyan-300 transition-colors"
                 >
                   Back to Projects
-                </a>
+                </Link>
               </>
             ) : (
-              <a
-                href="/login"
+              <Link
+                to="/login"
                 className="text-sm text-slate-400 hover:text-white transition-colors"
               >
                 Already have an account? Sign in
-              </a>
+              </Link>
             )}
           </div>
         </div>

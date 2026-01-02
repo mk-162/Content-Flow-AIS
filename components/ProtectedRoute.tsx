@@ -1,5 +1,5 @@
 import React from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useOrganization } from '../contexts/OrganizationContext';
 import { GlobalRole } from '../types';
@@ -59,13 +59,13 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, requir
             <p className="text-slate-500 text-sm mb-6">
               You don't have permission to access this page.
             </p>
-            <a
-              href="/"
+            <Link
+              to="/"
               className="inline-block bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold uppercase tracking-wider
                        py-3 px-6 transition-colors"
             >
               Go to Dashboard
-            </a>
+            </Link>
           </div>
         </div>
       );
