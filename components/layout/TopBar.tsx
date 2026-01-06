@@ -8,7 +8,8 @@ import { UserMenu } from './UserMenu';
 import { AdminPanel } from './AdminPanel';
 import { CreditsButton } from './CreditsButton';
 import { GlobalRole } from '../../types';
-import MissionLogo from '../../temp/MissionLogo.svg';
+// Logo is served from public folder
+const MissionLogo = '/mission-icon.svg';
 
 interface TopBarProps {
   /** Show the project indicator */
@@ -90,9 +91,8 @@ export const TopBar: React.FC<TopBarProps> = ({ showProject = true }) => {
                       <button
                         key={org.id}
                         onClick={() => handleOrgSelect(org.id)}
-                        className={`w-full px-4 py-2 text-left text-sm flex items-center justify-between hover:bg-slate-700 transition-colors ${
-                          currentOrg.id === org.id ? 'text-cyan-400 bg-slate-700/50' : 'text-slate-200'
-                        }`}
+                        className={`w-full px-4 py-2 text-left text-sm flex items-center justify-between hover:bg-slate-700 transition-colors ${currentOrg.id === org.id ? 'text-cyan-400 bg-slate-700/50' : 'text-slate-200'
+                          }`}
                       >
                         <div className="flex items-center gap-2">
                           <Building2 className="w-4 h-4 text-slate-500" />
@@ -131,9 +131,8 @@ export const TopBar: React.FC<TopBarProps> = ({ showProject = true }) => {
                       <button
                         key={project.id}
                         onClick={() => handleProjectSelect(project.id)}
-                        className={`w-full px-4 py-2 text-left text-sm flex items-center justify-between hover:bg-slate-700 transition-colors ${
-                          currentProject.id === project.id ? 'text-cyan-400 bg-slate-700/50' : 'text-slate-200'
-                        }`}
+                        className={`w-full px-4 py-2 text-left text-sm flex items-center justify-between hover:bg-slate-700 transition-colors ${currentProject.id === project.id ? 'text-cyan-400 bg-slate-700/50' : 'text-slate-200'
+                          }`}
                       >
                         <div className="flex items-center gap-2">
                           <Folder className="w-4 h-4 text-slate-500" />
