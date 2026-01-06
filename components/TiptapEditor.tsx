@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -72,6 +72,15 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = ({
     placeholder = 'Start writing...',
     editable = true
 }) => {
+    // Track if editor is focused to prevent external updates while typing
+    const isEditorFocused = useRef(false);
+    // Track the last content we set to avoid unnecessary updates
+    const lastExternalContent = useRef(content);
+    // Track pending external update that arrived while user was typing
+    const pendingExternalUpdate = useRef<string | null>(null);
+    // Store editor ref to avoid stale closure in onBlur callback
+    const editorRef = useRef<ReturnType<typeof useEditor>>(null);
+
     // Convert markdown to HTML
     const htmlContent = useMemo(() => markdownToHtml(content), [content]);
 
@@ -104,6 +113,20 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = ({
         onUpdate: ({ editor }) => {
             onChange(editor.getHTML());
         },
+        onFocus: () => {
+            isEditorFocused.current = true;
+        },
+        onBlur: () => {
+            isEditorFocused.current = false;
+            // Apply any pending external update that arrived while typing
+            // Use editorRef.current to avoid stale closure reference
+            if (pendingExternalUpdate.current !== null) {
+                const pendingHtml = markdownToHtml(pendingExternalUpdate.current);
+                editorRef.current?.commands.setContent(pendingHtml);
+                lastExternalContent.current = pendingExternalUpdate.current;
+                pendingExternalUpdate.current = null;
+            }
+        },
         editorProps: {
             attributes: {
                 class: 'prose prose-invert prose-slate max-w-none focus:outline-none min-h-[500px] px-4 py-3 prose-headings:font-bold prose-p:leading-relaxed prose-li:marker:text-cyan-400 prose-a:text-cyan-400 prose-code:text-pink-400 prose-code:bg-slate-800 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-blockquote:border-l-cyan-500 prose-blockquote:text-slate-400',
@@ -111,12 +134,30 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = ({
         },
     });
 
-    // Update editor content when prop changes
+    // Keep editorRef updated for use in callbacks (avoids stale closure)
     useEffect(() => {
+        editorRef.current = editor;
+    }, [editor]);
+
+    // Update editor content ONLY when external content changes (not from typing)
+    useEffect(() => {
+        // Skip if content hasn't actually changed from external source
+        if (content === lastExternalContent.current) return;
+
+        // If editor is focused (user is typing), queue the update for when they blur
+        if (isEditorFocused.current) {
+            pendingExternalUpdate.current = content;
+            console.log('[TiptapEditor] External update queued (user is typing)');
+            return;
+        }
+
+        // Update the ref and editor content
+        lastExternalContent.current = content;
+        pendingExternalUpdate.current = null; // Clear any pending update
         if (editor && htmlContent !== editor.getHTML()) {
             editor.commands.setContent(htmlContent);
         }
-    }, [htmlContent, editor]);
+    }, [content, htmlContent, editor]);
 
     // Update editable state
     useEffect(() => {
@@ -291,7 +332,7 @@ export const TiptapViewer: React.FC<{ content: string }> = ({ content }) => {
         editable: false,
         editorProps: {
             attributes: {
-                class: 'prose prose-invert prose-slate max-w-none prose-headings:font-serif prose-headings:font-bold prose-p:leading-relaxed prose-li:marker:text-indigo-400 prose-a:text-cyan-400',
+                class: 'prose prose-invert prose-slate max-w-none prose-headings:font-bold prose-p:leading-relaxed prose-li:marker:text-cyan-400 prose-a:text-cyan-400',
             },
         },
     });
@@ -310,7 +351,7 @@ export const TiptapViewer: React.FC<{ content: string }> = ({ content }) => {
     }
 
     return (
-        <div className="prose prose-invert prose-slate max-w-none prose-headings:font-serif prose-headings:font-bold prose-p:leading-relaxed prose-li:marker:text-indigo-400 prose-a:text-cyan-400">
+        <div className="prose prose-invert prose-slate max-w-none prose-headings:font-bold prose-p:leading-relaxed prose-li:marker:text-cyan-400 prose-a:text-cyan-400">
             <EditorContent editor={editor} />
         </div>
     );

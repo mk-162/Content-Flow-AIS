@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
     X,
     CreditCard,
@@ -33,6 +34,7 @@ interface UsageStats {
 }
 
 export const CreditManagementModal: React.FC<CreditManagementModalProps> = ({ isOpen, onClose }) => {
+    const navigate = useNavigate();
     const { currentOrg } = useOrganization();
     const [transactions, setTransactions] = useState<CreditTransaction[]>([]);
     const [allTransactions, setAllTransactions] = useState<CreditTransaction[]>([]);
@@ -112,14 +114,14 @@ export const CreditManagementModal: React.FC<CreditManagementModalProps> = ({ is
     // Full Statement View
     if (showFullStatement) {
         return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl max-h-[85vh] overflow-hidden shadow-2xl flex flex-col">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm">
+                <div className="bg-slate-900 border border-slate-700 w-full max-w-3xl max-h-[85vh] overflow-hidden shadow-2xl flex flex-col">
                     {/* Header */}
                     <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/50">
                         <div className="flex items-center gap-3">
                             <button
                                 onClick={() => setShowFullStatement(false)}
-                                className="p-1.5 hover:bg-slate-800 rounded-lg transition-colors"
+                                className="p-1.5 hover:bg-slate-800 transition-colors"
                             >
                                 <ChevronLeft size={20} className="text-slate-400" />
                             </button>
@@ -172,18 +174,16 @@ export const CreditManagementModal: React.FC<CreditManagementModalProps> = ({ is
                                             {tx.description}
                                         </td>
                                         <td className="px-4 py-3">
-                                            <span className={`text-xs px-2 py-0.5 rounded ${
-                                                tx.type === 'usage' ? 'bg-orange-500/20 text-orange-400' :
+                                            <span className={`text-xs px-2 py-0.5 rounded ${tx.type === 'usage' ? 'bg-orange-500/20 text-orange-400' :
                                                 tx.type === 'purchase' ? 'bg-green-500/20 text-green-400' :
-                                                tx.type === 'gift' ? 'bg-purple-500/20 text-purple-400' :
-                                                'bg-slate-500/20 text-slate-400'
-                                            }`}>
+                                                    tx.type === 'gift' ? 'bg-purple-500/20 text-purple-400' :
+                                                        'bg-slate-500/20 text-slate-400'
+                                                }`}>
                                                 {tx.type}
                                             </span>
                                         </td>
-                                        <td className={`px-4 py-3 text-sm text-right font-mono font-bold ${
-                                            tx.amount > 0 ? 'text-green-400' : 'text-slate-400'
-                                        }`}>
+                                        <td className={`px-4 py-3 text-sm text-right font-mono font-bold ${tx.amount > 0 ? 'text-green-400' : 'text-slate-400'
+                                            }`}>
                                             {tx.amount > 0 ? '+' : ''}{tx.amount}
                                         </td>
                                         <td className="px-4 py-3 text-sm text-right font-mono text-slate-500">
@@ -226,12 +226,12 @@ export const CreditManagementModal: React.FC<CreditManagementModalProps> = ({ is
 
     // Main Modal View
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm">
+            <div className="bg-slate-900 border border-slate-700 w-full max-w-3xl overflow-hidden shadow-2xl">
                 {/* Header */}
                 <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/50">
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-indigo-500/20 flex items-center justify-center">
+                        <div className="w-10 h-10 bg-indigo-500/20 flex items-center justify-center">
                             <Zap className="text-indigo-400" size={20} />
                         </div>
                         <div>
@@ -254,22 +254,22 @@ export const CreditManagementModal: React.FC<CreditManagementModalProps> = ({ is
                         </span>
                     </div>
                     <div className="grid grid-cols-4 gap-4">
-                        <div className="bg-slate-800/50 rounded-lg p-3 text-center">
+                        <div className="bg-slate-800/50 p-3 text-center">
                             <Type size={18} className="mx-auto mb-1 text-cyan-400" />
                             <div className="text-2xl font-bold text-white">{usageStats.titlesGenerated}</div>
                             <div className="text-xs text-slate-500">Titles</div>
                         </div>
-                        <div className="bg-slate-800/50 rounded-lg p-3 text-center">
+                        <div className="bg-slate-800/50 p-3 text-center">
                             <FileText size={18} className="mx-auto mb-1 text-emerald-400" />
                             <div className="text-2xl font-bold text-white">{usageStats.articlesGenerated}</div>
                             <div className="text-xs text-slate-500">Articles</div>
                         </div>
-                        <div className="bg-slate-800/50 rounded-lg p-3 text-center">
+                        <div className="bg-slate-800/50 p-3 text-center">
                             <Image size={18} className="mx-auto mb-1 text-violet-400" />
                             <div className="text-2xl font-bold text-white">{usageStats.imagesGenerated}</div>
                             <div className="text-xs text-slate-500">Images</div>
                         </div>
-                        <div className="bg-slate-800/50 rounded-lg p-3 text-center">
+                        <div className="bg-slate-800/50 p-3 text-center">
                             <Zap size={18} className="mx-auto mb-1 text-orange-400" />
                             <div className="text-2xl font-bold text-white">{usageStats.totalCreditsUsed}</div>
                             <div className="text-xs text-slate-500">Credits Used</div>
@@ -281,7 +281,7 @@ export const CreditManagementModal: React.FC<CreditManagementModalProps> = ({ is
                     {/* Left Column: Balance & Purchase */}
                     <div className="space-y-6">
                         {/* Current Balance */}
-                        <div className="bg-gradient-to-br from-indigo-600/20 to-purple-600/20 border border-indigo-500/30 rounded-xl p-6 text-center relative overflow-hidden">
+                        <div className="bg-gradient-to-br from-indigo-600/20 to-purple-600/20 border border-indigo-500/30 p-6 text-center relative overflow-hidden">
                             <div className="absolute top-0 right-0 p-3 opacity-10">
                                 <Zap size={100} />
                             </div>
@@ -310,7 +310,7 @@ export const CreditManagementModal: React.FC<CreditManagementModalProps> = ({ is
                         </div>
 
                         {/* Need More Credits */}
-                        <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
+                        <div className="bg-slate-800/50 border border-slate-700 p-4">
                             <h4 className="text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2">
                                 <CreditCard size={16} />
                                 Need More Credits?
@@ -321,9 +321,9 @@ export const CreditManagementModal: React.FC<CreditManagementModalProps> = ({ is
                             <button
                                 onClick={() => {
                                     onClose();
-                                    // TODO: Open upgrade modal or navigate to billing
+                                    navigate('/admin/settings', { state: { tab: 'billing' } });
                                 }}
-                                className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-colors"
+                                className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors"
                             >
                                 View Upgrade Options
                             </button>
@@ -337,7 +337,7 @@ export const CreditManagementModal: React.FC<CreditManagementModalProps> = ({ is
                             Recent Transactions
                         </h4>
 
-                        <div className="flex-1 bg-slate-950/50 border border-slate-800 rounded-xl overflow-hidden flex flex-col">
+                        <div className="flex-1 bg-slate-950/50 border border-slate-800 overflow-hidden flex flex-col">
                             {loading ? (
                                 <div className="flex-1 flex items-center justify-center text-slate-500">
                                     <RefreshCw className="animate-spin mr-2" size={16} />
@@ -372,7 +372,7 @@ export const CreditManagementModal: React.FC<CreditManagementModalProps> = ({ is
                             )}
                         </div>
 
-                        <div className="mt-4 p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-lg">
+                        <div className="mt-4 p-3 bg-indigo-500/10 border border-indigo-500/20">
                             <h5 className="text-xs font-bold text-indigo-300 mb-2">Credit Costs</h5>
                             <div className="flex justify-between text-xs text-slate-400">
                                 <span>Title Generation</span>

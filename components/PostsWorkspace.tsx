@@ -451,7 +451,7 @@ export const PostsWorkspace: React.FC<Props> = ({
                         <button
                             onClick={handleApproveAll}
                             disabled={isApprovingAll || reviewReadyCount === 0}
-                            className="flex-1 py-2.5 bg-teal-600 hover:bg-teal-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all"
+                            className="flex-1 py-2.5 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all"
                         >
                             {isApprovingAll ? <LoadingBar className="w-8" /> : <CheckCircle size={14} />}
                             {isApprovingAll ? 'Approving...' : `Approve All${reviewReadyCount > 0 ? ` (${reviewReadyCount})` : ''}`}
@@ -816,7 +816,7 @@ export const PostsWorkspace: React.FC<Props> = ({
                                 <button
                                     onClick={() => handleApprove(selectedPost.id)}
                                     disabled={approvingPostId === selectedPost.id || rejectingPostId === selectedPost.id}
-                                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50"
+                                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50"
                                 >
                                     {approvingPostId === selectedPost.id ? <LoadingBar className="w-8" /> : <CheckCircle size={14} />}
                                     Approve for Launch

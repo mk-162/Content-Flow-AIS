@@ -8,7 +8,7 @@ import { UserMenu } from './UserMenu';
 import { AdminPanel } from './AdminPanel';
 import { CreditsButton } from './CreditsButton';
 import { GlobalRole } from '../../types';
-import MissionLogo from '../../Mission.svg';
+import MissionLogo from '../../temp/MissionLogo.svg';
 
 interface TopBarProps {
   /** Show the project indicator */

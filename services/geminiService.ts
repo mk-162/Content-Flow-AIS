@@ -1208,8 +1208,8 @@ ${treeLines.length > 25 ? `\n... and ${treeLines.length - 25} more categories` :
         prompt = `${fullContext}${existingCategoriesContext}\n\n${prompt}`;
       }
 
-      // Force description requirement even for admin prompts
-      prompt += "\n\nIMPORTANT: You must provide a clear, specific description for each category. NEVER start with 'This category focuses on...', 'This section covers...', or 'Content related to...'. Instead, dive straight into what the content IS with active, evocative language.";
+      // Force SEO-focused descriptions even for admin prompts
+      prompt += "\n\nIMPORTANT: Descriptions must be SEO-focused. List SPECIFIC topics covered using natural keyword phrases. NEVER use marketing fluff like 'unlock', 'master', 'optimize', 'transform'. NEVER start with 'This category focuses on...' or similar. Example good description: 'Pre-ride meals, energy gels, hydration strategies. Includes carb-loading guides and race day meal plans.'";
     } else {
       // Fallback prompt with comprehensive context
       if (parentCategoryName) {
@@ -1241,26 +1241,29 @@ ${query ? `Focus specifically on: "${query}"` : ''}
 - If your suggestion could stand alone as a major theme, it's TOO BROAD for a subcategory
 - Example: "Training" is a top-level category. "Interval Workouts" is a subcategory of Training.
 
-**DESCRIPTION REQUIREMENTS:**
-Each description must be a compelling EDITORIAL BRIEF (3-4 sentences) that:
-- Paints a vivid picture of what content belongs here
-- Uses evocative, magazine-quality language that SELLS the category
-- Includes specific content hooks, themes, and story angles
-- Describes the reader transformation - what they'll discover, learn, or experience
+**DESCRIPTION REQUIREMENTS (SEO-FOCUSED):**
+Each description must be an SEO-optimized summary (2-3 sentences) that:
+- Lists SPECIFIC topics that will be covered (be concrete, not vague)
+- Includes natural keyword variations people actually search for
+- States clearly what problems this content solves
+- Names specific subtopics, techniques, or products when relevant
 
-**DESCRIPTION ANTI-PATTERNS - NEVER USE THESE OPENINGS:**
-❌ "This category focuses on..."
-❌ "This section covers..."
-❌ "Here you'll find..."
-❌ "Content related to..."
-❌ "Everything about..."
-❌ "A collection of..."
+**DESCRIPTION ANTI-PATTERNS - AVOID:**
+❌ "This category focuses on..." / "This section covers..." / "Content related to..."
+❌ Marketing fluff: "unlock", "master", "optimize", "discover", "transform"
+❌ Vague promises: "personalized plans", "expert advice", "peak performance"
+❌ Generic filler that could apply to any category
 
-Instead, DIVE STRAIGHT INTO the content with active, evocative language. Start with WHAT the content IS, not meta-descriptions ABOUT the category.
+**GOOD SEO DESCRIPTIONS - BE THIS SPECIFIC:**
+✅ "Pre-ride breakfast ideas, carb-loading schedules, and race morning meal timing. Covers what to eat 3 hours, 1 hour, and 30 minutes before cycling, plus foods to avoid that cause GI distress."
+✅ "Interval training workouts for cyclists: VO2max intervals, threshold sessions, and sprint training. Includes specific power zone targets, rest periods, and weekly training block structures."
+
+**BAD DESCRIPTIONS - AVOID THIS STYLE:**
+❌ "Optimize your cycling performance by mastering pre-ride fueling strategies that tailor nutrition to your body's needs. Unlock sustained energy with personalized plans."
 
 **EXAMPLE GOOD SUBCATEGORY (under "Nutrition"):**
-Name: "Race Day Fueling"
-Description: "Pre-ride fueling strategies and meal planning for peak performance. From race-day breakfast rituals to carb-loading timelines, this is the science of eating for endurance—made practical. Covers glycogen optimization, gut-friendly foods, hydration timing, and the meals elite cyclists swear by."
+Name: "Pre-Ride Fueling"
+Description: "What to eat before cycling: breakfast ideas, meal timing, and carb-loading strategies. Covers pre-ride meals for short rides vs long endurance efforts, foods that prevent stomach issues, and caffeine timing for performance."
 
 **EXAMPLE BAD SUBCATEGORY (too broad - should be top-level):**
 Name: "Training"
@@ -1296,26 +1299,25 @@ ${query ? `Focus on topics related to: "${query}"` : ''}
 - If your suggestion is so specific it can't have subcategories, it's NOT a top-level category
 - Think: "Could this category have 5-10 distinct subtopics?" If not, it's too narrow.
 
-**DESCRIPTION REQUIREMENTS:**
-Each description must be a compelling EDITORIAL BRIEF (3-4 sentences) that:
-- Paints a vivid picture of the SCOPE of content that belongs here
-- Describes the types of subtopics that would live under this category
-- Mentions the TYPE of reader this serves and what transformation they'll experience
-- Makes someone WANT to explore this category
+**DESCRIPTION REQUIREMENTS (SEO-FOCUSED):**
+Each description must be an SEO-optimized summary (2-3 sentences) that:
+- Lists the SPECIFIC subtopics this category will contain
+- Uses natural keyword phrases people search for
+- Names concrete content types (guides, reviews, comparisons, how-tos)
+- Avoids marketing fluff and vague promises
 
-**DESCRIPTION ANTI-PATTERNS - NEVER USE THESE OPENINGS:**
-❌ "This category focuses on..."
-❌ "This section covers..."
-❌ "Here you'll find..."
-❌ "Content related to..."
-❌ "Everything about..."
-❌ "A collection of..."
+**DESCRIPTION ANTI-PATTERNS - AVOID:**
+❌ "This category focuses on..." / "This section covers..." / "Content related to..."
+❌ Marketing fluff: "unlock", "master", "optimize", "discover", "transform", "fuel your rides"
+❌ Vague promises: "made practical", "demand more", "peak performance"
 
-Instead, DIVE STRAIGHT INTO the content with active, evocative language. Start with WHAT the content IS, not meta-descriptions ABOUT the category.
+**GOOD SEO DESCRIPTIONS - BE THIS SPECIFIC:**
+✅ "Pre-ride meals, energy gels, hydration strategies, and post-ride recovery nutrition. Includes carb-loading guides, race day meal plans, supplement reviews, and cyclist-specific recipes."
+✅ "Bike frames, groupsets, wheels, and component upgrades. Covers buying guides, product comparisons, maintenance tutorials, and best value picks at every price point."
 
 **EXAMPLE GOOD TOP-LEVEL CATEGORY:**
 Name: "Nutrition & Fueling"
-Description: "Fuel your rides from the inside out. Pre-ride meals, mid-ride nutrition, post-workout recovery, and everyday eating habits—the science of performance nutrition made practical. Race day strategies, supplement deep-dives, hydration science, and recipes built for athletes who demand more from their bodies."
+Description: "Pre-ride meals, energy gels, hydration strategies, and post-ride recovery nutrition. Includes carb-loading guides, race day meal plans, supplement reviews, and cyclist-specific recipes."
 
 **EXAMPLE BAD TOP-LEVEL CATEGORY (too specific):**
 Name: "Energy Gels"

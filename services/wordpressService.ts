@@ -72,8 +72,13 @@ export const exportToWordPress = async (
             title: post.title,
             content: post.content || '',
             excerpt: post.teaser || '',
-            slug: post.slug || post.title.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+            // NOTE: Using post.id in slug for uniqueness and robustness if slug is missing
+            slug: post.slug || `${post.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${post.id.substring(0, 5)}`,
             status: config.defaultStatus,
+            // Link category via categoryId if your WP setup supports it or via transient meta
+            meta: {
+                mission_category_id: post.categoryId
+            }
         };
 
         // Add author if specified

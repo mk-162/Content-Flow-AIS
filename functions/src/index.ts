@@ -994,11 +994,9 @@ const extractCitationsFromResearch = (researchContent: string): { citations: Cit
     }
   }
 
-  // Create a summary that preserves the research structure but limits length
-  // Include full content up to 4000 chars (increased to preserve more context with links)
-  const summary = researchContent.length > 4000
-    ? researchContent.substring(0, 4000) + '...'
-    : researchContent;
+  // Include full research content - Gemini 2.0 has 1M token context
+  // Research reports are typically 8-15k chars, well within limits
+  const summary = researchContent;
 
   return { citations, summary };
 };
@@ -1477,63 +1475,6 @@ async function processGenerateTitles(
 
   await taskRef.update({ progress: 45 });
 
-  // Build keyword research context (now using either existing or freshly generated keywords)
-  let keywordContext = '';
-  if (research && research.primaryKeywords && research.primaryKeywords.length > 0) {
-    const keywordParts: string[] = [];
-    keywordParts.push('**KEYWORD RESEARCH**');
-
-    // Primary keywords sorted by search volume
-    const primaryKeywords = research.primaryKeywords || [];
-    if (primaryKeywords.length > 0) {
-      const sorted = [...primaryKeywords].sort((a: any, b: any) => (b.searchVolume || 0) - (a.searchVolume || 0));
-      keywordParts.push('Top Keywords (prioritize these in titles):');
-      sorted.slice(0, 8).forEach((k: any, i: number) => {
-        const vol = k.searchVolume ? `${k.searchVolume.toLocaleString()}/mo` : '';
-        keywordParts.push(`${i + 1}. "${k.keyword}"${vol ? ` - ${vol}` : ''}`);
-      });
-    }
-
-    // Long-tail keywords
-    const relatedKeywords = research.relatedKeywords || [];
-    if (relatedKeywords.length > 0) {
-      keywordParts.push('\nLong-tail Keywords:');
-      relatedKeywords.slice(0, 8).forEach((k: any) => {
-        keywordParts.push(`- ${k.keyword}`);
-      });
-    }
-
-    // Questions people ask
-    const questionsToAnswer = research.questionsToAnswer || [];
-    if (questionsToAnswer.length > 0) {
-      keywordParts.push('\nQuestions People Search:');
-      questionsToAnswer.slice(0, 5).forEach((q: string) => {
-        keywordParts.push(`- ${q}`);
-      });
-    }
-
-    keywordContext = keywordParts.join('\n');
-    console.log(`[GenerateTitles] Using keyword research with ${primaryKeywords.length} keywords`);
-  }
-
-  // Build Google Deep Research context if available (with citations)
-  let deepResearchContext = '';
-  let citationsContext = '';
-  if (categoryData?.googleDeepResearch?.status === 'complete' && categoryData.googleDeepResearch.content) {
-    const researchContent = categoryData.googleDeepResearch.content;
-    const { citations, summary } = extractCitationsFromResearch(researchContent);
-
-    // Include research summary for context
-    deepResearchContext = `\n**EXPERT RESEARCH INSIGHTS**\nUse these insights to create more authoritative, well-researched titles:\n${summary}`;
-
-    // Include citations - titles can reference topics from cited sources
-    if (citations.length > 0) {
-      citationsContext = `\n**CITED SOURCES FROM RESEARCH**\nThese authoritative sources inform our content strategy. Create titles that could reference insights from these sources:\n${citations.slice(0, 10).map((c, i) => `${i + 1}. ${c.text}`).join('\n')}`;
-      console.log(`[GenerateTitles] Found ${citations.length} citations in research`);
-    }
-    console.log(`[GenerateTitles] Including Google Deep Research context`);
-  }
-
   await taskRef.update({ progress: 50 });
 
   // Build existing titles context for deduplication
@@ -1547,57 +1488,85 @@ async function processGenerateTitles(
   // Generate titles with Gemini
   const ai = getGeminiClient();
 
-  const prompt = `You are an expert SEO Content Strategist creating blog post titles that drive traffic and conversions.
+  // Build keyword requirement section - make it MANDATORY not suggested
+  let keywordRequirement = '';
+  if (research?.primaryKeywords?.length > 0) {
+    const topKws = research.primaryKeywords.slice(0, 6).map((k: any) => k.keyword);
+    keywordRequirement = `
+**MANDATORY KEYWORD TARGETING**
+Each title MUST contain or closely match one of these researched keywords:
+${topKws.map((kw: string, i: number) => `${i + 1}. "${kw}"`).join('\n')}
+
+Your primaryKeyword field must be the EXACT keyword from this list that the title targets.
+Do NOT invent new keywords - use the researched ones above.`;
+  }
+
+  // Extract key insights from deep research for the prompt
+  let researchInsights = '';
+  if (categoryData?.googleDeepResearch?.status === 'complete' && categoryData.googleDeepResearch.content) {
+    researchInsights = `
+**RESEARCH INSIGHTS TO LEVERAGE**
+The following insights come from deep market research. Use these to create authoritative, data-backed article briefs:
+
+${categoryData.googleDeepResearch.content}
+
+Extract specific statistics, trends, and expert insights from the above to include in your article briefs.`;
+  }
+
+  const prompt = `You are an expert SEO Content Strategist creating comprehensive article briefs that demonstrate deep expertise.
 
 ${businessContext}
 
 **CATEGORY**
 Name: ${categoryName}
 ${categoryDescription ? `Description: ${categoryDescription}` : ''}
-
-${keywordContext}
-${deepResearchContext}
-${citationsContext}
+${keywordRequirement}
+${researchInsights}
 ${existingTitlesContext}
 
 ---
 
-**TASK:** Generate ${requestedCount} highly specific, click-worthy blog post titles for the "${categoryName}" category.
+**TASK:** Generate ${requestedCount} comprehensive article briefs for the "${categoryName}" category.
 
-**STRICT TITLE REQUIREMENTS:**
-1. Every title MUST directly relate to the business's products/services
-2. Include specific outcomes, numbers, or timeframes where relevant (e.g., "5 Ways...", "...in 30 Days", "...40% Faster")
-3. Use power words strategically: Best, Proven, Complete, Step-by-Step, Essential, How to
-4. Target search intent explicitly - what would someone type into Google?
-5. Keep titles 50-60 characters maximum for optimal SERP display
-6. DO NOT use colons with catchy prefixes (BAD: "Power Up: Best Meals")
-7. DO NOT use vague clickbait (BAD: "Everything You Need to Know")
+**TITLE REQUIREMENTS:**
+1. Each title MUST contain a target keyword from the research (or close semantic match)
+2. Include specific outcomes, numbers, or timeframes (e.g., "5 Ways...", "...in 30 Days")
+3. Keep titles 50-60 characters for optimal SERP display
+4. NO colons with catchy prefixes (BAD: "Power Up: Best Meals")
+5. NO vague clickbait (BAD: "Everything You Need to Know")
 
-**TITLE FORMULAS THAT WORK:**
-- "How to [Achieve Result] + [Specific Benefit]"
-- "Best [Product/Method] for [Specific Use Case]"
-- "[Number] [Adjective] [Things] for [Specific Audience]"
-- "[Topic] vs [Topic]: Which is Better for [Use Case]"
-- "Why [Common Belief] is Wrong (And What to Do Instead)"
+**OUTPUT FORMAT - Generate a comprehensive brief for each article:**
 
-**GOOD TITLE EXAMPLES:**
-- "Best Carbohydrate Sources for Endurance Cycling"
-- "How to Calculate Protein Needs Based on Training Volume"
-- "5 Pre-Race Breakfast Ideas That Won't Cause GI Issues"
-- "Hydration Calculator: How Much Water Cyclists Really Need"
+For each article, provide ALL of these fields:
+{
+  "title": "SEO-optimized title containing target keyword",
+  "primaryKeyword": "The exact keyword from research this article targets",
+  "secondaryKeywords": ["2-3 related keywords to naturally include"],
+  "searchIntent": "informational | commercial | transactional",
+  "articleType": "how-to | listicle | guide | comparison | case-study | explainer",
+  "brief": "3-4 sentence description of the article's angle, what makes it unique, and the specific value to readers. Reference specific data or insights from the research.",
+  "outline": [
+    "H2: First major section topic",
+    "H2: Second major section topic",
+    "H2: Third major section topic",
+    "H2: Conclusion/action steps"
+  ],
+  "keyPoints": [
+    "Specific fact, statistic or insight to include",
+    "Another research-backed point to cover",
+    "A unique angle or data point"
+  ],
+  "targetWordCount": 1500,
+  "questionsToAnswer": ["What question does this answer?", "Another question from the research"]
+}
 
-**BAD TITLE EXAMPLES:**
-- "Fuel Your Ride: The Complete Guide to Cycling Nutrition" (colon pattern)
-- "10 Amazing Tips for Better Performance" (generic, no specificity)
-- "Everything You Need to Know About Eating" (too vague, no value)
+**QUALITY STANDARDS:**
+- brief must be 3-4 sentences showing clear research knowledge
+- outline must have 4-6 specific H2 sections (not generic like "Introduction")
+- keyPoints must reference specific data, statistics, or insights
+- questionsToAnswer should come from real search queries people make
 
-For each title, provide:
-1. title: A specific, SEO-optimized title following the rules above
-2. teaser: 2 sentences explaining the article angle and specific value to the reader
-3. keywords: 3-5 long-tail SEO keywords this article should rank for
-4. searchIntent: "informational" | "commercial" | "transactional"
-
-Return as JSON array.`;
+Return as JSON array with ${requestedCount} complete article briefs.`;
 
   const response = await withRetry(async () => {
     return ai.models.generateContent({
@@ -1611,14 +1580,30 @@ Return as JSON array.`;
 
   await taskRef.update({ progress: 70 });
 
-  // Parse response
-  let generatedTitles: Array<{ title: string; teaser: string; keywords: string[]; searchIntent?: string }> = [];
+  // Parse response - now expecting richer article briefs
+  interface ArticleBrief {
+    title: string;
+    primaryKeyword?: string;
+    secondaryKeywords?: string[];
+    searchIntent?: string;
+    articleType?: string;
+    brief?: string;
+    outline?: string[];
+    keyPoints?: string[];
+    targetWordCount?: number;
+    questionsToAnswer?: string[];
+    // Legacy fields for backward compatibility
+    teaser?: string;
+    keywords?: string[];
+  }
+
+  let generatedBriefs: ArticleBrief[] = [];
   try {
     const responseText = response.text || '[]';
-    generatedTitles = JSON.parse(responseText);
+    generatedBriefs = JSON.parse(responseText);
 
     // Post-process: remove any titles that still have colons (AI sometimes ignores instructions)
-    generatedTitles = generatedTitles.map(item => {
+    generatedBriefs = generatedBriefs.map(item => {
       let title = item.title;
       // If title has a colon in the first half, remove the prefix
       const colonIndex = title.indexOf(':');
@@ -1637,7 +1622,7 @@ Return as JSON array.`;
 
   await taskRef.update({ progress: 80 });
 
-  // Create posts in Firestore
+  // Create posts in Firestore with rich article brief data
   const postsRef = admin.firestore().collection(
     `organizations/${organizationId}/projects/${projectId}/posts`
   );
@@ -1645,30 +1630,52 @@ Return as JSON array.`;
   const batch = admin.firestore().batch();
   const now = admin.firestore.FieldValue.serverTimestamp();
 
-  for (const item of generatedTitles) {
+  for (const item of generatedBriefs) {
     const newPostRef = postsRef.doc();
+
+    // Build the teaser/meta description from brief or fallback
+    const teaser = item.brief || item.teaser || '';
+
+    // Combine keywords from various sources
+    const allKeywords = [
+      ...(item.primaryKeyword ? [item.primaryKeyword] : []),
+      ...(item.secondaryKeywords || []),
+      ...(item.keywords || [])
+    ].filter((k, i, arr) => arr.indexOf(k) === i); // dedupe
+
     batch.set(newPostRef, {
       projectId,
       organizationId,
       categoryId,
       title: item.title,
-      teaser: item.teaser,
-      metaDescription: item.teaser,
-      tags: item.keywords || [],
-      metaKeywords: item.keywords || [],
+      teaser,
+      metaDescription: teaser.substring(0, 160), // SEO limit
+      tags: allKeywords,
+      metaKeywords: allKeywords,
       searchIntent: item.searchIntent || 'informational',
       status: PostStatus.PENDING,
       createdBy,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      // New rich article brief fields
+      articleBrief: {
+        primaryKeyword: item.primaryKeyword || null,
+        secondaryKeywords: item.secondaryKeywords || [],
+        articleType: item.articleType || 'article',
+        outline: item.outline || [],
+        keyPoints: item.keyPoints || [],
+        targetWordCount: item.targetWordCount || 1500,
+        questionsToAnswer: item.questionsToAnswer || [],
+        generatedAt: now
+      }
     });
   }
 
   await batch.commit();
-  console.log(`[GenerateTitles] Created ${generatedTitles.length} posts for category: ${categoryName}`);
+  console.log(`[GenerateTitles] Created ${generatedBriefs.length} article briefs for category: ${categoryName}`);
 
   // Deduct credits - 1 per stub generated
-  const creditsToDeduct = generatedTitles.length;
+  const creditsToDeduct = generatedBriefs.length;
   if (creditsToDeduct > 0) {
     await admin.firestore().runTransaction(async (transaction) => {
       const orgRef = admin.firestore().doc(`organizations/${organizationId}`);
@@ -1752,10 +1759,9 @@ async function processGenerateContent(
 
   // Fetch all context in parallel
   const catId = categoryId || post.categoryId;
-  const [projectDoc, categoryDoc, researchDoc] = await Promise.all([
+  const [projectDoc, categoryDoc] = await Promise.all([
     admin.firestore().doc(`organizations/${organizationId}/projects/${projectId}`).get(),
-    catId ? admin.firestore().doc(`organizations/${organizationId}/projects/${projectId}/categories/${catId}`).get() : Promise.resolve(null),
-    catId ? admin.firestore().doc(`categoryResearch/${catId}`).get() : Promise.resolve(null)
+    catId ? admin.firestore().doc(`organizations/${organizationId}/projects/${projectId}/categories/${catId}`).get() : Promise.resolve(null)
   ]);
 
   const project = projectDoc.data();
@@ -1808,42 +1814,6 @@ async function processGenerateContent(
 
   await taskRef.update({ progress: 30 });
 
-  // Build keyword research context
-  let keywordContext = '';
-  if (researchDoc?.exists) {
-    const research = researchDoc.data() || {};
-    const keywordParts: string[] = [];
-    keywordParts.push('**KEYWORD RESEARCH (incorporate naturally)**');
-
-    const primaryKeywords = research.primaryKeywords || [];
-    if (primaryKeywords.length > 0) {
-      const sorted = [...primaryKeywords].sort((a: any, b: any) => (b.searchVolume || 0) - (a.searchVolume || 0));
-      keywordParts.push('Primary Keywords to include:');
-      sorted.slice(0, 5).forEach((k: any) => {
-        keywordParts.push(`- "${k.keyword}"`);
-      });
-    }
-
-    const relatedKeywords = research.relatedKeywords || [];
-    if (relatedKeywords.length > 0) {
-      keywordParts.push('\nSecondary Keywords:');
-      relatedKeywords.slice(0, 8).forEach((k: any) => {
-        keywordParts.push(`- ${k.keyword}`);
-      });
-    }
-
-    const questionsToAnswer = research.questionsToAnswer || [];
-    if (questionsToAnswer.length > 0) {
-      keywordParts.push('\nQuestions to Address:');
-      questionsToAnswer.slice(0, 4).forEach((q: string) => {
-        keywordParts.push(`- ${q}`);
-      });
-    }
-
-    keywordContext = keywordParts.join('\n');
-    console.log(`[GenerateContent] Using keyword research with ${primaryKeywords.length} keywords`);
-  }
-
   // Build Google Deep Research context if available (with citations)
   const { deepResearchContext, citationsContext } = buildResearchContext(
     category,
@@ -1857,14 +1827,61 @@ async function processGenerateContent(
   await taskRef.update({ progress: 40 });
 
   // Determine content parameters
-  const contentType = post.contentType || 'article';
   const tone = post.tone || project?.businessProfile?.brandVoice?.tone?.[0] || 'professional';
   const categoryDesc = category?.description || '';
+
+  // Extract article brief data (from enhanced title generation)
+  const brief = post.articleBrief || {};
+  const primaryKeyword = brief.primaryKeyword || (post.tags?.[0]) || '';
+  const secondaryKeywords = brief.secondaryKeywords || post.tags?.slice(1) || [];
+  const outline = brief.outline || [];
+  const keyPoints = brief.keyPoints || [];
+  const questionsToAnswer = brief.questionsToAnswer || [];
+  const targetWordCount = brief.targetWordCount || 1500;
+  const articleType = brief.articleType || 'article';
+
+  // Build outline section if we have one
+  let outlineSection = '';
+  if (outline.length > 0) {
+    outlineSection = `
+**REQUIRED ARTICLE STRUCTURE (follow this outline):**
+${outline.map((h: string, i: number) => `${i + 1}. ${h}`).join('\n')}
+
+You MUST use these exact H2 headings in this order.`;
+  }
+
+  // Build key points section
+  let keyPointsSection = '';
+  if (keyPoints.length > 0) {
+    keyPointsSection = `
+**KEY FACTS & INSIGHTS TO INCLUDE:**
+These specific points MUST appear in the article:
+${keyPoints.map((p: string) => `• ${p}`).join('\n')}`;
+  }
+
+  // Build questions section
+  let questionsSection = '';
+  if (questionsToAnswer.length > 0) {
+    questionsSection = `
+**QUESTIONS THIS ARTICLE MUST ANSWER:**
+${questionsToAnswer.map((q: string) => `• ${q}`).join('\n')}
+
+Address each of these questions within the article content.`;
+  }
+
+  // Build keyword requirements
+  let keywordRequirements = '';
+  if (primaryKeyword) {
+    keywordRequirements = `
+**KEYWORD REQUIREMENTS:**
+Primary Keyword (MUST appear in first paragraph and 3-5 times naturally): "${primaryKeyword}"
+${secondaryKeywords.length > 0 ? `Secondary Keywords (include 1-2 times each): ${secondaryKeywords.map((k: string) => `"${k}"`).join(', ')}` : ''}`;
+  }
 
   // Generate content
   const ai = getGeminiClient();
 
-  const prompt = `You are an expert content writer for a specific business. Write content that ranks AND converts.
+  const prompt = `You are an expert content writer creating research-backed, authoritative content.
 
 ${businessContext}
 
@@ -1872,67 +1889,56 @@ ${businessContext}
 Name: ${categoryName}
 ${categoryDesc ? `Description: ${categoryDesc}` : ''}
 
-**ARTICLE BRIEF**
+**ARTICLE ASSIGNMENT**
 Title: "${post.title}"
-${post.teaser ? `Angle/Focus: ${post.teaser}` : ''}
-${Array.isArray(post.tags) && post.tags.length ? `Target Keywords: ${post.tags.join(', ')}` : ''}
+${post.teaser ? `Brief: ${post.teaser}` : ''}
+Article Type: ${articleType}
 Search Intent: ${post.searchIntent || 'informational'}
-Target Word Count: 1,200-1,800 words
-
-${keywordContext}
+Target Word Count: ${targetWordCount} words
+${keywordRequirements}
+${outlineSection}
+${keyPointsSection}
+${questionsSection}
 ${deepResearchContext}
 ${citationsContext}
 
 ---
 
-**CONTENT STRUCTURE (follow this exactly):**
+**WRITING INSTRUCTIONS:**
 
-1. **Hook** (50-100 words)
-   - Start with a compelling statistic, question, or pain point
-   - Include the primary keyword in the first sentence
-   - Establish why this matters NOW to the reader
+1. **Opening Hook** (75-100 words)
+   - Start with a compelling statistic, question, or pain point from the research
+   - Include the primary keyword "${primaryKeyword || categoryName}" in the first sentence
+   - Establish immediate relevance to the reader
 
-2. **Context** (100-150 words)
-   - What the reader will learn from this article
-   - Why this business/brand is qualified to teach this
-   - Brief overview of what's covered
-
-3. **Main Content** (800-1,200 words)
-   - 3-5 H2 sections with descriptive, keyword-rich headings
-   - Each section follows: Problem → Solution → Example
-   - Include specific examples from the ${categoryName} industry
+2. **Main Content** (${Math.round(targetWordCount * 0.7)} words)
+   ${outline.length > 0 ? '- Follow the REQUIRED ARTICLE STRUCTURE above exactly' : '- Create 4-6 H2 sections with descriptive, keyword-rich headings'}
+   - Include the KEY FACTS & INSIGHTS provided above
+   - Each section: Problem/Context → Explanation → Specific Example
    - Use bullet points for lists of 3+ items
-   - Add H3 subsections where needed for depth
-   - **CITATIONS**: If authoritative sources are provided above, naturally weave 2-4 relevant citations into the content as markdown links. Link to sources when citing statistics, research findings, or expert opinions. Example: "According to [Source Name](url), cyclists who..."
+   - **CITATIONS**: Weave 2-4 citations from the sources above as markdown links when citing statistics or expert opinions
 
-4. **Expert Insight** (100-150 words)
-   - Share a unique perspective or insider knowledge
-   - Address what most people get wrong about this topic
-   - Build credibility and trust
-
-5. **Action Steps** (100-150 words)
+3. **Conclusion & Action Steps** (100-150 words)
+   - Summarize key takeaways
    - 3-5 specific, actionable next steps
-   - Make them immediately implementable
-   - Include one soft CTA related to the business's services
+   - Soft CTA related to the business
 
-**FORMATTING RULES:**
+**FORMATTING:**
 - Use ## for H2 headings, ### for H3
 - Bold key phrases and important terms
-- Use bullet lists for scanability
-- No fluff - every sentence must add value
+- Bullet lists for scanability
+- No fluff - every sentence adds value
 
 **TONE:** ${tone}
-**FORMAT:** ${contentType}
 
-**CRITICAL - DO NOT:**
-- Start with "Here is..." or any preamble - dive straight into the hook
-- Use excessive exclamation points or hype language
-- Write generic advice that ignores the business context
-- Use placeholder text like [insert X here]
+**DO NOT:**
+- Start with "Here is..." or any preamble
+- Use generic advice that ignores the research
+- Skip the key points and questions provided
 - Use colon-style subheadings like "Tip 1: Do This"
-- Include the title in the content (it's added separately)
+- Include the title in the content
 
-Write the article now in clean Markdown format. Start directly with the hook.`;
+Write the article now. Start directly with the hook.`;
 
   const response = await withRetry(async () => {
     return ai.models.generateContent({
@@ -2489,6 +2495,54 @@ FORMATTING REQUIREMENTS:
   });
 
   console.log(`[GoogleDeepResearch] Completed for: ${categoryName}`);
+
+  // Chain: Auto-generate stubs after research completes (research was requested, so stubs should follow)
+  try {
+    const projectData = project;
+    const autoGenEnabled = projectData?.settings?.autoGeneration?.enabled !== false;
+
+    // If research was triggered (we're here), always chain stubs - user explicitly wanted research first
+    if (autoGenEnabled) {
+      const stubThreshold = projectData?.settings?.autoGeneration?.stubThreshold ?? 5;
+
+      // Count existing stubs for this category
+      const existingStubs = await admin.firestore()
+        .collection(`organizations/${organizationId}/projects/${projectId}/posts`)
+        .where('categoryId', '==', categoryId)
+        .where('status', '==', 'pending')
+        .limit(stubThreshold)
+        .get();
+
+      const stubCount = existingStubs.size;
+
+      if (stubCount < stubThreshold) {
+        const stubsToGenerate = stubThreshold - stubCount;
+        console.log(`[GoogleDeepResearch] Chaining: Queuing ${stubsToGenerate} stubs for ${categoryName}`);
+
+        // Queue stub generation task
+        await admin.firestore().collection('generationQueue').add({
+          type: 'Generate Titles',
+          organizationId,
+          projectId,
+          categoryId,
+          categoryName,
+          requestedCount: stubsToGenerate,
+          status: TaskStatus.QUEUED,
+          progress: 0,
+          createdBy: createdBy || 'research-chain',
+          startedAt: admin.firestore.FieldValue.serverTimestamp(),
+          chainedFromResearch: true // Flag to indicate this was auto-chained
+        });
+
+        console.log(`[GoogleDeepResearch] Chained stub generation queued for: ${categoryName}`);
+      } else {
+        console.log(`[GoogleDeepResearch] Category ${categoryName} already has ${stubCount} stubs, skipping chain`);
+      }
+    }
+  } catch (chainError: any) {
+    // Don't fail the research task if chaining fails
+    console.error(`[GoogleDeepResearch] Chain error (non-fatal):`, chainError.message);
+  }
 }
 
 /**

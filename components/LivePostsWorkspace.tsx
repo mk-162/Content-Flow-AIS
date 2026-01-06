@@ -101,9 +101,17 @@ export const LivePostsWorkspace: React.FC<Props> = ({
 
         if (selectedPost.status === PostStatus.PUBLISHED) {
             if (confirm("You are editing a LIVE post.\n\nThis will push the post back into the launch queue. Changes will go live on the next launch.\n\nDo you want to proceed?")) {
-                await onUpdatePost(selectedPost.id, { content });
-                await onUpdateStatus(selectedPost.id, PostStatus.APPROVED);
-                setEditMode(false);
+                // Atomic update: content + status in single call
+                try {
+                    await onUpdatePost(selectedPost.id, {
+                        content,
+                        status: PostStatus.APPROVED
+                    });
+                    setEditMode(false);
+                } catch (error) {
+                    console.error('Failed to save post:', error);
+                    // Content and status remain unchanged on error
+                }
             }
         } else {
             await onUpdatePost(selectedPost.id, { content });
@@ -146,17 +154,13 @@ export const LivePostsWorkspace: React.FC<Props> = ({
                 {/* Header */}
                 <div className="p-4 border-b border-slate-800 bg-slate-900/30">
                     <div className="mb-4">
-                        <h1 className="text-2xl font-bold text-white tracking-tight mb-1">Live Posts</h1>
-                        <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Published Content</p>
-                    </div>
-
-                    {/* Stats */}
-                    <div className="mb-4 py-3 px-3 bg-emerald-950/30 border border-emerald-900/50 text-center">
-                        <div className="flex items-center justify-center gap-2">
-                            <Globe size={16} className="text-emerald-500" />
-                            <span className="text-lg font-bold text-emerald-400">{liveCount}</span>
-                            <span className="text-xs text-emerald-500/70">posts live</span>
+                        <div className="flex items-center gap-2 mb-1">
+                            <h1 className="text-2xl font-bold text-white tracking-tight">Live Posts</h1>
+                            <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 text-xs font-bold rounded">
+                                {liveCount}
+                            </span>
                         </div>
+                        <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Published Content</p>
                     </div>
 
                     <div className="relative mb-3">
@@ -453,7 +457,7 @@ export const LivePostsWorkspace: React.FC<Props> = ({
                                 <div className="space-y-1">
                                     <label className="text-xs text-slate-400 font-medium">Meta Keywords</label>
                                     <input
-                                        value={selectedPost.metaKeywords?.join(', ') || ''}
+                                        value={Array.isArray(selectedPost.metaKeywords) ? selectedPost.metaKeywords.join(', ') : (selectedPost.metaKeywords || '')}
                                         onChange={(e) => handleUpdate(selectedPost.id, {
                                             metaKeywords: e.target.value.split(',').map(k => k.trim()).filter(k => k)
                                         })}

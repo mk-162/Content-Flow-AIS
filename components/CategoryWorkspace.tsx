@@ -1,19 +1,21 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { usePaneWidth } from '../hooks/usePaneWidth';
-import { Category, Post, PostStatus, GenerationTask, TaskStatus, TaskType, CategoryResearch, TIER_FEATURES, SubscriptionTier, Organization } from '../types';
+import { Category, Post, PostStatus, GenerationTask, TaskStatus, TaskType, CategoryResearch, TIER_FEATURES, SubscriptionTier, Organization, KeywordData, Project } from '../types';
 import {
     Plus, ChevronRight, Sparkles, Search, Wand2,
     X, Check, Play, Trash2, FileText, AlertTriangle,
     GripVertical, ArrowRight, Tag, User, Edit2, RefreshCw, Info, Target, TrendingUp,
-    FolderOpen, Eye, EyeOff, Save, ChevronDown, Zap, CheckCircle, Maximize2
+    FolderOpen, Eye, EyeOff, Save, ChevronDown, Zap, CheckCircle, Maximize2, Loader2,
+    Image as ImageIcon
 } from 'lucide-react';
-import { suggestCategories, CategorySuggestion } from '../services/geminiService';
+import { suggestCategories, AICategorySuggestion } from '../services/geminiService';
 import { researchService, getExistingResearch, isResearchStale } from '../services/researchService';
+import { fetchCategoryKeywords, getCategoryResearch, areKeywordsStale } from '../services/categoryKeywordService';
 import { motion, AnimatePresence } from 'framer-motion';
 import { TiptapEditor, TiptapViewer } from './TiptapEditor';
 import { ImageInspectorControl } from './ImageInspectorControl';
-import { Timestamp } from 'firebase/firestore';
+import { Timestamp, deleteField } from 'firebase/firestore';
 import { marked } from 'marked';
 import {
     DndContext,
@@ -78,7 +80,8 @@ interface Props {
     categories: Category[];
     posts: Post[];
     tasks: GenerationTask[];
-    onAddCategory: (name: string, parentId: string | null, description?: string) => void;
+    isAddingCategory?: boolean;
+    onAddCategory: (name: string, parentId: string | null, description?: string, runResearchFirst?: boolean) => void;
     onUpdateCategory: (id: string, updates: Partial<Category>) => void;
     onDeleteCategory: (id: string) => void;
     onMoveCategory: (id: string, newParentId: string | null, reorderedSiblings: { id: string; order: number }[]) => void;
@@ -86,11 +89,13 @@ interface Props {
     onQueueContent: (post: Post) => void;
     onQueueCategoryPageRegenerate?: (post: Post) => void;
     onQueueGoogleDeepResearch?: (categoryId: string) => void;
+    onCreateCategoryPage?: (categoryId: string, categoryName: string, description?: string) => void;
     onUpdatePost: (id: string, updates: Partial<Post>) => void;
     onDeletePost: (id: string) => void;
     organizationId?: string;
     projectId?: string;
     organization?: Organization;
+    project?: Project;
 }
 
 // ============================================================================
@@ -447,24 +452,27 @@ const SortableCategoryRow: React.FC<{
                     />
 
                     {/* Category Name */}
-                    <div className="flex-1 min-w-0" onClick={onSelect}>
+                    <div className="flex-1 min-w-0 flex items-center gap-2" onClick={onSelect}>
                         <h3 className={`truncate font-medium text-sm ${isSelected ? 'text-white' : 'text-slate-400 hover:text-slate-200'}`}>
                             {category.name}
                         </h3>
+                        {/* Research complete indicator */}
+                        {category.googleDeepResearch?.status === 'complete' && (
+                            <span className="flex items-center gap-0.5 text-[10px] text-emerald-400" title="Deep research complete">
+                                <Target size={10} />
+                            </span>
+                        )}
                     </div>
 
-                    {/* Progress Indicator */}
+                    {/* Progress Indicator - Circular loader */}
                     {isGenerating && (
-                        <div className="flex items-center gap-2 mr-3">
-                            <LoadingBar className="w-8" />
-                            {progress > 0 && (
-                                <div className="w-12 h-1 bg-slate-700 overflow-hidden">
-                                    <div
-                                        className="h-full bg-cyan-500 transition-all duration-300"
-                                        style={{ width: `${progress}%` }}
-                                    />
-                                </div>
-                            )}
+                        <div className="mr-3">
+                            <Loader2 size={16} className="animate-spin text-cyan-400" />
+                        </div>
+                    )}
+                    {category.googleDeepResearch?.status === 'running' && !isGenerating && (
+                        <div className="mr-3">
+                            <Loader2 size={16} className="animate-spin text-emerald-400" />
                         </div>
                     )}
 
@@ -719,20 +727,23 @@ const CategoryCreator: React.FC<{
     parentName?: string,
     parentDescription?: string,
     onClose: () => void,
-    onAddBatch: (cats: { name: string, description: string }[]) => void,
+    onAddBatch: (cats: { name: string, description: string }[], runResearchFirst?: boolean) => void,
     organizationId?: string,
-    projectId?: string
-}> = ({ parentId, parentName, parentDescription, onClose, onAddBatch, organizationId, projectId }) => {
+    projectId?: string,
+    isAddingCategory?: boolean,
+    canUseDeepResearch?: boolean
+}> = ({ parentId, parentName, parentDescription, onClose, onAddBatch, organizationId, projectId, isAddingCategory, canUseDeepResearch = false }) => {
     const [mode, setMode] = useState<'AI_AUTO' | 'MANUAL'>('AI_AUTO');
     const [categoryName, setCategoryName] = useState("");
     const [categoryDescription, setCategoryDescription] = useState("");
-    const [suggestions, setSuggestions] = useState<CategorySuggestion[]>([]);
+    const [suggestions, setSuggestions] = useState<AICategorySuggestion[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
     const [error, setError] = useState<string | null>(null);
     const [editingIndex, setEditingIndex] = useState<number | null>(null);
     const [editName, setEditName] = useState("");
     const [editDesc, setEditDesc] = useState("");
+    const [runResearchFirst, setRunResearchFirst] = useState(false);
 
     // Auto-trigger AI on mount if in AI_AUTO mode
     useEffect(() => {
@@ -762,7 +773,7 @@ const CategoryCreator: React.FC<{
 
     const handleManualAdd = () => {
         if (categoryName.trim()) {
-            onAddBatch([{ name: categoryName.trim(), description: categoryDescription.trim() }]);
+            onAddBatch([{ name: categoryName.trim(), description: categoryDescription.trim() }], runResearchFirst);
             setCategoryName('');
             setCategoryDescription('');
         }
@@ -773,7 +784,8 @@ const CategoryCreator: React.FC<{
             name: s.name,
             description: s.description
         }));
-        onAddBatch(selected);
+        console.log('[CategoryCreator] Adding categories with runResearchFirst:', runResearchFirst);
+        onAddBatch(selected, runResearchFirst);
     };
 
     const toggleSelection = (index: number) => {
@@ -783,7 +795,7 @@ const CategoryCreator: React.FC<{
         setSelectedIndices(newSet);
     };
 
-    const startEditing = (index: number, suggestion: CategorySuggestion) => {
+    const startEditing = (index: number, suggestion: AICategorySuggestion) => {
         setEditingIndex(index);
         setEditName(suggestion.name);
         setEditDesc(suggestion.description);
@@ -1007,7 +1019,27 @@ const CategoryCreator: React.FC<{
                 </div>
 
                 {/* Footer */}
-                <div className="p-6 border-t border-slate-800 bg-slate-950 flex justify-between items-center">
+                <div className="p-6 border-t border-slate-800 bg-slate-950 flex flex-col gap-4">
+                    {/* Deep Research Option */}
+                    {canUseDeepResearch && (
+                        <label className="flex items-center gap-3 cursor-pointer group self-center">
+                            <div
+                                className={`w-5 h-5 border flex items-center justify-center transition-colors ${
+                                    runResearchFirst
+                                        ? 'bg-purple-500 border-purple-500 text-white'
+                                        : 'border-slate-600 bg-slate-900/50'
+                                }`}
+                                onClick={() => setRunResearchFirst(!runResearchFirst)}
+                            >
+                                {runResearchFirst && <Check size={12} strokeWidth={3} />}
+                            </div>
+                            <span className="text-sm text-slate-300 group-hover:text-white transition-colors">
+                                Run Deep Research first <span className="text-purple-400">(20 credits/category)</span>
+                            </span>
+                        </label>
+                    )}
+
+                    <div className="flex justify-between items-center">
                     {mode === 'AI_AUTO' ? (
                         <>
                             <button
@@ -1025,11 +1057,15 @@ const CategoryCreator: React.FC<{
                                 </button>
                                 <button
                                     onClick={handleAddSelected}
-                                    disabled={selectedIndices.size === 0}
+                                    disabled={selectedIndices.size === 0 || isAddingCategory}
                                     className="px-8 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-lg shadow-lg shadow-cyan-900/20 disabled:opacity-50 disabled:shadow-none transition-all flex items-center gap-2"
                                 >
-                                    <Plus size={18} />
-                                    Add Selected ({selectedIndices.size})
+                                    {isAddingCategory ? (
+                                        <Loader2 size={18} className="animate-spin" />
+                                    ) : (
+                                        <Plus size={18} />
+                                    )}
+                                    {isAddingCategory ? 'Adding...' : `Add Selected (${selectedIndices.size})`}
                                 </button>
                             </div>
                         </>
@@ -1051,15 +1087,20 @@ const CategoryCreator: React.FC<{
                                 </button>
                                 <button
                                     onClick={handleManualAdd}
-                                    disabled={!categoryName.trim()}
+                                    disabled={!categoryName.trim() || isAddingCategory}
                                     className="px-8 py-2.5 bg-white hover:bg-slate-200 text-black font-bold rounded-lg shadow-lg disabled:opacity-50 disabled:shadow-none transition-all flex items-center gap-2"
                                 >
-                                    <Plus size={18} />
-                                    Add Category
+                                    {isAddingCategory ? (
+                                        <Loader2 size={18} className="animate-spin" />
+                                    ) : (
+                                        <Plus size={18} />
+                                    )}
+                                    {isAddingCategory ? 'Adding...' : 'Add Category'}
                                 </button>
                             </div>
                         </>
                     )}
+                    </div>
                 </div>
             </motion.div>
         </div>
@@ -1260,15 +1301,740 @@ const GenModal: React.FC<{
 };
 
 // ============================================================================
+// CATEGORY SUMMARY CARD
+// ============================================================================
+const CategorySummaryCard: React.FC<{
+    category: Category;
+    categoryPagePost: Post | null;
+    keywords: KeywordData[];
+    keywordsLoading: boolean;
+    researchStatus: 'none' | 'running' | 'complete';
+    articleIdeasCount: number;
+    onRunResearch: () => void;
+    onViewKeywords: () => void;
+    onRefreshKeywords: () => void;
+    onUpdatePost: (id: string, updates: Partial<Post>) => void;
+    onUpdateCategory: (id: string, updates: Partial<Category>) => void;
+    onCreateCategoryPage?: () => void;
+    onApplyResearch: () => void;
+    onViewResearchReport: () => void;
+    researchReport?: string | null;
+}> = ({
+    category,
+    categoryPagePost,
+    keywords,
+    keywordsLoading,
+    researchStatus,
+    articleIdeasCount,
+    onRunResearch,
+    onViewKeywords,
+    onRefreshKeywords,
+    onUpdatePost,
+    onUpdateCategory,
+    onCreateCategoryPage,
+    onApplyResearch,
+    onViewResearchReport,
+    researchReport
+}) => {
+    const [isExpanded, setIsExpanded] = useState(true);
+    const [isEditingDescription, setIsEditingDescription] = useState(false);
+    const [editedDescription, setEditedDescription] = useState(category.description || '');
+    const [showResearchConfirm, setShowResearchConfirm] = useState(false);
+    const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+    // Timer for research duration
+    React.useEffect(() => {
+        if (researchStatus !== 'running') {
+            setElapsedSeconds(0);
+            return;
+        }
+
+        const startedAt = category.googleDeepResearch?.startedAt;
+        if (!startedAt) {
+            setElapsedSeconds(0);
+            return;
+        }
+
+        // Calculate initial elapsed time
+        const startTime = startedAt.toDate().getTime();
+        const updateElapsed = () => {
+            const now = Date.now();
+            const elapsed = Math.floor((now - startTime) / 1000);
+            setElapsedSeconds(elapsed);
+        };
+
+        updateElapsed(); // Set initial value
+        const interval = setInterval(updateElapsed, 1000);
+
+        return () => clearInterval(interval);
+    }, [researchStatus, category.googleDeepResearch?.startedAt]);
+
+    // Format elapsed time as "Xm Ys"
+    const formatElapsed = (seconds: number): string => {
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        if (mins === 0) return `${secs}s`;
+        return `${mins}m ${secs}s`;
+    };
+
+    // Update local state when category changes
+    React.useEffect(() => {
+        setEditedDescription(category.description || '');
+    }, [category.description]);
+
+    // Get top keywords for display
+    const topKeywords = keywords.slice(0, 4);
+
+    // Format volume helper
+    const formatVolume = (volume: number | null): string => {
+        if (volume === null) return '—';
+        if (volume < 1000) return volume.toString();
+        if (volume < 1000000) return `${(volume / 1000).toFixed(1)}K`;
+        return `${(volume / 1000000).toFixed(1)}M`;
+    };
+
+    // Trend styling lookup - consolidates icon and color
+    const TREND_STYLES = {
+        rising: { icon: '▲', color: 'text-emerald-400' },
+        declining: { icon: '▼', color: 'text-red-400' },
+        stable: { icon: '—', color: 'text-slate-500' },
+    } as const;
+
+    const getTrendStyle = (trend: 'rising' | 'stable' | 'declining' | null) => {
+        return trend && trend in TREND_STYLES
+            ? TREND_STYLES[trend]
+            : { icon: '', color: 'text-slate-500' };
+    };
+
+    if (!isExpanded) {
+        // Collapsed state - compact single row
+        return (
+            <div className="mx-6 mt-4 mb-2">
+                <button
+                    onClick={() => setIsExpanded(true)}
+                    className="w-full flex items-center gap-4 p-3 bg-gradient-to-r from-slate-900 to-slate-800 border border-slate-700 hover:border-slate-600 transition-colors"
+                >
+                    {/* Thumbnail */}
+                    {categoryPagePost?.heroImage?.url ? (
+                        <img
+                            src={categoryPagePost.heroImage.url}
+                            alt=""
+                            className="w-12 h-12 object-cover rounded"
+                        />
+                    ) : (
+                        <div className="w-12 h-12 bg-slate-800 flex items-center justify-center rounded">
+                            <FolderOpen size={20} className="text-slate-600" />
+                        </div>
+                    )}
+
+                    {/* Title */}
+                    <span className="font-bold text-white flex-1 text-left truncate">{category.name}</span>
+
+                    {/* Status badges */}
+                    <div className="flex items-center gap-3">
+                        {researchStatus === 'running' && (
+                            <span className="text-xs text-amber-400 flex items-center gap-1 animate-pulse">
+                                <RefreshCw size={12} className="animate-spin" /> Researching...
+                            </span>
+                        )}
+                        {researchStatus === 'complete' && (
+                            <span className="text-xs text-emerald-400 flex items-center gap-1">
+                                <CheckCircle size={12} /> Research
+                            </span>
+                        )}
+                        {keywords.length > 0 && (
+                            <span className="text-xs text-cyan-400">
+                                {keywords.length} keywords
+                            </span>
+                        )}
+                        <span className="text-xs text-slate-500">
+                            {articleIdeasCount} ideas
+                        </span>
+                        <ChevronDown size={16} className="text-slate-500" />
+                    </div>
+                </button>
+            </div>
+        );
+    }
+
+    // Expanded state - full card
+    return (
+        <div className="mx-6 mt-4 mb-2 border border-slate-700 bg-gradient-to-r from-slate-900 to-slate-800 shadow-lg">
+            {/* Header with collapse button */}
+            <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700/50">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Category Overview</span>
+                <button
+                    onClick={() => setIsExpanded(false)}
+                    className="text-slate-500 hover:text-white p-1"
+                >
+                    <ChevronDown size={16} className="rotate-180" />
+                </button>
+            </div>
+
+            {/* Main content */}
+            <div className="p-4">
+                {/* Category Name */}
+                <h2 className="text-xl font-bold text-white mb-2">{category.name}</h2>
+
+                {/* Category Description - Editable */}
+                <div className="mb-4">
+                    <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Description</span>
+                            {!isEditingDescription && (
+                                <button
+                                    onClick={() => setIsEditingDescription(true)}
+                                    className="text-slate-500 hover:text-white"
+                                    title="Edit description"
+                                >
+                                    <Edit2 size={12} />
+                                </button>
+                            )}
+                        </div>
+                        {isEditingDescription ? (
+                            <div className="space-y-2">
+                                <textarea
+                                    value={editedDescription}
+                                    onChange={(e) => setEditedDescription(e.target.value)}
+                                    className="w-full bg-slate-800 border border-slate-600 rounded p-2 text-sm text-slate-300 focus:border-cyan-500 outline-none resize-none"
+                                    rows={3}
+                                    placeholder="Enter category description..."
+                                    autoFocus
+                                />
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => {
+                                            onUpdateCategory(category.id, { description: editedDescription });
+                                            setIsEditingDescription(false);
+                                        }}
+                                        className="px-2 py-1 text-xs bg-cyan-600 hover:bg-cyan-500 text-white rounded flex items-center gap-1"
+                                    >
+                                        <Check size={12} /> Save
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            setEditedDescription(category.description || '');
+                                            setIsEditingDescription(false);
+                                        }}
+                                        className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded flex items-center gap-1"
+                                    >
+                                        <X size={12} /> Cancel
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <p className="text-sm text-slate-400">
+                                {category.description || <span className="italic text-slate-600">No description yet - click Edit to add one</span>}
+                            </p>
+                        )}
+                    </div>
+
+                {/* Keywords + Research + Hero Image */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                        {/* Keywords Section */}
+                        <div className="p-3 bg-slate-800/30 rounded border border-slate-700/50">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Target Keywords</span>
+                                {keywords.length > 0 && (
+                                    <button
+                                        onClick={onViewKeywords}
+                                        className="text-xs text-cyan-400 hover:text-cyan-300"
+                                    >
+                                        View All {keywords.length} →
+                                    </button>
+                                )}
+                            </div>
+
+                            {keywordsLoading ? (
+                                <div className="flex items-center gap-2 py-2">
+                                    <LoadingBar className="w-24" />
+                                    <span className="text-xs text-slate-500">Fetching keywords...</span>
+                                </div>
+                            ) : keywords.length > 0 ? (
+                                <div className="space-y-1">
+                                    {topKeywords.map((kw, i) => (
+                                        <div key={i} className="flex items-center gap-2 text-sm">
+                                            <span className="text-slate-300 truncate flex-1 text-xs">"{kw.keyword}"</span>
+                                            <span className="text-cyan-400 font-mono text-[10px] shrink-0">
+                                                {formatVolume(kw.searchVolume)}/mo
+                                            </span>
+                                            {kw.trend && (
+                                                <span className={`text-[10px] shrink-0 ${getTrendStyle(kw.trend).color}`}>
+                                                    {getTrendStyle(kw.trend).icon}
+                                                </span>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="flex items-center gap-2 py-2">
+                                    <button
+                                        onClick={onRefreshKeywords}
+                                        className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1"
+                                    >
+                                        <RefreshCw size={12} />
+                                        Fetch Keywords
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Research Panel */}
+                        <div className="p-3 bg-slate-800/50 rounded border border-slate-700">
+                        <div className="flex items-center justify-between mb-3">
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                                <Target size={14} className="text-purple-400" />
+                                Deep Research
+                            </span>
+                            {/* Status indicator */}
+                            {researchStatus === 'running' ? (
+                                <span className="text-xs text-amber-400 flex items-center gap-1 font-mono">
+                                    <RefreshCw size={12} className="animate-spin" /> {formatElapsed(elapsedSeconds)}
+                                </span>
+                            ) : researchStatus === 'complete' ? (
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs text-emerald-400 flex items-center gap-1">
+                                        <CheckCircle size={12} /> Complete
+                                    </span>
+                                    <button
+                                        onClick={onViewResearchReport}
+                                        className="px-2 py-0.5 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white rounded flex items-center gap-1"
+                                    >
+                                        <Eye size={12} /> View
+                                    </button>
+                                </div>
+                            ) : (
+                                <span className="text-xs text-slate-500">Not started</span>
+                            )}
+                        </div>
+
+                        {researchStatus === 'complete' && researchReport ? (
+                            /* Research complete - show apply action */
+                            <div className="space-y-2">
+                                <button
+                                    onClick={onApplyResearch}
+                                    className="w-full px-3 py-2 text-sm bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 hover:text-purple-200 rounded flex items-center justify-center gap-2 border border-purple-500/30"
+                                >
+                                    <Zap size={14} /> Apply Research (Regenerate All)
+                                </button>
+                                <p className="text-xs text-slate-500 text-center">
+                                    Regenerates description & all article ideas
+                                </p>
+                            </div>
+                        ) : researchStatus === 'running' ? (
+                            /* Research running - show progress */
+                            <div className="py-2 space-y-2">
+                                <LoadingBar className="mb-2" />
+                                <p className="text-xs text-slate-400 text-center">
+                                    Researching "{category.name}"...
+                                </p>
+                                <p className="text-xs text-slate-600 text-center">
+                                    This can take up to 10 minutes. You can navigate away — research runs on our servers.
+                                </p>
+                                <div className="mt-2 p-2 bg-emerald-500/10 border border-emerald-500/20 rounded">
+                                    <p className="text-[11px] text-emerald-400 text-center flex items-center justify-center gap-1">
+                                        <Zap size={10} />
+                                        Article ideas will be auto-generated when research completes
+                                    </p>
+                                </div>
+                                {/* Show reset button after 5 minutes OR if no startedAt (old stuck research) */}
+                                {(elapsedSeconds > 300 || !category.googleDeepResearch?.startedAt) && (
+                                    <button
+                                        onClick={() => onUpdateCategory(category.id, {
+                                            googleDeepResearch: {
+                                                content: '',
+                                                generatedAt: category.googleDeepResearch?.generatedAt || category.createdAt,
+                                                status: 'failed',
+                                                error: 'Research was manually reset'
+                                            }
+                                        })}
+                                        className="w-full mt-2 px-3 py-1.5 text-xs bg-red-900/50 hover:bg-red-800/50 text-red-300 rounded border border-red-700/50"
+                                    >
+                                        Reset Stuck Research
+                                    </button>
+                                )}
+                            </div>
+                        ) : (
+                            /* No research - show start button */
+                            <div className="space-y-2">
+                                {showResearchConfirm ? (
+                                    /* Confirmation dialog */
+                                    <div className="relative p-4 bg-slate-900 border border-purple-500/30 rounded space-y-3">
+                                        <button
+                                            onClick={() => setShowResearchConfirm(false)}
+                                            className="absolute top-2 right-2 p-1 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded"
+                                        >
+                                            <X size={14} />
+                                        </button>
+                                        <p className="text-sm text-slate-300 pr-6">
+                                            Deep Research conducts comprehensive market analysis for this category, including competitor content, search trends, and keyword opportunities.
+                                        </p>
+                                        <div className="flex items-center gap-2 text-amber-400 text-sm">
+                                            <Zap size={14} />
+                                            <span className="font-medium">20 credits</span>
+                                            <span className="text-slate-500">• Up to 10 minutes</span>
+                                        </div>
+                                        <p className="text-xs text-slate-500">
+                                            Research runs on our servers in the background. You may navigate away or close this page — results will appear when complete.
+                                        </p>
+                                        <p className="text-xs text-slate-500">
+                                            To enable automatic research for all new categories, visit Project Settings.
+                                        </p>
+                                        <button
+                                            onClick={() => {
+                                                setShowResearchConfirm(false);
+                                                onRunResearch();
+                                            }}
+                                            className="w-full px-3 py-2 text-sm bg-purple-600 hover:bg-purple-500 text-white rounded flex items-center justify-center gap-2"
+                                        >
+                                            <Target size={14} /> Start Research
+                                        </button>
+                                    </div>
+                                ) : (
+                                    /* Initial button */
+                                    <>
+                                        <button
+                                            onClick={() => setShowResearchConfirm(true)}
+                                            className="w-full px-3 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-white rounded flex items-center justify-center gap-2"
+                                        >
+                                            <Search size={14} /> Run Deep Research
+                                            <span className="text-slate-400 text-xs ml-1">(20 credits)</span>
+                                        </button>
+                                        <p className="text-xs text-slate-500 text-center">
+                                            Comprehensive SEO research: competitor analysis, search trends & content opportunities
+                                        </p>
+                                    </>
+                                )}
+                            </div>
+                        )}
+                        </div>
+
+                        {/* Hero Image Block */}
+                        <div className="p-3 bg-slate-800/30 rounded border border-slate-700/50">
+                            {categoryPagePost ? (
+                                <ImageInspectorControl
+                                    currentImage={categoryPagePost.heroImage ? {
+                                        url: categoryPagePost.heroImage.url,
+                                        prompt: categoryPagePost.heroImage.prompt || '',
+                                        altText: categoryPagePost.heroImage.altText || category.name
+                                    } : undefined}
+                                    postTitle={category.name}
+                                    postTeaser={category.description}
+                                    onImageUpdate={(image) => {
+                                        if (categoryPagePost) {
+                                            if (image) {
+                                                onUpdatePost(categoryPagePost.id, {
+                                                    heroImage: {
+                                                        url: image.url,
+                                                        prompt: image.prompt,
+                                                        altText: image.altText,
+                                                        generatedAt: image.generatedAt,
+                                                        providerId: image.providerId,
+                                                        aspectRatio: image.aspectRatio
+                                                    }
+                                                });
+                                            } else {
+                                                onUpdatePost(categoryPagePost.id, { heroImage: deleteField() } as unknown as Partial<Post>);
+                                            }
+                                        }
+                                    }}
+                                />
+                            ) : (
+                                <div className="flex items-center gap-2 py-2">
+                                    {onCreateCategoryPage ? (
+                                        <button
+                                            onClick={onCreateCategoryPage}
+                                            className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1"
+                                        >
+                                            <Plus size={12} />
+                                            Add Hero Image
+                                        </button>
+                                    ) : (
+                                        <span className="text-xs text-slate-500">No category page</span>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+            </div>
+        </div>
+    );
+};
+
+// ============================================================================
+// KEYWORD RESEARCH MODAL
+// ============================================================================
+const KeywordResearchModal: React.FC<{
+    category: Category;
+    keywords: KeywordData[];
+    onClose: () => void;
+    onRefresh: () => void;
+    onGenerateIdeasForKeywords: (keywords: string[]) => void;
+    isRefreshing: boolean;
+}> = ({ category, keywords, onClose, onRefresh, onGenerateIdeasForKeywords, isRefreshing }) => {
+    const [sortBy, setSortBy] = useState<'volume' | 'difficulty' | 'cpc'>('volume');
+    const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+    const [selectedKeywords, setSelectedKeywords] = useState<Set<string>>(new Set());
+    const [filterTrend, setFilterTrend] = useState<'all' | 'rising' | 'stable' | 'declining'>('all');
+
+    // Format helpers
+    const formatVolume = (volume: number | null): string => {
+        if (volume === null) return '—';
+        if (volume < 1000) return volume.toString();
+        if (volume < 1000000) return `${(volume / 1000).toFixed(1)}K`;
+        return `${(volume / 1000000).toFixed(1)}M`;
+    };
+
+    const formatCpc = (cpc: number | null): string => {
+        if (cpc === null) return '—';
+        return `$${cpc.toFixed(2)}`;
+    };
+
+    const getDifficultyColor = (difficulty: number | null): string => {
+        if (difficulty === null) return 'text-slate-500';
+        if (difficulty < 30) return 'text-emerald-400';
+        if (difficulty < 60) return 'text-amber-400';
+        return 'text-red-400';
+    };
+
+    // Trend styling lookup - consolidates icon and color
+    const TREND_STYLES = {
+        rising: { icon: '▲', color: 'text-emerald-400' },
+        declining: { icon: '▼', color: 'text-red-400' },
+        stable: { icon: '—', color: 'text-slate-500' },
+    } as const;
+
+    const getTrendStyle = (trend: 'rising' | 'stable' | 'declining' | null | undefined) => {
+        return trend && trend in TREND_STYLES
+            ? TREND_STYLES[trend as keyof typeof TREND_STYLES]
+            : { icon: '', color: 'text-slate-500' };
+    };
+
+    // Filter and sort keywords
+    const sortedKeywords = useMemo(() => {
+        let filtered = [...keywords];
+
+        // Filter by trend
+        if (filterTrend !== 'all') {
+            filtered = filtered.filter(kw => kw.trend === filterTrend);
+        }
+
+        // Sort
+        filtered.sort((a, b) => {
+            let aVal: number | null = null;
+            let bVal: number | null = null;
+
+            switch (sortBy) {
+                case 'volume':
+                    aVal = a.searchVolume;
+                    bVal = b.searchVolume;
+                    break;
+                case 'difficulty':
+                    aVal = a.difficulty;
+                    bVal = b.difficulty;
+                    break;
+                case 'cpc':
+                    aVal = a.cpc;
+                    bVal = b.cpc;
+                    break;
+            }
+
+            // Handle nulls
+            if (aVal === null && bVal === null) return 0;
+            if (aVal === null) return 1;
+            if (bVal === null) return -1;
+
+            return sortDir === 'desc' ? bVal - aVal : aVal - bVal;
+        });
+
+        return filtered;
+    }, [keywords, sortBy, sortDir, filterTrend]);
+
+    const toggleKeyword = (keyword: string) => {
+        const newSet = new Set(selectedKeywords);
+        if (newSet.has(keyword)) {
+            newSet.delete(keyword);
+        } else {
+            newSet.add(keyword);
+        }
+        setSelectedKeywords(newSet);
+    };
+
+    const handleSort = (column: 'volume' | 'difficulty' | 'cpc') => {
+        if (sortBy === column) {
+            setSortDir(sortDir === 'desc' ? 'asc' : 'desc');
+        } else {
+            setSortBy(column);
+            setSortDir('desc');
+        }
+    };
+
+    const handleGenerateForSelected = () => {
+        onGenerateIdeasForKeywords(Array.from(selectedKeywords));
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <motion.div
+                initial={{ y: 20, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                className="w-full max-w-5xl bg-slate-900 border border-slate-700 shadow-2xl flex flex-col max-h-[90vh]"
+            >
+                {/* Header */}
+                <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-950">
+                    <div>
+                        <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                            <TrendingUp className="text-cyan-400" size={20} />
+                            Keyword Research: {category.name}
+                        </h2>
+                        <p className="text-xs text-slate-500 mt-1">
+                            {keywords.length} keywords • Data from DataForSEO
+                        </p>
+                    </div>
+                    <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors">
+                        <X size={20} />
+                    </button>
+                </div>
+
+                {/* Toolbar */}
+                <div className="px-6 py-3 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+                    <div className="flex items-center gap-4">
+                        {/* Trend Filter */}
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs text-slate-500">Filter:</span>
+                            <select
+                                value={filterTrend}
+                                onChange={(e) => setFilterTrend(e.target.value as any)}
+                                className="bg-slate-800 border border-slate-700 text-slate-300 text-xs px-2 py-1 rounded"
+                            >
+                                <option value="all">All Trends</option>
+                                <option value="rising">Rising ▲</option>
+                                <option value="stable">Stable —</option>
+                                <option value="declining">Declining ▼</option>
+                            </select>
+                        </div>
+
+                        {/* Selected count */}
+                        {selectedKeywords.size > 0 && (
+                            <span className="text-xs text-cyan-400 font-mono">
+                                {selectedKeywords.size} selected
+                            </span>
+                        )}
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                        {selectedKeywords.size > 0 && (
+                            <button
+                                onClick={handleGenerateForSelected}
+                                className="px-4 py-1.5 text-xs font-bold uppercase tracking-wider bg-cyan-600 hover:bg-cyan-500 text-white transition-colors flex items-center gap-2"
+                            >
+                                <Sparkles size={12} />
+                                Generate Ideas for Selected
+                            </button>
+                        )}
+                        <button
+                            onClick={onRefresh}
+                            disabled={isRefreshing}
+                            className="px-4 py-1.5 text-xs font-bold uppercase tracking-wider bg-slate-700 hover:bg-slate-600 text-white transition-colors flex items-center gap-2 disabled:opacity-50"
+                        >
+                            <RefreshCw size={12} className={isRefreshing ? 'animate-spin' : ''} />
+                            Refresh
+                        </button>
+                    </div>
+                </div>
+
+                {/* Table */}
+                <div className="flex-1 overflow-auto">
+                    <table className="w-full text-left">
+                        <thead className="bg-slate-950 sticky top-0">
+                            <tr className="text-xs font-bold text-slate-500 uppercase tracking-widest border-b border-slate-800">
+                                <th className="p-4 w-10">
+                                    <input
+                                        type="checkbox"
+                                        className="appearance-none w-4 h-4 border border-slate-600 bg-slate-800 checked:bg-cyan-500 checked:border-cyan-500 cursor-pointer"
+                                        checked={selectedKeywords.size === sortedKeywords.length && sortedKeywords.length > 0}
+                                        onChange={() => {
+                                            if (selectedKeywords.size === sortedKeywords.length) {
+                                                setSelectedKeywords(new Set());
+                                            } else {
+                                                setSelectedKeywords(new Set(sortedKeywords.map(k => k.keyword)));
+                                            }
+                                        }}
+                                    />
+                                </th>
+                                <th className="p-4">Keyword</th>
+                                <th
+                                    className="p-4 cursor-pointer hover:text-slate-300"
+                                    onClick={() => handleSort('volume')}
+                                >
+                                    Volume {sortBy === 'volume' && (sortDir === 'desc' ? '↓' : '↑')}
+                                </th>
+                                <th
+                                    className="p-4 cursor-pointer hover:text-slate-300"
+                                    onClick={() => handleSort('difficulty')}
+                                >
+                                    Difficulty {sortBy === 'difficulty' && (sortDir === 'desc' ? '↓' : '↑')}
+                                </th>
+                                <th
+                                    className="p-4 cursor-pointer hover:text-slate-300"
+                                    onClick={() => handleSort('cpc')}
+                                >
+                                    CPC {sortBy === 'cpc' && (sortDir === 'desc' ? '↓' : '↑')}
+                                </th>
+                                <th className="p-4">Trend</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800">
+                            {sortedKeywords.map((kw, i) => (
+                                <tr
+                                    key={i}
+                                    className={`hover:bg-slate-800/50 transition-colors ${
+                                        selectedKeywords.has(kw.keyword) ? 'bg-cyan-950/20' : ''
+                                    }`}
+                                >
+                                    <td className="p-4">
+                                        <input
+                                            type="checkbox"
+                                            className="appearance-none w-4 h-4 border border-slate-600 bg-slate-800 checked:bg-cyan-500 checked:border-cyan-500 cursor-pointer"
+                                            checked={selectedKeywords.has(kw.keyword)}
+                                            onChange={() => toggleKeyword(kw.keyword)}
+                                        />
+                                    </td>
+                                    <td className="p-4 text-slate-200 font-medium">{kw.keyword}</td>
+                                    <td className="p-4 text-cyan-400 font-mono">{formatVolume(kw.searchVolume)}</td>
+                                    <td className={`p-4 font-mono ${getDifficultyColor(kw.difficulty)}`}>
+                                        {kw.difficulty !== null ? kw.difficulty : '—'}
+                                    </td>
+                                    <td className="p-4 text-slate-400 font-mono">{formatCpc(kw.cpc)}</td>
+                                    <td className={`p-4 ${getTrendStyle(kw.trend).color}`}>
+                                        {getTrendStyle(kw.trend).icon} {kw.trend || '—'}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+
+                    {sortedKeywords.length === 0 && (
+                        <div className="p-12 text-center text-slate-500">
+                            {keywords.length === 0 ? 'No keywords fetched yet.' : 'No keywords match the current filter.'}
+                        </div>
+                    )}
+                </div>
+            </motion.div>
+        </div>
+    );
+};
+
+// ============================================================================
 // MAIN COMPONENT
 // ============================================================================
 export const CategoryWorkspace: React.FC<Props> = ({
-    categories, posts, tasks, onAddCategory, onUpdateCategory, onDeleteCategory, onMoveCategory,
-    onQueueTitles, onQueueContent, onQueueCategoryPageRegenerate, onQueueGoogleDeepResearch,
+    categories, posts, tasks, isAddingCategory, onAddCategory, onUpdateCategory, onDeleteCategory, onMoveCategory,
+    onQueueTitles, onQueueContent, onQueueCategoryPageRegenerate, onQueueGoogleDeepResearch, onCreateCategoryPage,
     onUpdatePost, onDeletePost,
     organizationId,
     projectId,
-    organization
+    organization,
+    project
 }) => {
     const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
     const [selectedPostIds, setSelectedPostIds] = useState<Set<string>>(new Set());
@@ -1289,6 +2055,13 @@ export const CategoryWorkspace: React.FC<Props> = ({
 
     // Research report modal
     const [showResearchModal, setShowResearchModal] = useState(false);
+
+    // Keyword research state
+    const [categoryKeywords, setCategoryKeywords] = useState<KeywordData[]>([]);
+    const [keywordsLoading, setKeywordsLoading] = useState(false);
+    const [showKeywordModal, setShowKeywordModal] = useState(false);
+    const [keywordsRefreshing, setKeywordsRefreshing] = useState(false);
+
 
     // Layout Resizing - shared across workspaces
     const [leftPaneWidth, setLeftPaneWidth] = usePaneWidth('leftPane');
@@ -1324,6 +2097,100 @@ export const CategoryWorkspace: React.FC<Props> = ({
         window.addEventListener('mouseup', handleGlobalMouseUp);
         return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
     }, []);
+
+    // Auto-fetch keywords when category is selected
+    useEffect(() => {
+        if (!selectedCategoryId || !project || !organization) {
+            setCategoryKeywords([]);
+            return;
+        }
+
+        const fetchKeywords = async () => {
+            setKeywordsLoading(true);
+            try {
+                // First try to get cached keywords
+                const result = await getCategoryResearch(selectedCategoryId);
+
+                // Handle the discriminated result type
+                let research: CategoryResearch | null = null;
+                if (result.success === false) {
+                    // Database error - log and try to fetch fresh
+                    console.warn('Failed to get cached keywords:', result.error.message);
+                } else if (result.data) {
+                    research = result.data;
+                }
+
+                if (research && research.primaryKeywords && research.primaryKeywords.length > 0 && !areKeywordsStale(research)) {
+                    // Use cached keywords
+                    setCategoryKeywords(research.primaryKeywords);
+                } else {
+                    // Fetch fresh keywords
+                    const category = categories.find(c => c.id === selectedCategoryId);
+                    if (category) {
+                        const parentCategory = category.parentId ? categories.find(c => c.id === category.parentId) : null;
+                        const keywords = await fetchCategoryKeywords(
+                            selectedCategoryId,
+                            category,
+                            project,
+                            organization,
+                            parentCategory?.name
+                        );
+                        setCategoryKeywords(keywords);
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to fetch keywords:', error);
+                setCategoryKeywords([]);
+            } finally {
+                setKeywordsLoading(false);
+            }
+        };
+
+        fetchKeywords();
+    }, [selectedCategoryId, project, organization, categories]);
+
+    // Handler to refresh keywords
+    const handleRefreshKeywords = async () => {
+        console.log('[Keywords] handleRefreshKeywords called', { selectedCategoryId, project: !!project, organization: !!organization });
+
+        if (!selectedCategoryId) {
+            console.warn('[Keywords] No category selected');
+            return;
+        }
+        if (!project) {
+            console.warn('[Keywords] No project available');
+            return;
+        }
+        if (!organization) {
+            console.warn('[Keywords] No organization available');
+            return;
+        }
+
+        setKeywordsLoading(true);
+        setKeywordsRefreshing(true);
+        try {
+            const category = categories.find(c => c.id === selectedCategoryId);
+            if (category) {
+                const parentCategory = category.parentId ? categories.find(c => c.id === category.parentId) : null;
+                console.log('[Keywords] Fetching keywords for:', category.name);
+                const keywords = await fetchCategoryKeywords(
+                    selectedCategoryId,
+                    category,
+                    project,
+                    organization,
+                    parentCategory?.name
+                );
+                console.log('[Keywords] Received keywords:', keywords.length);
+                setCategoryKeywords(keywords);
+            }
+        } catch (error) {
+            console.error('Failed to refresh keywords:', error);
+        } finally {
+            setKeywordsLoading(false);
+            setKeywordsRefreshing(false);
+        }
+    };
+
 
     // Category checkbox handlers
     const handleCategoryCheck = (id: string, checked: boolean) => {
@@ -1541,316 +2408,109 @@ export const CategoryWorkspace: React.FC<Props> = ({
 
                     {/* Scrollable Content Sections */}
                     <div className="flex-1 overflow-y-auto custom-scrollbar bg-[#0f172a]">
-                        {selectedCategoryId ? (
+                        {selectedCategoryId && selectedCategory ? (
                             <>
-                                {/* ========== CATEGORY PAGE SECTION ========== */}
-                                <CollapsibleSection
-                                    title="Category Page"
-                                    icon={<FolderOpen size={16} className="text-purple-400" />}
-                                    accentColor="purple"
-                                    badge={categoryPagePost && (
-                                        <span className={`px-2 py-0.5 text-[10px] font-bold uppercase ${
-                                            categoryPagePost.status === PostStatus.GENERATING ? 'bg-amber-500/20 text-amber-400' :
-                                            categoryPagePost.status === PostStatus.NEEDS_REVIEW ? 'bg-purple-500/20 text-purple-400' :
-                                            categoryPagePost.status === PostStatus.APPROVED ? 'bg-emerald-500/20 text-emerald-400' :
-                                            categoryPagePost.status === PostStatus.PUBLISHED ? 'bg-cyan-500/20 text-cyan-400' :
-                                            'bg-slate-700 text-slate-400'
-                                        }`}>
-                                            {categoryPagePost.status === PostStatus.GENERATING ? 'Generating' :
-                                             categoryPagePost.status === PostStatus.NEEDS_REVIEW ? 'Draft' :
-                                             categoryPagePost.status === PostStatus.APPROVED ? 'Ready' :
-                                             categoryPagePost.status === PostStatus.PUBLISHED ? 'Live' : 'Pending'}
-                                        </span>
-                                    )}
-                                >
-                                    {categoryPagePost ? (
-                                        <div className="space-y-6">
-                                            {/* Generating State */}
-                                            {categoryPagePost.status === PostStatus.GENERATING && (
-                                                <div className="py-6 text-center border border-slate-800 bg-slate-950/50">
-                                                    <LoadingBar className="w-32 mx-auto mb-3" />
-                                                    <p className="text-slate-400 text-sm">Generating category page content...</p>
-                                                </div>
-                                            )}
+                                {/* ========== SUMMARY CARD ========== */}
+                                <CategorySummaryCard
+                                    category={selectedCategory}
+                                    categoryPagePost={categoryPagePost}
+                                    keywords={categoryKeywords}
+                                    keywordsLoading={keywordsLoading}
+                                    researchStatus={
+                                        selectedCategory.googleDeepResearch?.status === 'running' ? 'running' :
+                                        selectedCategory.googleDeepResearch?.status === 'complete' ? 'complete' :
+                                        'none'
+                                    }
+                                    articleIdeasCount={filteredPosts.length}
+                                    onRunResearch={() => {
+                                        if (onQueueGoogleDeepResearch && selectedCategoryId) {
+                                            onQueueGoogleDeepResearch(selectedCategoryId);
+                                        }
+                                    }}
+                                    onViewKeywords={() => setShowKeywordModal(true)}
+                                    onRefreshKeywords={handleRefreshKeywords}
+                                    onUpdatePost={onUpdatePost}
+                                    onUpdateCategory={onUpdateCategory}
+                                    onCreateCategoryPage={onCreateCategoryPage ? () => {
+                                        onCreateCategoryPage(selectedCategory.id, selectedCategory.name, selectedCategory.description);
+                                    } : undefined}
+                                    onApplyResearch={async () => {
+                                        // Confirm before deleting everything
+                                        const confirmed = window.confirm(
+                                            `This will delete all ${filteredPosts.length} existing article ideas and regenerate everything using the research.\n\nAre you sure?`
+                                        );
+                                        if (!confirmed) return;
 
-                                            {/* Hero Image */}
-                                            <div>
-                                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest block mb-3">Hero Image</label>
-                                                <ImageInspectorControl
-                                                    currentImage={categoryPagePost.heroImage}
-                                                    postTitle={categoryPagePost.title}
-                                                    postTeaser={categoryPagePost.categoryPageContent?.aiInstructions || ''}
-                                                    onImageUpdate={async (imageData) => {
-                                                        await onUpdatePost(categoryPagePost.id, { heroImage: imageData });
-                                                    }}
-                                                />
-                                            </div>
+                                        // Delete all existing posts for this category (except category page)
+                                        // IMPORTANT: Wait for all deletions to complete before generating new titles
+                                        const postsToDelete = filteredPosts.filter(post => !post.isCategoryPage);
+                                        await Promise.all(postsToDelete.map(post => onDeletePost(post.id)));
 
-                                            {/* Page Introduction */}
-                                            <div>
-                                                <div className="flex items-center justify-between mb-3">
-                                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Page Introduction</label>
-                                                    <div className="flex items-center gap-2">
-                                                        <button
-                                                            onClick={() => setCategoryPageEditMode(!categoryPageEditMode)}
-                                                            disabled={categoryPagePost.status === PostStatus.GENERATING}
-                                                            className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
-                                                                categoryPageEditMode
-                                                                    ? 'bg-purple-600 hover:bg-purple-500 text-white'
-                                                                    : 'bg-slate-700 hover:bg-slate-600 text-slate-200'
-                                                            } disabled:opacity-50 disabled:cursor-not-allowed`}
-                                                        >
-                                                            {categoryPageEditMode ? <><Save size={12} /> Save</> : <><Edit2 size={12} /> Edit</>}
-                                                        </button>
-                                                        <button
-                                                            onClick={() => {
-                                                                if (confirm('This will regenerate the category page content using AI. Your current content will be overwritten. Continue?')) {
-                                                                    onQueueCategoryPageRegenerate?.(categoryPagePost);
-                                                                }
-                                                            }}
-                                                            disabled={categoryPagePost.status === PostStatus.GENERATING}
-                                                            className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-                                                        >
-                                                            <RefreshCw size={12} className={categoryPagePost.status === PostStatus.GENERATING ? 'animate-spin' : ''} />
-                                                            Regenerate
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                                {categoryPagePost.status === PostStatus.GENERATING ? (
-                                                    <div className="py-8 text-center text-slate-600">
-                                                        <p>Content is being generated...</p>
-                                                    </div>
-                                                ) : categoryPageEditMode ? (
-                                                    <TiptapEditor
-                                                        content={categoryPagePost.categoryPageContent?.introduction || categoryPagePost.content || ''}
-                                                        onChange={(val) => onUpdatePost(categoryPagePost.id, {
-                                                            content: val,
-                                                            categoryPageContent: {
-                                                                ...categoryPagePost.categoryPageContent,
-                                                                introduction: val
-                                                            }
-                                                        })}
-                                                        placeholder="Write the category page introduction..."
-                                                    />
-                                                ) : (categoryPagePost.categoryPageContent?.introduction || categoryPagePost.content) ? (
-                                                    <div className="bg-slate-950 border border-slate-800 p-4">
-                                                        <TiptapViewer content={categoryPagePost.categoryPageContent?.introduction || categoryPagePost.content || ''} />
-                                                    </div>
-                                                ) : (
-                                                    <div className="text-center py-8 border-2 border-dashed border-slate-800">
-                                                        <p className="text-slate-500 mb-4">No content generated yet.</p>
-                                                        <button
-                                                            onClick={() => onQueueCategoryPageRegenerate?.(categoryPagePost)}
-                                                            className="px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white text-sm font-bold uppercase tracking-wider"
-                                                        >
-                                                            <Sparkles size={14} className="inline mr-2" />
-                                                            Generate with AI
-                                                        </button>
-                                                    </div>
-                                                )}
-                                            </div>
+                                        // Generate new category description from research using AI
+                                        const researchContent = selectedCategory.googleDeepResearch?.content;
+                                        if (researchContent && onUpdateCategory) {
+                                            try {
+                                                const { GoogleGenAI } = await import('@google/genai');
+                                                const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+                                                if (apiKey) {
+                                                    const ai = new GoogleGenAI({ apiKey });
 
-                                            {/* AI Instructions (Private) - Collapsible */}
-                                            <div className="bg-slate-950/50 border border-slate-800 p-4">
-                                                <button
-                                                    onClick={() => setShowAiInstructions(!showAiInstructions)}
-                                                    className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase tracking-widest hover:text-slate-400 transition-colors"
-                                                >
-                                                    {showAiInstructions ? <EyeOff size={12} /> : <Eye size={12} />}
-                                                    AI Generation Instructions (Private)
-                                                </button>
-                                                <AnimatePresence>
-                                                    {showAiInstructions && (
-                                                        <motion.div
-                                                            initial={{ height: 0, opacity: 0 }}
-                                                            animate={{ height: 'auto', opacity: 1 }}
-                                                            exit={{ height: 0, opacity: 0 }}
-                                                            transition={{ duration: 0.2 }}
-                                                            className="overflow-hidden"
-                                                        >
-                                                            <textarea
-                                                                value={categoryPagePost.categoryPageContent?.aiInstructions || ''}
-                                                                onChange={(e) => onUpdatePost(categoryPagePost.id, {
-                                                                    categoryPageContent: {
-                                                                        ...categoryPagePost.categoryPageContent,
-                                                                        introduction: categoryPagePost.categoryPageContent?.introduction || '',
-                                                                        aiInstructions: e.target.value
-                                                                    }
-                                                                })}
-                                                                className="w-full mt-3 bg-slate-900 border border-slate-700 p-3 text-sm text-slate-300 min-h-[100px] focus:border-purple-500 outline-none resize-y"
-                                                                placeholder="Instructions for AI when generating/regenerating this page..."
-                                                            />
-                                                            <p className="text-xs text-slate-600 mt-2">
-                                                                These instructions are used when generating content but are not displayed on the published page.
-                                                            </p>
-                                                        </motion.div>
-                                                    )}
-                                                </AnimatePresence>
-                                            </div>
+                                                    const prompt = `Based on the following research report, write a concise 1-2 sentence description for the category "${selectedCategory.name}".
 
-                                            {/* Meta Data */}
-                                            <div className="space-y-4">
-                                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest block">SEO & Meta Data</label>
-                                                <div>
-                                                    <label className="text-xs text-slate-400 font-medium block mb-1">Meta Description</label>
-                                                    <textarea
-                                                        value={categoryPagePost.metaDescription || ''}
-                                                        onChange={(e) => onUpdatePost(categoryPagePost.id, { metaDescription: e.target.value })}
-                                                        className="w-full bg-slate-950 border border-slate-700 p-3 text-sm text-slate-200 focus:border-purple-500 outline-none resize-y min-h-[80px]"
-                                                        placeholder="Enter meta description for SEO..."
-                                                    />
-                                                    <div className="flex justify-end mt-1">
-                                                        <span className={`text-[10px] ${(categoryPagePost.metaDescription?.length || 0) > 160 ? 'text-red-500' : 'text-slate-600'}`}>
-                                                            {categoryPagePost.metaDescription?.length || 0}/160
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            </div>
+The description should:
+- Capture the essence of what content this category covers
+- Be engaging and specific (not generic)
+- NOT start with "This category..." or "Content about..."
+- Be written in active voice
 
-                                            {/* Approve/Launch Button */}
-                                            {categoryPagePost.status === PostStatus.NEEDS_REVIEW && (
-                                                <button
-                                                    onClick={() => onUpdatePost(categoryPagePost.id, {
-                                                        status: PostStatus.APPROVED,
-                                                        approvedAt: Timestamp.now()
-                                                    })}
-                                                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2"
-                                                >
-                                                    <CheckCircle size={16} />
-                                                    Approve for Launch
-                                                </button>
-                                            )}
-                                            {categoryPagePost.status === PostStatus.APPROVED && (
-                                                <div className="flex items-center gap-2 py-3 px-4 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm">
-                                                    <CheckCircle size={16} />
-                                                    <span>Ready to launch - will be published with your next site build</span>
-                                                </div>
-                                            )}
-                                        </div>
-                                    ) : (
-                                        <div className="text-center py-8 border-2 border-dashed border-slate-800">
-                                            <p className="text-slate-500">Category page will be created when articles are generated.</p>
-                                        </div>
-                                    )}
-                                </CollapsibleSection>
+Research Report:
+${researchContent.substring(0, 4000)}
 
-                                {/* ========== RESEARCH SECTION ========== */}
-                                <CollapsibleSection
-                                    title="Research"
-                                    icon={<Target size={16} className="text-emerald-400" />}
-                                    accentColor="emerald"
-                                    defaultExpanded={false}
-                                    badge={selectedCategory?.googleDeepResearch?.status === 'complete' && (
-                                        <span className="px-2 py-0.5 text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-400">
-                                            Complete
-                                        </span>
-                                    )}
-                                >
-                                    <div className="space-y-4">
-                                        {/* Deep Research Toggle */}
-                                        {canUseGoogleDeepResearch ? (
-                                            <div className="flex items-center justify-between p-4 bg-slate-950 border border-slate-800">
-                                                <div className="flex items-center gap-3">
-                                                    <Zap size={18} className="text-amber-400" />
-                                                    <div>
-                                                        <p className="text-sm font-medium text-white">Google Deep Research</p>
-                                                        <p className="text-xs text-slate-500">Uses AI with Google Search for expert-level insights (20 credits)</p>
-                                                    </div>
-                                                </div>
-                                                <label className="relative inline-flex items-center cursor-pointer">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={selectedCategory?.enableGoogleDeepResearch || false}
-                                                        onChange={(e) => onUpdateCategory(selectedCategoryId, {
-                                                            enableGoogleDeepResearch: e.target.checked
-                                                        })}
-                                                        className="sr-only peer"
-                                                    />
-                                                    <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
-                                                </label>
-                                            </div>
-                                        ) : (
-                                            <div className="p-4 bg-slate-950 border border-slate-800 text-center">
-                                                <Zap size={24} className="text-slate-600 mx-auto mb-2" />
-                                                <p className="text-sm text-slate-400 mb-2">Google Deep Research is available on Professional plans</p>
-                                                <button className="text-xs text-cyan-400 hover:text-cyan-300 font-medium">
-                                                    Upgrade to unlock
-                                                </button>
-                                            </div>
-                                        )}
+Respond with ONLY the description, nothing else.`;
 
-                                        {/* Research Status & Action */}
-                                        {selectedCategory?.googleDeepResearch?.status === 'running' ? (
-                                            <div className="py-6 text-center">
-                                                <LoadingBar className="w-32 mx-auto mb-3" />
-                                                <p className="text-slate-400 text-sm">Researching {selectedCategory.name}...</p>
-                                                <p className="text-xs text-slate-600 mt-1">This may take up to a minute</p>
-                                            </div>
-                                        ) : selectedCategory?.googleDeepResearch?.status === 'complete' ? (
-                                            <div className="space-y-4">
-                                                {/* Research Results Header */}
-                                                <div className="flex items-center justify-between">
-                                                    <span className="text-xs font-bold text-emerald-400 uppercase tracking-widest">Research Complete</span>
-                                                    <button
-                                                        onClick={() => setShowResearchModal(true)}
-                                                        className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded transition-colors"
-                                                    >
-                                                        <Maximize2 size={12} />
-                                                        View Full Report
-                                                    </button>
-                                                </div>
-                                                {/* Research Preview */}
-                                                <div
-                                                    className="bg-slate-950 border border-slate-800 p-4 max-h-[200px] overflow-hidden relative cursor-pointer group"
-                                                    onClick={() => setShowResearchModal(true)}
-                                                >
-                                                    <div
-                                                        className="prose prose-invert prose-sm prose-headings:text-slate-200 prose-headings:font-bold prose-h2:text-sm prose-p:text-slate-400 prose-li:text-slate-400 prose-strong:text-slate-300"
-                                                        dangerouslySetInnerHTML={{
-                                                            __html: marked.parse(stripPreamble(selectedCategory.googleDeepResearch.content).substring(0, 800) + '...') as string
-                                                        }}
-                                                    />
-                                                    <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-slate-950 to-transparent flex items-end justify-center pb-2">
-                                                        <span className="text-xs text-emerald-400 group-hover:text-emerald-300">Click to view full report</span>
-                                                    </div>
-                                                </div>
-                                                <button
-                                                    onClick={() => {
-                                                        if (categoryPagePost) {
-                                                            onQueueCategoryPageRegenerate?.(categoryPagePost);
-                                                        }
-                                                    }}
-                                                    disabled={!categoryPagePost || categoryPagePost.status === PostStatus.GENERATING}
-                                                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2"
-                                                >
-                                                    <RefreshCw size={14} />
-                                                    Update using deep research
-                                                </button>
-                                            </div>
-                                        ) : (
-                                            <button
-                                                onClick={() => onQueueGoogleDeepResearch?.(selectedCategoryId)}
-                                                disabled={!selectedCategory?.enableGoogleDeepResearch || !canUseGoogleDeepResearch}
-                                                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2"
-                                            >
-                                                <Target size={14} />
-                                                Run Research (20 credits)
-                                            </button>
-                                        )}
-                                    </div>
-                                </CollapsibleSection>
+                                                    const result = await ai.models.generateContent({
+                                                        model: 'gemini-2.0-flash',
+                                                        contents: prompt
+                                                    });
+                                                    const newDescription = result.text?.trim() || '';
+                                                    if (newDescription && newDescription.length > 10) {
+                                                        await onUpdateCategory(selectedCategory.id, { description: newDescription });
+                                                    }
+                                                }
+                                            } catch (err) {
+                                                console.error('Failed to regenerate category description:', err);
+                                            }
+                                        }
+
+                                        // Regenerate category page (intro/description) using research
+                                        if (categoryPagePost && onQueueCategoryPageRegenerate) {
+                                            // Category page exists - regenerate it
+                                            onQueueCategoryPageRegenerate(categoryPagePost);
+                                        } else if (onCreateCategoryPage) {
+                                            // No category page yet - create one (will use research context)
+                                            onCreateCategoryPage(selectedCategory.id, selectedCategory.name, selectedCategory.description);
+                                        }
+
+                                        // Generate new article ideas (10 by default)
+                                        onQueueTitles(selectedCategory.id, 10, selectedCategory.description || '');
+                                    }}
+                                    onViewResearchReport={() => setShowResearchModal(true)}
+                                    researchReport={selectedCategory.googleDeepResearch?.content}
+                                />
 
                                 {/* ========== ARTICLE IDEAS SECTION ========== */}
-                                <CollapsibleSection
-                                    title="Article Ideas"
-                                    icon={<FileText size={16} className="text-cyan-400" />}
-                                    accentColor="cyan"
-                                    badge={filteredPosts.length > 0 && (
-                                        <span className="px-2 py-0.5 text-[10px] font-bold bg-cyan-500/20 text-cyan-400">
-                                            {filteredPosts.length}
-                                        </span>
-                                    )}
-                                >
+                                <div className="border-b border-slate-800">
+                                    {/* Section Header */}
+                                    <div className="px-6 py-4 flex items-center gap-3 border-b border-slate-800/50">
+                                        <FileText size={16} className="text-cyan-400" />
+                                        <span className="text-xs font-bold uppercase tracking-widest text-slate-400">Article Ideas</span>
+                                        {filteredPosts.length > 0 && (
+                                            <span className="px-2 py-0.5 text-[10px] font-bold bg-cyan-500/20 text-cyan-400">
+                                                {filteredPosts.length}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="px-6 pb-6">
                                     {/* Bulk Actions Toolbar */}
                                     {selectedPostIds.size > 0 && (
                                         <div className="flex items-center justify-between bg-slate-900 p-2 border border-slate-800 mb-4">
@@ -2043,7 +2703,8 @@ export const CategoryWorkspace: React.FC<Props> = ({
                                 </tbody>
                             </table>
                                     )}
-                                </CollapsibleSection>
+                                    </div>
+                                </div>
                             </>
                         ) : (
                             /* Empty State when no category selected */
@@ -2069,12 +2730,14 @@ export const CategoryWorkspace: React.FC<Props> = ({
                         parentName={categories.find(c => c.id === creatorParentId)?.name}
                         parentDescription={categories.find(c => c.id === creatorParentId)?.description}
                         onClose={() => setIsCreatorOpen(false)}
-                        onAddBatch={(cats) => {
-                            cats.forEach(c => onAddCategory(c.name, creatorParentId, c.description));
+                        onAddBatch={(cats, runResearchFirst) => {
+                            cats.forEach(c => onAddCategory(c.name, creatorParentId, c.description, runResearchFirst));
                             setIsCreatorOpen(false);
                         }}
                         organizationId={organizationId}
                         projectId={projectId}
+                        isAddingCategory={isAddingCategory}
+                        canUseDeepResearch={(organization?.credits?.balance ?? 0) >= 20}
                     />
                 )}
 
@@ -2154,6 +2817,24 @@ export const CategoryWorkspace: React.FC<Props> = ({
                             </div>
                         </div>
                     </div>
+                )}
+
+                {/* Keyword Research Modal */}
+                {showKeywordModal && selectedCategory && (
+                    <KeywordResearchModal
+                        category={selectedCategory}
+                        keywords={categoryKeywords}
+                        onClose={() => setShowKeywordModal(false)}
+                        onRefresh={handleRefreshKeywords}
+                        onGenerateIdeasForKeywords={(keywords) => {
+                            // Close modal and open GenModal with keyword context
+                            setShowKeywordModal(false);
+                            setGenCategory(selectedCategory);
+                            setIsGenModalOpen(true);
+                            // Note: The keywords could be passed to the generation prompt via contextOverride
+                        }}
+                        isRefreshing={keywordsRefreshing}
+                    />
                 )}
             </AnimatePresence>
         </>

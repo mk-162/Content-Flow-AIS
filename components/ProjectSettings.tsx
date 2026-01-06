@@ -589,56 +589,138 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
                         <h2 className="text-lg font-bold text-slate-200">Auto-Generation</h2>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                        <div className="space-y-4">
+                    <p className="text-slate-400 text-sm">
+                        Control what gets generated automatically when new categories are created or when content runs low.
+                    </p>
+
+                    {/* Toggle Cards */}
+                    <div className="space-y-3">
+                        {/* Auto Stubs */}
+                        <div className="bg-slate-950 border border-slate-700 p-4">
                             <div className="flex items-center justify-between">
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-300">
-                                        Enable Auto-Generation
-                                    </label>
+                                <div className="flex-1">
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-slate-200 font-medium">Auto-Generate Article Ideas</span>
+                                        <span className="px-2 py-0.5 text-[10px] font-bold bg-emerald-500/20 text-emerald-400 rounded">
+                                            {CREDIT_COSTS.TITLE_GENERATION} credit/stub
+                                        </span>
+                                    </div>
                                     <p className="text-xs text-slate-500 mt-1">
-                                        Automatically generate stubs when categories fall below threshold
+                                        Generate stubs when categories fall below threshold
                                     </p>
                                 </div>
                                 <button
                                     type="button"
                                     onClick={() => setAutoGenEnabled(!autoGenEnabled)}
-                                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${autoGenEnabled ? 'bg-emerald-500' : 'bg-slate-700'
-                                        }`}
+                                    className={`relative w-12 h-6 rounded-full transition-colors ${autoGenEnabled ? 'bg-emerald-500' : 'bg-slate-700'}`}
                                 >
-                                    <span
-                                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${autoGenEnabled ? 'translate-x-5' : 'translate-x-0'
-                                            }`}
+                                    <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${autoGenEnabled ? 'translate-x-6' : ''}`} />
+                                </button>
+                            </div>
+                            {autoGenEnabled && (
+                                <div className="mt-4 pt-4 border-t border-slate-800">
+                                    <label className="block text-xs font-medium text-slate-400 mb-2">
+                                        Minimum stubs per category: <span className="text-emerald-400 font-bold">{stubThreshold}</span>
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="1"
+                                        max="25"
+                                        value={stubThreshold}
+                                        onChange={(e) => setStubThreshold(Number(e.target.value))}
+                                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
                                     />
+                                    <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                                        <span>1</span>
+                                        <span>25</span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Deep Research Before Stubs */}
+                        <div className={`bg-slate-950 border p-4 ${canUseDeepResearch ? 'border-slate-700' : 'border-slate-800 opacity-60'}`}>
+                            <div className="flex items-center justify-between">
+                                <div className="flex-1">
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-slate-200 font-medium">Run Deep Research First</span>
+                                        <span className="px-2 py-0.5 text-[10px] font-bold bg-amber-500/20 text-amber-400 rounded">
+                                            {CREDIT_COSTS.GOOGLE_DEEP_RESEARCH} credits/category
+                                        </span>
+                                        {!canUseDeepResearch && (
+                                            <span className="px-2 py-0.5 text-[10px] font-bold bg-slate-700 text-slate-400 rounded">
+                                                Professional+
+                                            </span>
+                                        )}
+                                    </div>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Research category before generating stubs for better keyword targeting
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => canUseDeepResearch && setEnableDeepResearch(!enableDeepResearch)}
+                                    disabled={!canUseDeepResearch}
+                                    className={`relative w-12 h-6 rounded-full transition-colors ${enableDeepResearch && canUseDeepResearch ? 'bg-amber-500' : 'bg-slate-700'} ${!canUseDeepResearch ? 'cursor-not-allowed' : ''}`}
+                                >
+                                    <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${enableDeepResearch && canUseDeepResearch ? 'translate-x-6' : ''}`} />
+                                </button>
+                            </div>
+                            {enableDeepResearch && canUseDeepResearch && (
+                                <div className="mt-3 p-3 bg-amber-500/5 border border-amber-500/20 text-amber-400 text-xs">
+                                    <strong>Workflow:</strong> New categories → Deep Research → Then generate stubs with research data
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Auto Images */}
+                        <div className="bg-slate-950 border border-slate-700 p-4">
+                            <div className="flex items-center justify-between">
+                                <div className="flex-1">
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-slate-200 font-medium">Auto-Generate Hero Images</span>
+                                        <span className="px-2 py-0.5 text-[10px] font-bold bg-pink-500/20 text-pink-400 rounded">
+                                            {CREDIT_COSTS.IMAGE_GENERATION} credits/image
+                                        </span>
+                                    </div>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Generate hero image when article content is created
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={async () => {
+                                        const newValue = !(project.settings?.imageGeneration?.autoGenerate ?? true);
+                                        setLoading(true);
+                                        try {
+                                            const projectRef = doc(db, `organizations/${project.organizationId}/projects/${project.id}`);
+                                            await updateDoc(projectRef, {
+                                                'settings.imageGeneration.autoGenerate': newValue,
+                                                updatedAt: new Date()
+                                            });
+                                            onUpdate();
+                                        } catch (error) {
+                                            console.error('Error saving image settings:', error);
+                                        } finally {
+                                            setLoading(false);
+                                        }
+                                    }}
+                                    className={`relative w-12 h-6 rounded-full transition-colors ${(project.settings?.imageGeneration?.autoGenerate ?? true) ? 'bg-pink-500' : 'bg-slate-700'}`}
+                                >
+                                    <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${(project.settings?.imageGeneration?.autoGenerate ?? true) ? 'translate-x-6' : ''}`} />
                                 </button>
                             </div>
                         </div>
+                    </div>
 
-                        <div className="space-y-4">
-                            <label className="block text-sm font-medium text-slate-400">
-                                Stub Threshold per Category
-                            </label>
-                            <div className="space-y-3">
-                                <input
-                                    type="range"
-                                    min="1"
-                                    max="25"
-                                    value={stubThreshold}
-                                    onChange={(e) => setStubThreshold(Number(e.target.value))}
-                                    disabled={!autoGenEnabled}
-                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500 disabled:opacity-50"
-                                />
-                                <div className="flex justify-between text-xs text-slate-500">
-                                    <span>1</span>
-                                    <span className="text-emerald-400 font-bold text-lg">{stubThreshold}</span>
-                                    <span>25</span>
-                                </div>
-                            </div>
-                            <p className="text-xs text-slate-500 leading-relaxed">
-                                When a category has fewer than {stubThreshold} stub{stubThreshold !== 1 ? 's' : ''},
-                                new stubs will be auto-generated. Each stub costs 1 credit.
-                            </p>
-                        </div>
+                    {/* Cost Summary */}
+                    <div className="bg-slate-950/50 border border-slate-800 p-4 mt-4">
+                        <p className="text-xs text-slate-500">
+                            <strong className="text-slate-400">Estimated cost per new category:</strong>{' '}
+                            {autoGenEnabled ? `${stubThreshold} credits (stubs)` : '0 credits'}
+                            {enableDeepResearch && canUseDeepResearch ? ` + ${CREDIT_COSTS.GOOGLE_DEEP_RESEARCH} credits (research)` : ''}
+                            {(project.settings?.imageGeneration?.autoGenerate ?? true) && autoGenEnabled ? ` + ${stubThreshold * CREDIT_COSTS.IMAGE_GENERATION} credits (images)` : ''}
+                        </p>
                     </div>
                 </section>
 
@@ -789,52 +871,6 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
                             <p className="text-xs text-slate-500">
                                 Specific rules or constraints that should apply to all content generated for this project.
                             </p>
-                        </div>
-                    </div>
-                </section>
-
-                {/* Image Generation Settings */}
-                <section className="bg-slate-900 border border-slate-800 p-6 space-y-6">
-                    <div className="flex items-center gap-3 text-pink-400 mb-2">
-                        <Layout size={20} />
-                        <h2 className="text-lg font-bold text-slate-200">Image Generation</h2>
-                    </div>
-
-                    <div className="space-y-6">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <h3 className="text-slate-200 font-bold mb-1">Auto-Generate Images</h3>
-                                <p className="text-slate-500 text-sm">
-                                    Automatically generate a hero image when a new post is created.
-                                </p>
-                            </div>
-                            <label className="relative inline-flex items-center cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={project.settings?.imageGeneration?.autoGenerate ?? true}
-                                    onChange={async (e) => {
-                                        const newValue = e.target.checked;
-                                        // Optimistic update handled by parent refresh, but we can also update local state if we had it.
-                                        // For now, we'll just trigger the save.
-                                        setLoading(true);
-                                        try {
-                                            const projectRef = doc(db, `organizations/${project.organizationId}/projects/${project.id}`);
-                                            await updateDoc(projectRef, {
-                                                'settings.imageGeneration.autoGenerate': newValue,
-                                                updatedAt: new Date()
-                                            });
-                                            setSuccessMsg('Image generation settings saved');
-                                            onUpdate();
-                                        } catch (error) {
-                                            console.error('Error saving image settings:', error);
-                                        } finally {
-                                            setLoading(false);
-                                        }
-                                    }}
-                                    className="sr-only peer"
-                                />
-                                <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-pink-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-pink-600"></div>
-                            </label>
                         </div>
                     </div>
                 </section>

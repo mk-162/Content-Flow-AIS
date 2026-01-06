@@ -284,7 +284,7 @@ export const MainWorkspace: React.FC = () => {
   useEffect(() => {
     const degradedTasks = tasks.filter(
       t => t.status === TaskStatus.COMPLETED &&
-           t.result?.degradedMode === true
+        t.result?.degradedMode === true
     );
 
     // Capture initial degraded task IDs on first load without notifying
@@ -330,16 +330,16 @@ export const MainWorkspace: React.FC = () => {
       const currentTasks = tasksRef.current;
       const currentPosts = postsRef.current;
 
-      // 1. Reset stale PROCESSING tasks (older than 5 minutes)
+      // 1. Reset stale PROCESSING or QUEUED tasks (older than 5 minutes)
       const fiveMinutesAgo = new Date(now - 5 * 60 * 1000);
       const staleTasks = currentTasks.filter(t =>
-        t.status === TaskStatus.PROCESSING &&
+        (t.status === TaskStatus.PROCESSING || t.status === TaskStatus.QUEUED) &&
         t.startedAt && t.startedAt.toDate() < fiveMinutesAgo &&
         !cleanedUpItemsRef.current.has(`task-${t.id}`)
       );
 
       for (const task of staleTasks) {
-        console.log(`[Cleanup] Resetting stale PROCESSING task: ${task.id}`);
+        console.log(`[Cleanup] Resetting stale ${task.status} task: ${task.id}`);
         cleanedUpItemsRef.current.add(`task-${task.id}`);
         try {
           const taskRef = doc(db, 'generationQueue', task.id);
@@ -374,7 +374,7 @@ export const MainWorkspace: React.FC = () => {
       for (const post of generatingPosts) {
         const hasActiveTask = currentTasks.some(
           t => t.targetPostId === post.id &&
-          (t.status === TaskStatus.QUEUED || t.status === TaskStatus.PROCESSING)
+            (t.status === TaskStatus.QUEUED || t.status === TaskStatus.PROCESSING)
         );
 
         if (!hasActiveTask) {
@@ -411,7 +411,8 @@ export const MainWorkspace: React.FC = () => {
   // The client just displays task status from Firestore real-time updates
 
   // Actions
-  const addCategory = async (name: string, parentId: string | null, description?: string) => {
+  const addCategory = async (name: string, parentId: string | null, description?: string, runResearchFirst?: boolean) => {
+    console.log('[addCategory] Called with runResearchFirst:', runResearchFirst);
     if (!currentOrg || !currentProject || !user) return;
 
     // Debounce: prevent duplicate submissions
@@ -495,7 +496,7 @@ export const MainWorkspace: React.FC = () => {
           organizationId: currentOrg.id,
           projectId: currentProject.id,
           categoryId: categoryRef.id,
-          categoryName: name.trim(),
+          categoryName: name.trim(), // Transient hint for AI context only
           targetPostId: categoryPageRef.id,
           status: TaskStatus.QUEUED,
           progress: 0,
@@ -504,19 +505,36 @@ export const MainWorkspace: React.FC = () => {
         });
       }
 
-      // 4. Queue auto-generation stubs (if enabled and has credits)
+      // 4. Queue deep research or auto-generation stubs
       const autoGenSettings = currentProject.settings?.autoGeneration;
       const autoGenEnabled = autoGenSettings?.enabled ?? true;
       const threshold = autoGenSettings?.stubThreshold ?? 5;
+      const RESEARCH_CREDIT_COST = 20;
 
-      if (autoGenEnabled && creditBalance >= threshold + 1) {
+      if (runResearchFirst && creditBalance >= RESEARCH_CREDIT_COST) {
+        // User chose to run deep research first - stubs will be chained after research completes
+        console.log('[addCategory] Queueing DEEP RESEARCH for:', name.trim());
+        const researchTaskRef = doc(collection(db, 'generationQueue'));
+        batch.set(researchTaskRef, {
+          type: TaskType.GOOGLE_DEEP_RESEARCH,
+          organizationId: currentOrg.id,
+          projectId: currentProject.id,
+          categoryId: categoryRef.id,
+          categoryName: name.trim(),
+          status: TaskStatus.QUEUED,
+          progress: 0,
+          createdBy: user.id,
+          startedAt: now,
+        });
+      } else if (autoGenEnabled && creditBalance >= threshold + 1) {
+        // No research requested - queue stubs directly
         const stubTaskRef = doc(collection(db, 'generationQueue'));
         batch.set(stubTaskRef, {
           type: TaskType.GENERATE_TITLES,
           organizationId: currentOrg.id,
           projectId: currentProject.id,
           categoryId: categoryRef.id,
-          categoryName: name.trim(),
+          categoryName: name.trim(), // Transient hint for AI context only
           status: TaskStatus.QUEUED,
           progress: 0,
           createdBy: user.id,
@@ -529,7 +547,9 @@ export const MainWorkspace: React.FC = () => {
       await batch.commit();
 
       notify(`Added category: ${name}`, 'success');
-      if (autoGenEnabled && creditBalance >= threshold + 1) {
+      if (runResearchFirst && creditBalance >= RESEARCH_CREDIT_COST) {
+        notify(`Running deep research for ${name} (stubs will follow)`);
+      } else if (autoGenEnabled && creditBalance >= threshold + 1) {
         notify(`Auto-generating ${threshold} stubs for ${name}`);
       }
     } catch (error) {
@@ -624,7 +644,7 @@ export const MainWorkspace: React.FC = () => {
         organizationId: currentOrg.id,
         projectId: currentProject.id,
         categoryId,
-        categoryName: cat.name,
+        categoryName: cat.name, // Transient hint for AI context only
         status: TaskStatus.QUEUED,
         progress: 0,
         createdBy: user.id,
@@ -843,7 +863,7 @@ export const MainWorkspace: React.FC = () => {
           organizationId: currentOrg.id,
           projectId: currentProject.id,
           categoryId: categoryId,
-          categoryName: categoryName,
+          categoryName: categoryName, // Transient hint for AI context
           targetPostId: categoryPageRef.id,
           status: TaskStatus.QUEUED,
           progress: 0,
@@ -1067,113 +1087,113 @@ export const MainWorkspace: React.FC = () => {
           </div>
         </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden bg-[#0f172a] relative">
-        {/* Credit Modal (for insufficient credits) */}
-        <CreditManagementModal
-          isOpen={isCreditModalOpen}
-          onClose={() => setIsCreditModalOpen(false)}
-        />
+        {/* Main Content */}
+        <main className="flex-1 flex flex-col h-full overflow-hidden bg-[#0f172a] relative">
+          {/* Credit Modal (for insufficient credits) */}
+          <CreditManagementModal
+            isOpen={isCreditModalOpen}
+            onClose={() => setIsCreditModalOpen(false)}
+          />
 
-        {/* Migration Confirmation Modal */}
-        <MigrationConfirmationModal
-          isOpen={showMigrationModal}
-          onClose={() => setShowMigrationModal(false)}
-          onConfirm={async () => {
-            await autoGen.confirmMigration();
-            setShowMigrationModal(false);
-          }}
-          onDisable={async () => {
-            await autoGen.dismissMigration();
-            setShowMigrationModal(false);
-          }}
-          categoriesNeedingStubs={autoGen.categoriesBelowThreshold}
-          totalStubsNeeded={autoGen.totalStubsNeeded}
-          creditBalance={currentOrg?.credits?.balance ?? 0}
-          isLoading={autoGen.isGenerating}
-        />
+          {/* Migration Confirmation Modal */}
+          <MigrationConfirmationModal
+            isOpen={showMigrationModal}
+            onClose={() => setShowMigrationModal(false)}
+            onConfirm={async () => {
+              await autoGen.confirmMigration();
+              setShowMigrationModal(false);
+            }}
+            onDisable={async () => {
+              await autoGen.dismissMigration();
+              setShowMigrationModal(false);
+            }}
+            categoriesNeedingStubs={autoGen.categoriesBelowThreshold}
+            totalStubsNeeded={autoGen.totalStubsNeeded}
+            creditBalance={currentOrg?.credits?.balance ?? 0}
+            isLoading={autoGen.isGenerating}
+          />
 
-        {/* Notifications */}
-        <div className="fixed top-0 left-0 right-0 z-50 flex flex-col items-center gap-2 pointer-events-none">
-          {notifications.map((n) => (
-            <div
-              key={n.id}
-              className={`
+          {/* Notifications */}
+          <div className="fixed top-0 left-0 right-0 z-50 flex flex-col items-center gap-2 pointer-events-none">
+            {notifications.map((n) => (
+              <div
+                key={n.id}
+                className={`
                     pointer-events-auto flex items-center justify-center px-6 py-3 shadow-2xl min-w-[300px] animate-in slide-in-from-top-5 duration-200
                     ${n.type === 'success'
-                  ? 'bg-emerald-600 text-white'
-                  : 'bg-slate-800 text-cyan-400 border-b border-cyan-500'
-                }
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-slate-800 text-cyan-400 border-b border-cyan-500'
+                  }
                 `}
-            >
-              <span className="font-mono font-bold text-sm">{n.msg}</span>
-            </div>
-          ))}
-        </div>
+              >
+                <span className="font-mono font-bold text-sm">{n.msg}</span>
+              </div>
+            ))}
+          </div>
 
-        {currentScreen === Screen.CATEGORIES && (
-          <div className="flex-1 w-full h-full overflow-hidden">
-            <CategoryWorkspace
-              categories={categories}
+          {currentScreen === Screen.CATEGORIES && (
+            <div className="flex-1 w-full h-full overflow-hidden">
+              <CategoryWorkspace
+                categories={categories}
+                posts={posts}
+                tasks={tasks}
+                isAddingCategory={isAddingCategory}
+                onAddCategory={addCategory}
+                onUpdateCategory={updateCategory}
+                onDeleteCategory={deleteCategory}
+                onMoveCategory={moveCategory}
+                onQueueTitles={queueTitleGeneration}
+                onQueueContent={queueContentGeneration}
+                onQueueCategoryPageRegenerate={queueCategoryPageRegenerate}
+                onQueueGoogleDeepResearch={queueGoogleDeepResearch}
+                onCreateCategoryPage={createCategoryPage}
+                onUpdatePost={updatePostFields}
+                onDeletePost={deletePost}
+                organizationId={currentOrg?.id}
+                projectId={currentProject?.id}
+                organization={currentOrg || undefined}
+                project={currentProject || undefined}
+              />
+            </div>
+          )}
+
+          {currentScreen === Screen.POSTS && (
+            <PostsWorkspace
               posts={posts}
+              categories={categories}
               tasks={tasks}
-              isAddingCategory={isAddingCategory}
-              onAddCategory={addCategory}
-              onUpdateCategory={updateCategory}
-              onDeleteCategory={deleteCategory}
-              onMoveCategory={moveCategory}
-              onQueueTitles={queueTitleGeneration}
-              onQueueContent={queueContentGeneration}
-              onQueueCategoryPageRegenerate={queueCategoryPageRegenerate}
-              onQueueGoogleDeepResearch={queueGoogleDeepResearch}
-              onCreateCategoryPage={createCategoryPage}
+              onUpdateStatus={updatePostStatus}
               onUpdatePost={updatePostFields}
               onDeletePost={deletePost}
-              organizationId={currentOrg?.id}
-              projectId={currentProject?.id}
-              organization={currentOrg || undefined}
-              project={currentProject || undefined}
-            />
-          </div>
-        )}
-
-        {currentScreen === Screen.POSTS && (
-          <PostsWorkspace
-            posts={posts}
-            categories={categories}
-            tasks={tasks}
-            onUpdateStatus={updatePostStatus}
-            onUpdatePost={updatePostFields}
-            onDeletePost={deletePost}
-            onQueueContent={queueContentGeneration}
-            project={currentProject}
-            organization={currentOrg}
-          />
-        )}
-
-        {currentScreen === Screen.LIVE_POSTS && (
-          <LivePostsWorkspace
-            posts={posts}
-            categories={categories}
-            onUpdateStatus={updatePostStatus}
-            onUpdatePost={updatePostFields}
-            onDeletePost={deletePost}
-            project={currentProject}
-            organization={currentOrg}
-          />
-        )}
-
-        {currentScreen === Screen.SETTINGS && currentProject && (
-          <div className="flex-1 w-full h-full overflow-hidden">
-            <ProjectSettings
+              onQueueContent={queueContentGeneration}
               project={currentProject}
-              onUpdate={() => {
-                notify('Project settings updated', 'success');
-              }}
+              organization={currentOrg}
             />
-          </div>
-        )}
-      </main>
+          )}
+
+          {currentScreen === Screen.LIVE_POSTS && (
+            <LivePostsWorkspace
+              posts={posts}
+              categories={categories}
+              onUpdateStatus={updatePostStatus}
+              onUpdatePost={updatePostFields}
+              onDeletePost={deletePost}
+              project={currentProject}
+              organization={currentOrg}
+            />
+          )}
+
+          {currentScreen === Screen.SETTINGS && currentProject && (
+            <div className="flex-1 w-full h-full overflow-hidden">
+              <ProjectSettings
+                project={currentProject}
+                onUpdate={() => {
+                  notify('Project settings updated', 'success');
+                }}
+              />
+            </div>
+          )}
+        </main>
       </div>
     </div>
   );

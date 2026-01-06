@@ -380,11 +380,10 @@ export const ProjectDashboard: React.FC = () => {
       <div className="flex-1 overflow-y-auto">
         {/* Notification Toast */}
         {notification && (
-          <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 ${
-            notification.type === 'success'
+          <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 ${notification.type === 'success'
               ? 'bg-emerald-500/90 text-white'
               : 'bg-red-500/90 text-white'
-          }`}>
+            }`}>
             <span className="text-sm font-medium">{notification.message}</span>
             <button
               onClick={() => setNotification(null)}
@@ -576,7 +575,7 @@ export const ProjectDashboard: React.FC = () => {
                         <div className="h-5 mt-1">
                           {stats.channelUrl && (
                             <a
-                              href={`https://${stats.channelUrl}`}
+                              href={stats.channelUrl.startsWith('http://') || stats.channelUrl.startsWith('https://') ? stats.channelUrl : `https://${stats.channelUrl}`}
                               target="_blank"
                               rel="noopener noreferrer"
                               onClick={(e) => e.stopPropagation()}
@@ -674,11 +673,10 @@ export const ProjectDashboard: React.FC = () => {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: index * 0.05, duration: 0.3 }}
-                        className={`bg-slate-900/50 border border-slate-700 p-4 transition-all ${
-                          isCreating
+                        className={`bg-slate-900/50 border border-slate-700 p-4 transition-all ${isCreating
                             ? 'border-cyan-500/50 opacity-80'
                             : 'hover:border-cyan-500/30 cursor-pointer'
-                        } group`}
+                          } group`}
                         onClick={() => !hasHitProjectLimit && !creatingChannelId && handleCreateFromChannel(channel)}
                       >
                         {/* Channel Type Badge */}
@@ -757,11 +755,10 @@ export const ProjectDashboard: React.FC = () => {
                         navigate('/onboarding?mode=existing');
                       }
                     }}
-                    className={`inline-flex items-center gap-2 py-2.5 px-5 text-xs font-bold uppercase tracking-wider transition-colors ${
-                      hasHitProjectLimit
+                    className={`inline-flex items-center gap-2 py-2.5 px-5 text-xs font-bold uppercase tracking-wider transition-colors ${hasHitProjectLimit
                         ? 'bg-slate-700 text-slate-400'
                         : 'bg-cyan-600 hover:bg-cyan-500 text-white'
-                    }`}
+                      }`}
                   >
                     {hasHitProjectLimit && <Lock className="w-3.5 h-3.5" />}
                     <Plus className="w-3.5 h-3.5" />

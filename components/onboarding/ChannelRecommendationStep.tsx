@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   FileText,
@@ -200,8 +200,17 @@ export const ChannelRecommendationStep: React.FC = () => {
     previousStep,
   } = useOnboarding();
 
+  const [validationError, setValidationError] = useState<string | null>(null);
+
   const channels = session?.channelRecommendations || [];
   const selectedChannel = session?.selectedChannel;
+
+  // Clear validation error when user selects a channel
+  useEffect(() => {
+    if (selectedChannel) {
+      setValidationError(null);
+    }
+  }, [selectedChannel]);
 
   // Generate recommendations on mount if not already done
   useEffect(() => {
@@ -211,9 +220,11 @@ export const ChannelRecommendationStep: React.FC = () => {
   }, [channels.length, loading, generateChannelRecommendations]);
 
   const handleContinue = () => {
-    if (selectedChannel) {
-      nextStep();
+    if (!selectedChannel) {
+      setValidationError('Please select a channel to continue');
+      return;
     }
+    nextStep();
   };
 
   const handleRegenerate = () => {
@@ -307,6 +318,17 @@ export const ChannelRecommendationStep: React.FC = () => {
         </motion.p>
       )}
 
+      {/* Validation Error */}
+      {validationError && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-4 p-3 bg-red-500/10 border border-red-500/30 text-red-400 text-sm text-center rounded"
+        >
+          {validationError}
+        </motion.div>
+      )}
+
       {/* Navigation */}
       <motion.div
         initial={{ opacity: 0 }}
@@ -322,7 +344,7 @@ export const ChannelRecommendationStep: React.FC = () => {
         </button>
         <button
           onClick={handleContinue}
-          disabled={!selectedChannel || loading}
+          disabled={loading}
           className="inline-flex items-center gap-2 px-8 py-3 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white font-bold uppercase tracking-wider transition-colors shadow-lg shadow-cyan-900/20"
         >
           Continue with {selectedChannel ? CHANNEL_TYPE_LABELS[selectedChannel.channelType] : 'Channel'}

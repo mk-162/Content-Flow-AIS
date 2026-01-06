@@ -43,9 +43,9 @@ export function useAutoGeneration(
     useEffect(() => {
         const failedTasks = pendingTasks.filter(
             t => t.type === TaskType.GENERATE_TITLES &&
-                 t.status === TaskStatus.FAILED &&
-                 t.categoryId &&
-                 !processedFailedTaskIds.current.has(`${t.categoryId}-${t.status}`)
+                t.status === TaskStatus.FAILED &&
+                t.categoryId &&
+                !processedFailedTaskIds.current.has(`${t.categoryId}-${t.status}`)
         );
 
         for (const task of failedTasks) {
@@ -154,18 +154,57 @@ export function useAutoGeneration(
 
         if (categoriesToGenerate.length === 0) return;
 
-        // Check credit balance
-        const totalNeeded = categoriesToGenerate.reduce((sum, c) => sum + c.needed, 0);
-        if (creditBalance < totalNeeded) {
-            notify(`Insufficient credits. Need ${totalNeeded}, have ${creditBalance}`);
+        // Check if research-first mode is enabled
+        const researchFirstEnabled = project?.settings?.enableDeepResearch === true;
+
+        // Separate categories by whether they need research first
+        const needsResearch: typeof categoriesToGenerate = [];
+        const readyForStubs: typeof categoriesToGenerate = [];
+
+        for (const item of categoriesToGenerate) {
+            const hasResearch = item.category.googleDeepResearch?.status === 'complete';
+            const researchRunning = item.category.googleDeepResearch?.status === 'running';
+
+            if (researchFirstEnabled && !hasResearch && !researchRunning) {
+                needsResearch.push(item);
+            } else if (!researchRunning) {
+                // Either research-first is off, or category already has research
+                readyForStubs.push(item);
+            }
+            // Skip categories with running research - stubs will be chained when research completes
+        }
+
+        // Calculate credit cost
+        const RESEARCH_CREDIT_COST = 20;
+        const stubCreditsNeeded = readyForStubs.reduce((sum, c) => sum + c.needed, 0);
+        const researchCreditsNeeded = needsResearch.length * RESEARCH_CREDIT_COST;
+        const totalCreditsNeeded = stubCreditsNeeded + researchCreditsNeeded;
+
+        if (creditBalance < totalCreditsNeeded) {
+            notify(`Insufficient credits. Need ${totalCreditsNeeded}, have ${creditBalance}`);
             return;
         }
 
         setIsGenerating(true);
 
         try {
-            // Queue generation for each category
-            for (const { category, needed } of categoriesToGenerate) {
+            // Queue research for categories that need it (stubs will be chained after research)
+            for (const { category } of needsResearch) {
+                await addDoc(collection(db, 'generationQueue'), {
+                    type: TaskType.GOOGLE_DEEP_RESEARCH,
+                    organizationId: orgId,
+                    projectId: project.id,
+                    categoryId: category.id,
+                    categoryName: category.name,
+                    status: TaskStatus.QUEUED,
+                    progress: 0,
+                    createdBy: userId,
+                    startedAt: Timestamp.now(),
+                });
+            }
+
+            // Queue stubs for categories that already have research (or research-first is off)
+            for (const { category, needed } of readyForStubs) {
                 await addDoc(collection(db, 'generationQueue'), {
                     type: TaskType.GENERATE_TITLES,
                     organizationId: orgId,
@@ -180,8 +219,16 @@ export function useAutoGeneration(
                 });
             }
 
-            const totalStubs = categoriesToGenerate.reduce((sum, c) => sum + c.needed, 0);
-            notify(`Auto-generating ${totalStubs} stubs across ${categoriesToGenerate.length} categories`);
+            // Build notification message
+            const parts: string[] = [];
+            if (needsResearch.length > 0) {
+                parts.push(`Deep research on ${needsResearch.length} ${needsResearch.length === 1 ? 'category' : 'categories'} (stubs will follow)`);
+            }
+            if (readyForStubs.length > 0) {
+                const totalStubs = readyForStubs.reduce((sum, c) => sum + c.needed, 0);
+                parts.push(`${totalStubs} article ideas across ${readyForStubs.length} ${readyForStubs.length === 1 ? 'category' : 'categories'}`);
+            }
+            notify(`Generating: ${parts.join(' + ')}`);
         } catch (error) {
             console.error('[useAutoGeneration] Error queuing generation:', error);
             notify('Failed to queue auto-generation');

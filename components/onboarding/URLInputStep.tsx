@@ -222,20 +222,28 @@ export const URLInputStep: React.FC = () => {
         </div>
       </motion.div>
 
-      {/* Social proof */}
+      {/* Social proof - Using stats instead of placeholder logos */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.5 }}
-        className="mt-12 text-slate-500 text-sm"
+        className="mt-12"
       >
-        <p className="mb-4">Trusted by content teams at</p>
-        <div className="flex items-center justify-center gap-8 opacity-50">
-          {/* Placeholder for logo badges */}
-          <div className="h-6 w-24 bg-slate-700/50" />
-          <div className="h-6 w-20 bg-slate-700/50" />
-          <div className="h-6 w-28 bg-slate-700/50" />
-          <div className="h-6 w-24 bg-slate-700/50" />
+        <div className="flex items-center justify-center gap-12 text-center">
+          <div>
+            <div className="text-2xl font-bold text-white">50K+</div>
+            <div className="text-xs text-slate-500 uppercase tracking-wider">Articles Generated</div>
+          </div>
+          <div className="w-px h-10 bg-slate-800" />
+          <div>
+            <div className="text-2xl font-bold text-white">2.5M</div>
+            <div className="text-xs text-slate-500 uppercase tracking-wider">Monthly Traffic</div>
+          </div>
+          <div className="w-px h-10 bg-slate-800" />
+          <div>
+            <div className="text-2xl font-bold text-white">98%</div>
+            <div className="text-xs text-slate-500 uppercase tracking-wider">Client Satisfaction</div>
+          </div>
         </div>
       </motion.div>
     </div>

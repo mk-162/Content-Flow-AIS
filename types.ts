@@ -508,6 +508,17 @@ export interface Post {
     introduction: string;           // Public page intro (WYSIWYG editable)
     aiInstructions?: string;        // Private AI generation context
   };
+  // Rich article brief (generated with title, used for article generation)
+  articleBrief?: {
+    primaryKeyword: string | null;        // Main keyword from research this targets
+    secondaryKeywords: string[];          // Supporting keywords to include
+    articleType: 'how-to' | 'listicle' | 'guide' | 'comparison' | 'case-study' | 'explainer' | 'article';
+    outline: string[];                    // H2 section headings to follow
+    keyPoints: string[];                  // Specific facts/stats to include
+    targetWordCount: number;              // Recommended word count
+    questionsToAnswer: string[];          // Search questions to address
+    generatedAt: Timestamp;
+  };
 }
 
 // Generation Queue
@@ -545,6 +556,8 @@ export interface GenerationTask {
   retryCount?: number;
   lastError?: string;
   nextRetryAt?: Timestamp;
+  // Chaining fields
+  chainedFromResearch?: boolean;  // True if this task was auto-queued after research completed
 }
 
 // Invitations

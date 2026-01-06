@@ -63,6 +63,29 @@ const Tooltip: React.FC<TooltipProps> = ({ content, children }) => {
   );
 };
 
+// ============================================================================
+// NOT SPECIFIED HELPER
+// ============================================================================
+
+interface NotSpecifiedProps {
+  fieldName: string;
+}
+
+const NotSpecified: React.FC<NotSpecifiedProps> = ({ fieldName }) => (
+  <Tooltip
+    content={
+      <div className="space-y-1">
+        <p>We couldn't detect {fieldName.toLowerCase()} from your website.</p>
+        <p className="text-cyan-400">This won't affect generation - we'll use sensible defaults.</p>
+      </div>
+    }
+  >
+    <span className="text-slate-500 italic cursor-help border-b border-dotted border-slate-600">
+      Not specified
+    </span>
+  </Tooltip>
+);
+
 // Get confidence explanation based on level
 const getConfidenceExplanation = (confidence: number, source?: string): string => {
   const sourceText = source ? ` Based on analysis of ${source.toLowerCase()}.` : '';
@@ -620,18 +643,18 @@ export const ProfileReviewStep: React.FC = () => {
                 <p className="text-white whitespace-pre-wrap">{profile.targetAudience.primary}</p>
               </div>
 
-              {(profile.targetAudience.demographics.ageRange || profile.targetAudience.demographics.geographic.length > 0) && (
+              {(profile.targetAudience.demographics?.ageRange || (profile.targetAudience.demographics?.geographic?.length ?? 0) > 0) && (
                 <div className="flex flex-wrap gap-4 pt-2 border-t border-slate-800/50">
-                  {profile.targetAudience.demographics.ageRange && (
+                  {profile.targetAudience.demographics?.ageRange && (
                     <div>
                       <span className="text-slate-500 text-xs">Age Range:</span>
-                      <p className="text-slate-300">{profile.targetAudience.demographics.ageRange}</p>
+                      <p className="text-slate-300">{profile.targetAudience.demographics?.ageRange}</p>
                     </div>
                   )}
-                  {profile.targetAudience.demographics.geographic.length > 0 && (
+                  {(profile.targetAudience.demographics?.geographic?.length ?? 0) > 0 && (
                     <div>
                       <span className="text-slate-500 text-xs">Location:</span>
-                      <p className="text-slate-300">{profile.targetAudience.demographics.geographic.join(', ')}</p>
+                      <p className="text-slate-300">{profile.targetAudience.demographics?.geographic?.join(', ')}</p>
                     </div>
                   )}
                 </div>
@@ -646,7 +669,7 @@ export const ProfileReviewStep: React.FC = () => {
           icon={<ShoppingBag className="w-4 h-4" />}
           title="Products & Services"
           source="Navigation, Product pages"
-          onEdit={() => handleEdit('products', profile.offerings.categories.join(', '))}
+          onEdit={() => handleEdit('products', profile.offerings?.categories?.join(', ') || '')}
           isEditing={editingField === 'products'}
         >
           {editingField === 'products' ? (
@@ -675,7 +698,7 @@ export const ProfileReviewStep: React.FC = () => {
             </div>
           ) : (
             <div>
-              {profile.offerings.categories.length > 0 ? (
+              {profile.offerings?.categories?.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
                   {profile.offerings.categories.map((cat, i) => (
                     <span
@@ -702,15 +725,27 @@ export const ProfileReviewStep: React.FC = () => {
           <ul className="space-y-1">
             <li>
               <strong className="text-slate-400">Tone:</strong>{' '}
-              <span className="text-white">{profile.brandVoice.tone.join(', ')}</span>
+              {profile.brandVoice?.tone?.length ? (
+                <span className="text-white">{profile.brandVoice.tone.join(', ')}</span>
+              ) : (
+                <NotSpecified fieldName="tone" />
+              )}
             </li>
             <li>
               <strong className="text-slate-400">Style:</strong>{' '}
-              <span className="text-white">{profile.brandVoice.style}</span>
+              {profile.brandVoice?.style ? (
+                <span className="text-white">{profile.brandVoice.style}</span>
+              ) : (
+                <NotSpecified fieldName="writing style" />
+              )}
             </li>
             <li>
               <strong className="text-slate-400">Personality:</strong>{' '}
-              <span className="text-white">{profile.brandVoice.personality.join(', ')}</span>
+              {profile.brandVoice?.personality?.length ? (
+                <span className="text-white">{profile.brandVoice.personality.join(', ')}</span>
+              ) : (
+                <NotSpecified fieldName="personality traits" />
+              )}
             </li>
           </ul>
         </ProfileCard>
@@ -722,18 +757,22 @@ export const ProfileReviewStep: React.FC = () => {
           source="Blog, Resources section"
         >
           <div className="flex flex-wrap gap-2 mb-2">
-            {profile.contentStyle.types.map((type, i) => (
-              <span
-                key={i}
-                className="px-2 py-1 bg-cyan-500/10 text-xs text-cyan-400 rounded"
-              >
-                {type}
-              </span>
-            ))}
+            {profile.contentStyle?.types?.length > 0 ? (
+              profile.contentStyle.types.map((type, i) => (
+                <span
+                  key={i}
+                  className="px-2 py-1 bg-cyan-500/10 text-xs text-cyan-400 rounded"
+                >
+                  {type}
+                </span>
+              ))
+            ) : (
+              <NotSpecified fieldName="content types" />
+            )}
           </div>
           <p className="text-xs text-slate-500">
-            Length: {profile.contentStyle.averageLength} |
-            Level: {profile.contentStyle.technicalLevel}
+            Length: {profile.contentStyle?.averageLength || <NotSpecified fieldName="content length" />} |{' '}
+            Level: {profile.contentStyle?.technicalLevel || <NotSpecified fieldName="technical level" />}
           </p>
         </ProfileCard>
       </motion.div>
