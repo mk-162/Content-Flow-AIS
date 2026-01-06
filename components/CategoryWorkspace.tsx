@@ -1415,9 +1415,9 @@ const CategorySummaryCard: React.FC<{
                     className="w-full flex items-center gap-4 p-3 bg-gradient-to-r from-slate-900 to-slate-800 border border-slate-700 hover:border-slate-600 transition-colors"
                 >
                     {/* Thumbnail */}
-                    {categoryPagePost?.heroImage?.url ? (
+                    {category.heroImage?.url ? (
                         <img
-                            src={categoryPagePost.heroImage.url}
+                            src={category.heroImage.url}
                             alt=""
                             className="w-12 h-12 object-cover rounded"
                         />
@@ -1710,49 +1710,31 @@ const CategorySummaryCard: React.FC<{
 
                         {/* Hero Image Block */}
                         <div className="p-3 bg-slate-800/30 rounded border border-slate-700/50">
-                            {categoryPagePost ? (
-                                <ImageInspectorControl
-                                    currentImage={categoryPagePost.heroImage ? {
-                                        url: categoryPagePost.heroImage.url,
-                                        prompt: categoryPagePost.heroImage.prompt || '',
-                                        altText: categoryPagePost.heroImage.altText || category.name
-                                    } : undefined}
-                                    postTitle={category.name}
-                                    postTeaser={category.description}
-                                    onImageUpdate={(image) => {
-                                        if (categoryPagePost) {
-                                            if (image) {
-                                                onUpdatePost(categoryPagePost.id, {
-                                                    heroImage: {
-                                                        url: image.url,
-                                                        prompt: image.prompt,
-                                                        altText: image.altText,
-                                                        generatedAt: image.generatedAt,
-                                                        providerId: image.providerId,
-                                                        aspectRatio: image.aspectRatio
-                                                    }
-                                                });
-                                            } else {
-                                                onUpdatePost(categoryPagePost.id, { heroImage: deleteField() } as unknown as Partial<Post>);
+                            <ImageInspectorControl
+                                currentImage={category.heroImage ? {
+                                    url: category.heroImage.url,
+                                    prompt: category.heroImage.prompt || '',
+                                    altText: category.heroImage.altText || category.name
+                                } : undefined}
+                                postTitle={category.name}
+                                postTeaser={category.description}
+                                onImageUpdate={(image) => {
+                                    if (image) {
+                                        onUpdateCategory(category.id, {
+                                            heroImage: {
+                                                url: image.url,
+                                                prompt: image.prompt,
+                                                altText: image.altText,
+                                                generatedAt: image.generatedAt,
+                                                providerId: image.providerId,
+                                                aspectRatio: image.aspectRatio
                                             }
-                                        }
-                                    }}
-                                />
-                            ) : (
-                                <div className="flex items-center gap-2 py-2">
-                                    {onCreateCategoryPage ? (
-                                        <button
-                                            onClick={onCreateCategoryPage}
-                                            className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1"
-                                        >
-                                            <Plus size={12} />
-                                            Add Hero Image
-                                        </button>
-                                    ) : (
-                                        <span className="text-xs text-slate-500">No category page</span>
-                                    )}
-                                </div>
-                            )}
+                                        });
+                                    } else {
+                                        onUpdateCategory(category.id, { heroImage: deleteField() } as unknown as Partial<Category>);
+                                    }
+                                }}
+                            />
                         </div>
                     </div>
             </div>

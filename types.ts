@@ -441,6 +441,15 @@ export interface Category {
   };
   // Category page post reference
   categoryPagePostId?: string;   // Link to the Post with isCategoryPage: true
+  // Hero image (same structure as Post.heroImage)
+  heroImage?: {
+    url: string;
+    prompt: string;
+    altText: string;
+    generatedAt: Timestamp;
+    providerId: string;
+    aspectRatio: string;
+  };
 }
 
 // Posts
