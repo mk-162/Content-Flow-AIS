@@ -41,7 +41,10 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children }) =>
 
   // Fetch projects for current organization
   const fetchProjects = async () => {
+    console.log('[ProjectContext] fetchProjects called', { userId: user?.id, orgId: currentOrg?.id });
+
     if (!user || !currentOrg) {
+      console.log('[ProjectContext] No user or org, clearing projects');
       setProjects([]);
       setCurrentProjectState(null);
       setLoading(false);
@@ -50,6 +53,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children }) =>
 
     // If impersonating, use impersonated projects directly
     if (isImpersonating && impersonatedProjects.length > 0) {
+      console.log('[ProjectContext] Using impersonated projects:', impersonatedProjects.length);
       setProjects(impersonatedProjects);
       setLoading(false);
       return;
@@ -59,15 +63,22 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children }) =>
       setLoading(true);
 
       // Get all projects in the organization
+      const projectsPath = `organizations/${currentOrg.id}/projects`;
+      console.log('[ProjectContext] Querying projects at:', projectsPath);
+
       const projectsQuery = query(
-        collection(db, `organizations/${currentOrg.id}/projects`)
+        collection(db, projectsPath)
       );
       const projectsSnapshot = await getDocs(projectsQuery);
+
+      console.log('[ProjectContext] Query returned docs:', projectsSnapshot.docs.length);
 
       const projectsList = projectsSnapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
       })) as Project[];
+
+      console.log('[ProjectContext] Projects found:', projectsList.map(p => ({ id: p.id, name: p.name, archived: p.isArchived })));
 
       // All org members can see all projects in their organization
       // (User is already verified as org member via OrganizationContext)
