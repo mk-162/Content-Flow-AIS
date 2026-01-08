@@ -2022,6 +2022,17 @@ export const CategoryWorkspace: React.FC<Props> = ({
     const [selectedPostIds, setSelectedPostIds] = useState<Set<string>>(new Set());
     const [checkedCategoryIds, setCheckedCategoryIds] = useState<Set<string>>(new Set());
 
+    // Auto-select first category when categories load and none is selected
+    useEffect(() => {
+        if (!selectedCategoryId && categories.length > 0) {
+            // Select first top-level category
+            const firstCategory = categories.find(c => !c.parentId) || categories[0];
+            if (firstCategory) {
+                setSelectedCategoryId(firstCategory.id);
+            }
+        }
+    }, [categories, selectedCategoryId]);
+
     const [isCreatorOpen, setIsCreatorOpen] = useState(false);
     const [creatorParentId, setCreatorParentId] = useState<string | null>(null);
     const [isGenModalOpen, setIsGenModalOpen] = useState(false);
@@ -2640,7 +2651,7 @@ Respond with ONLY the description, nothing else.`;
                                                                 value={post.teaser || ''}
                                                                 onChange={(e) => onUpdatePost(post.id, { teaser: e.target.value })}
                                                                 placeholder="Describe the post content, angle, or generation prompt..."
-                                                                className="w-full bg-[#020617] text-slate-400 text-sm leading-relaxed p-4 border border-slate-800 focus:border-cyan-500/50 outline-none resize-none h-24 custom-scrollbar"
+                                                                className="w-full bg-[#020617] text-slate-400 text-sm leading-relaxed p-4 border border-slate-800 focus:border-cyan-500/50 outline-none resize-none h-[7.2rem] custom-scrollbar"
                                                             />
                                                         </div>
                                                         {/* Tags row - tags left, Generate Post far right */}
@@ -2660,6 +2671,7 @@ Respond with ONLY the description, nothing else.`;
                                                                 onClick={() => onQueueContent(post)}
                                                                 className="px-4 py-3 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold uppercase tracking-wider transition-colors flex items-center gap-2 shrink-0"
                                                                 title="Write full article and move to Editorial Queue"
+                                                                data-tour-id="generate-post"
                                                             >
                                                                 <Plus size={14} />
                                                                 Generate Post

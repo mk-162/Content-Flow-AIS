@@ -9,7 +9,7 @@ import { AdminPanel } from './AdminPanel';
 import { CreditsButton } from './CreditsButton';
 import { GlobalRole } from '../../types';
 // Logo is served from public folder
-const MissionLogo = '/mission-icon.svg';
+const MissionLogo = '/MissionLogo.svg';
 
 interface TopBarProps {
   /** Show the project indicator */
