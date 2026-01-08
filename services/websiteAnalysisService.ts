@@ -102,6 +102,52 @@ const generateId = (): string => {
   return `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 };
 
+// Extract business name from page title or URL as fallback
+function extractBusinessNameFromTitle(title: string, url: string): string {
+  // Remove common suffixes like "| Home", "- Official Site", etc.
+  const cleaned = title
+    .replace(/\s*[|\-–]\s*(Home|Official Site|Welcome|About|Contact|Services|Products).*$/i, '')
+    .replace(/\s*[|\-–]\s*$/i, '')
+    .trim();
+
+  if (cleaned.length > 3 && cleaned.length < 50) {
+    return cleaned;
+  }
+
+  // Fallback: extract from domain
+  try {
+    const domain = new URL(url).hostname.replace(/^www\./, '').split('.')[0];
+    return domain.charAt(0).toUpperCase() + domain.slice(1);
+  } catch {
+    return 'Unknown Business';
+  }
+}
+
+// Prioritize identity-revealing content in extraction (hero, about sections)
+function extractPrioritizedContent(html: string): string {
+  // Standard extraction
+  const standard = extractTextContent(html);
+
+  // Also try to extract hero/about sections (simple approach)
+  const heroMatch = html.match(/<header[^>]*>([\s\S]{0,1500})<\/header>/i);
+  const aboutMatch = html.match(/<section[^>]*(?:class|id)="[^"]*about[^"]*"[^>]*>([\s\S]{0,2000})<\/(?:section|div)>/i) ||
+                     html.match(/<div[^>]*(?:class|id)="[^"]*about[^"]*"[^>]*>([\s\S]{0,2000})<\/div>/i);
+  const servicesMatch = html.match(/<section[^>]*(?:class|id)="[^"]*(services|products|offerings)[^"]*"[^>]*>([\s\S]{0,2000})<\/section>/i);
+
+  let priorityContent = '';
+  if (heroMatch || aboutMatch || servicesMatch) {
+    priorityContent = [
+      '## PRIORITY SECTIONS (Hero/About/Services):',
+      heroMatch ? heroMatch[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 800) : '',
+      aboutMatch ? aboutMatch[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 1200) : '',
+      servicesMatch ? servicesMatch[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 1000) : '',
+      '',
+    ].filter(Boolean).join('\n');
+  }
+
+  return priorityContent + standard;
+}
+
 // ============================================================================
 // URL VALIDATION
 // ============================================================================
@@ -322,60 +368,109 @@ export async function analyzeWebsiteWithAI(
   url: string,
   pageContent: PageContent,
   extractedText: string,
-  onProgress?: (stage: string, percent: number) => void
+  onProgress?: (stage: string, percent: number) => void,
+  additionalResearchText?: string
 ): Promise<BusinessProfile> {
   console.log('[WebsiteAnalysis] Starting AI analysis...');
+  if (additionalResearchText) {
+    console.log('[WebsiteAnalysis] Additional research text provided:', additionalResearchText.length, 'chars');
+  }
 
   const ai = getClient();
 
-  const prompt = `You are an expert business analyst and content strategist.
+  // Use priority extraction for better context
+  const extractedContent = extractPrioritizedContent(pageContent.html).substring(0, 8000);
 
-Analyze this website and extract a comprehensive business profile.
+  // Include additional research text if provided
+  const additionalContext = additionalResearchText
+    ? `\n\n---\n**ADDITIONAL CONTEXT PROVIDED BY BUSINESS OWNER:**\n${additionalResearchText.substring(0, 4000)}\n---\n`
+    : '';
 
-**Website URL:** ${url}
+  const prompt = `You are an expert business analyst extracting business intelligence from websites.
+
+Your task: Extract the ESSENCE of this business - who they are, what they do, and where they operate.
+
+**Website:** ${url}
 **Page Title:** ${pageContent.title}
 **Meta Description:** ${pageContent.metaDescription}
 
 **Extracted Content:**
-${extractedText.substring(0, 8000)}
+${extractedContent}${additionalContext}
 
 ---
 
-CRITICAL OUTPUT RULES:
-- DO NOT use emojis in any response
-- Keep all text concise and professional
-- Use only plain English text
-- Each field should be 1-2 sentences maximum
+**YOUR MISSION**: Create a business profile that will be used to generate RELEVANT content categories.
 
-Based on this content, provide a detailed business profile with the following structure:
+**CRITICAL RULE: EXTRACT LOCATION**
+Look for: addresses, "based in...", "serving...", city/region names, local landmarks, geographic features.
+Examples of GOOD location extraction:
+- "French Alps" (NOT just "France" if they're specifically Alpine)
+- "Pacific Northwest" (if serving Seattle/Portland area)
+- "London, UK" (if city-specific)
+- "Global" (ONLY if truly remote/international with no geographic focus)
 
-1. **Industry**: Identify the primary, secondary, and tertiary industry classifications. Rate your confidence 0-100. Keep each classification to 3-5 words max.
+---
 
-2. **Target Audience**:
-   - Primary audience description (1 sentence)
-   - Secondary audience (if applicable, 1 sentence)
-   - Demographics: age range, income level, geographic focus
+Provide a detailed business profile:
 
-3. **Offerings**:
-   - Type: 'products', 'services', or 'both'
-   - List the main product/service categories (up to 8, short names only)
+**1. BUSINESS IDENTITY** (CRITICAL - extract carefully):
+- businessName: Extract company/brand name from content
+- businessSummary: 2-3 sentences answering:
+  * WHAT does this business do? (specific service/product)
+  * WHO do they serve? (specific target customer)
+  * WHERE do they operate? (include location if geographically bound)
+  Example: "Alpine Adventures provides guided multi-day treks in the French Alps for experienced hikers seeking technical mountain routes. Based in Chamonix, serving adventure travelers from across Europe."
+- uniqueSellingPoints: 2-4 SPECIFIC differentiators (NOT generic claims)
+  Example: ["20+ years guiding in the French Alps", "Small groups max 6 people", "Local mountain guides certified by IFMGA"]
+- primaryLocation: Geographic focus extracted from content (city/region/country or "Global")
 
-4. **Brand Voice**:
-   - Tone: List 2-3 tone descriptors (e.g., "professional", "friendly", "authoritative")
-   - Style: One sentence describing the writing style
-   - Personality: List 2-3 brand personality traits
+**2. INDUSTRY** - BE SPECIFIC:
+- primary: Main industry (INCLUDE LOCATION if geographically-bound)
+  Example: "French Alps Adventure Tourism" NOT just "Tourism"
+- secondary: Sub-category (3-5 words)
+- tertiary: Niche (3-5 words)
+- confidence: 0-100
 
-5. **Content Style**:
-   - Types: What kinds of content they produce (e.g., "blog posts", "case studies", "tutorials")
-   - Average Length: 'short', 'medium', or 'long'
-   - Technical Level: 'beginner', 'intermediate', or 'advanced'
+**3. TARGET AUDIENCE**:
+- primary: 1 sentence, be specific about WHO
+- secondary: 1 sentence (if applicable)
+- demographics:
+  * ageRange: e.g., "28-50", "All ages"
+  * income: e.g., "Middle to high income", "Budget-friendly", "Premium/luxury"
+  * geographic: Array of locations served - BE SPECIFIC
+    Examples: ["French Alps", "Switzerland", "Northern Italy"], ["Pacific Northwest"], ["Global"]
+- painPoints: Array of 2-4 SPECIFIC problems this business solves
+  Example: ["Finding reliable guides for technical alpine routes", "Planning multi-day treks with gear logistics", "Accessing less-crowded alpine trails"]
 
-6. **Opportunity Score**:
-   - Overall score 0-100 (how well positioned they are for AI-optimized content)
-   - Content Gaps: Estimated number of missing content opportunities
-   - Potential Traffic: Estimated monthly traffic potential (e.g., "5,000-10,000")
+**4. OFFERINGS**:
+- type: 'products', 'services', or 'both'
+- categories: Up to 8 SPECIFIC offering names (use actual names from website)
+  Example: ["Multi-day Alpine Treks", "Summit Guides", "Winter Mountaineering", "Via Ferrata Tours"]
+  NOT generic: ["Tours", "Services", "Activities"]
 
-Be specific and base your analysis on the actual content provided. NO EMOJIS.`;
+**5. BRAND VOICE**:
+- tone: 2-3 descriptors
+- style: 1 sentence
+- personality: 2-3 traits
+
+**6. CONTENT STYLE**:
+- types: Content formats found
+- averageLength: 'short', 'medium', 'long'
+- technicalLevel: 'beginner', 'intermediate', 'advanced'
+
+**7. OPPORTUNITY SCORE**:
+- overall: 0-100 (content opportunity potential)
+- contentGaps: Estimated missing content pieces
+- potentialTraffic: e.g., "10,000-25,000"
+
+**OUTPUT RULES:**
+- NO emojis
+- BE SPECIFIC not generic
+- EXTRACT LOCATION - this is critical for generating relevant categories
+- uniqueSellingPoints must be CONCRETE facts, not marketing claims
+- painPoints must be SPECIFIC problems (not vague needs)
+
+Output JSON matching the provided schema.`;
 
   onProgress?.('Detecting brand voice', 45);
 
@@ -389,6 +484,15 @@ Be specific and base your analysis on the actual content provided. NO EMOJIS.`;
           responseSchema: {
             type: Type.OBJECT,
             properties: {
+              businessIdentity: {
+                type: Type.OBJECT,
+                properties: {
+                  businessName: { type: Type.STRING },
+                  businessSummary: { type: Type.STRING },
+                  uniqueSellingPoints: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  primaryLocation: { type: Type.STRING },
+                }
+              },
               industry: {
                 type: Type.OBJECT,
                 properties: {
@@ -410,7 +514,8 @@ Be specific and base your analysis on the actual content provided. NO EMOJIS.`;
                       income: { type: Type.STRING },
                       geographic: { type: Type.ARRAY, items: { type: Type.STRING } },
                     }
-                  }
+                  },
+                  painPoints: { type: Type.ARRAY, items: { type: Type.STRING } },
                 }
               },
               offerings: {
@@ -474,10 +579,24 @@ Be specific and base your analysis on the actual content provided. NO EMOJIS.`;
       }
     }
 
+    // Extract location from various sources
+    const primaryLocation = sanitizeText(data.businessIdentity?.primaryLocation) || '';
+    const geoFromDemographics = (data.targetAudience?.demographics?.geographic || []).map((g: string) => sanitizeText(g)).filter(Boolean);
+
+    // Build geographic array with fallbacks
+    let geographic = geoFromDemographics.length > 0
+      ? geoFromDemographics
+      : (primaryLocation && primaryLocation !== 'Global' ? [primaryLocation] : ['Global']);
+
     const profile: BusinessProfile = {
       id: generateId(),
       websiteUrl: url,
       analyzedAt: Timestamp.now(),
+      additionalResearchText: additionalResearchText || undefined,
+      lastRefreshedAt: Timestamp.now(),
+      // NEW: Business identity fields
+      businessName: sanitizeText(data.businessIdentity?.businessName) || extractBusinessNameFromTitle(pageContent.title, url),
+      businessSummary: sanitizeText(data.businessIdentity?.businessSummary) || '',
       industry: {
         primary: sanitizeText(data.industry?.primary) || 'Unknown',
         secondary: sanitizeText(data.industry?.secondary) || '',
@@ -490,8 +609,10 @@ Be specific and base your analysis on the actual content provided. NO EMOJIS.`;
         demographics: {
           ageRange: sanitizeText(data.targetAudience?.demographics?.ageRange) || 'All ages',
           income: sanitizeText(data.targetAudience?.demographics?.income) || 'All income levels',
-          geographic: (data.targetAudience?.demographics?.geographic || ['Global']).map((g: string) => sanitizeText(g)),
+          geographic: geographic,
         },
+        // NEW: Pain points
+        painPoints: (data.targetAudience?.painPoints || []).map((p: string) => sanitizeText(p)),
       },
       offerings: {
         type: (data.offerings?.type as 'products' | 'services' | 'both') || 'both',
@@ -501,6 +622,8 @@ Be specific and base your analysis on the actual content provided. NO EMOJIS.`;
         tone: (data.brandVoice?.tone || ['Professional']).map((t: string) => sanitizeText(t)),
         style: sanitizeText(data.brandVoice?.style) || 'Clear and informative',
         personality: (data.brandVoice?.personality || ['Knowledgeable']).map((p: string) => sanitizeText(p)),
+        // NEW: USPs from business identity
+        uniqueSellingPoints: (data.businessIdentity?.uniqueSellingPoints || []).map((u: string) => sanitizeText(u)),
       },
       contentStyle: {
         types: (data.contentStyle?.types || ['Articles']).map((t: string) => sanitizeText(t)),
@@ -513,6 +636,22 @@ Be specific and base your analysis on the actual content provided. NO EMOJIS.`;
         potentialTraffic: sanitizeText(data.opportunityScore?.potentialTraffic) || '1,000-5,000',
       },
     };
+
+    // Validation: ensure minimum data quality for downstream category generation
+    if (!profile.businessSummary || profile.businessSummary.length < 30) {
+      console.warn('[WebsiteAnalysis] Business summary too short, generating fallback');
+      profile.businessSummary = `${profile.businessName} operates in ${profile.industry.primary} serving ${profile.targetAudience.primary}. ${profile.offerings.categories.length > 0 ? `They offer ${profile.offerings.categories.slice(0, 3).join(', ')}.` : ''}`;
+    }
+
+    // Log quality metrics for debugging
+    console.log('[WebsiteAnalysis] Profile quality check:', {
+      hasBusinessName: !!profile.businessName && profile.businessName !== 'Unknown Business',
+      businessSummaryLength: profile.businessSummary?.length || 0,
+      hasLocation: geographic[0] !== 'Global' || primaryLocation === 'Global',
+      location: geographic[0],
+      hasUSPs: (profile.brandVoice.uniqueSellingPoints?.length || 0) > 0,
+      hasPainPoints: (profile.targetAudience.painPoints?.length || 0) > 0,
+    });
 
     onProgress?.('Analysis complete', 100);
     console.log('[WebsiteAnalysis] Profile generated successfully');
@@ -538,7 +677,8 @@ Be specific and base your analysis on the actual content provided. NO EMOJIS.`;
 
 export async function analyzeWebsite(
   url: string,
-  onProgress?: (stage: string, percent: number) => void
+  onProgress?: (stage: string, percent: number) => void,
+  additionalResearchText?: string
 ): Promise<BusinessProfile> {
   // Stage 1: Validate URL
   onProgress?.('Validating URL', 5);
@@ -560,7 +700,8 @@ export async function analyzeWebsite(
     validation.normalizedUrl,
     pageContent,
     extractedText,
-    onProgress
+    onProgress,
+    additionalResearchText
   );
 
   return profile;

@@ -292,6 +292,15 @@ export interface Organization {
   channelRecommendations?: ChannelRecommendation[];
   // Track which channel recommendations have been converted to projects
   usedChannelRecommendationIds?: string[];
+  // Unselected project suggestions from onboarding (for upsell on projects page)
+  suggestedProjects?: Array<{
+    id: string;
+    name: string;
+    description: string;
+    icon?: string;
+    coverage?: string;
+    estimatedOpportunities?: number;
+  }>;
 }
 
 // Credit Transaction
@@ -854,6 +863,12 @@ export interface BusinessProfile {
     editedValue: any;
     editedAt: Date;
   }[];
+
+  // Additional research context provided by user (for sparse websites)
+  additionalResearchText?: string;
+
+  // Last refresh timestamp
+  lastRefreshedAt?: Timestamp;
 }
 
 export interface ProjectSuggestion {

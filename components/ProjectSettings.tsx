@@ -18,7 +18,8 @@ import {
     Building2,
     ChevronDown,
     ArrowLeft,
-    Zap
+    Zap,
+    RefreshCw
 } from 'lucide-react';
 import { Project, ContentType, PromptType, PromptOverrides, BusinessProfile, Category, TaskType, TIER_FEATURES, SubscriptionTier } from '../types';
 import { doc, updateDoc, collection, getDocs, writeBatch, query, where, addDoc, Timestamp } from 'firebase/firestore';
@@ -28,6 +29,7 @@ import { useOrganization } from '../contexts/OrganizationContext';
 import { CREDIT_COSTS } from '../services/creditService';
 import { Target } from 'lucide-react';
 import { testWordPressConnection } from '../services/wordpressService';
+import { ResearchRefreshModal } from './ResearchRefreshModal';
 
 interface Props {
     project: Project;
@@ -92,6 +94,9 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
 
     // UI State - Collapsible Sections
     const [showBusinessContext, setShowBusinessContext] = useState(false);
+
+    // Research Refresh Modal
+    const [showResearchModal, setShowResearchModal] = useState(false);
 
     // Check tier for deep research access
     const tier = currentOrg?.subscriptionTier || SubscriptionTier.FREE;
@@ -383,19 +388,37 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
 
                 {/* Business Context (Editable) */}
                 <section className="bg-slate-900 border border-slate-800 overflow-hidden">
-                    <button
-                        onClick={() => setShowBusinessContext(!showBusinessContext)}
-                        className="w-full flex items-center justify-between p-6 hover:bg-slate-800/50 transition-colors"
-                    >
-                        <div className="flex items-center gap-3 text-emerald-400">
-                            <Building2 size={20} />
-                            <h2 className="text-lg font-bold text-slate-200">Business Context</h2>
-                        </div>
-                        <ChevronDown
-                            size={20}
-                            className={`text-slate-400 transition-transform ${showBusinessContext ? 'rotate-180' : ''}`}
-                        />
-                    </button>
+                    <div className="flex items-center justify-between p-6 hover:bg-slate-800/50 transition-colors">
+                        <button
+                            onClick={() => setShowBusinessContext(!showBusinessContext)}
+                            className="flex-1 flex items-center justify-between"
+                        >
+                            <div className="flex items-center gap-3 text-emerald-400">
+                                <Building2 size={20} />
+                                <h2 className="text-lg font-bold text-slate-200">Business Context</h2>
+                                {project.businessProfile?.lastRefreshedAt && (
+                                    <span className="text-xs text-slate-500 font-normal">
+                                        Last updated: {project.businessProfile.lastRefreshedAt.toDate?.().toLocaleDateString() || 'Unknown'}
+                                    </span>
+                                )}
+                            </div>
+                            <ChevronDown
+                                size={20}
+                                className={`text-slate-400 transition-transform ${showBusinessContext ? 'rotate-180' : ''}`}
+                            />
+                        </button>
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                setShowResearchModal(true);
+                            }}
+                            className="ml-4 flex items-center gap-2 px-4 py-2 bg-cyan-600/10 hover:bg-cyan-600/20 border border-cyan-500/30 hover:border-cyan-500/50 text-cyan-400 text-sm font-medium transition-colors"
+                            title="Re-scan website and refresh business profile"
+                        >
+                            <RefreshCw size={14} />
+                            Refresh Research
+                        </button>
+                    </div>
 
                     {showBusinessContext && (
                         <div className="px-6 pb-6 space-y-6 border-t border-slate-800 pt-6">
@@ -1179,6 +1202,18 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
                 </section>
 
             </div>
+
+            {/* Research Refresh Modal */}
+            <ResearchRefreshModal
+                isOpen={showResearchModal}
+                onClose={() => setShowResearchModal(false)}
+                project={project}
+                onRefreshComplete={(newProfile) => {
+                    setBusinessProfile(newProfile);
+                    setSuccessMsg('Business profile refreshed successfully');
+                    onUpdate();
+                }}
+            />
         </div>
     );
 };

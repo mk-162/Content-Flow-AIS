@@ -12,7 +12,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Project, ProjectContextType, ProjectMember, ProjectMemberRole, ProjectType, GlobalRole, CloneProjectOptions, Category, ChannelRecommendation } from '../types';
+import { Project, ProjectContextType, ProjectMember, ProjectMemberRole, ProjectType, CloneProjectOptions, Category, ChannelRecommendation } from '../types';
 import { useAuth } from './AuthContext';
 import { useOrganization } from './OrganizationContext';
 import { useImpersonation } from './ImpersonationContext';
@@ -38,9 +38,6 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children }) =>
   const [currentProject, setCurrentProjectState] = useState<Project | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
-
-  // Check if user is system admin
-  const isSystemAdmin = user?.globalRole === GlobalRole.SYSTEM_ADMIN;
 
   // Fetch projects for current organization
   const fetchProjects = async () => {
@@ -72,38 +69,18 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children }) =>
         ...doc.data(),
       })) as Project[];
 
-      // System admins can see all projects, others need to check membership
-      let memberProjects: Project[];
-      if (isSystemAdmin) {
-        memberProjects = projectsList;
-      } else {
-        // Filter projects where user is a member
-        const memberProjectsPromises = projectsList.map(async (project) => {
-          const memberDoc = await getDocs(
-            query(
-              collection(db, 'projectMembers'),
-              where('projectId', '==', project.id),
-              where('userId', '==', user.id)
-            )
-          );
-
-          return memberDoc.empty ? null : project;
-        });
-
-        memberProjects = (await Promise.all(memberProjectsPromises)).filter(
-          (p): p is Project => p !== null
-        );
-      }
-
-      setProjects(memberProjects.filter(p => !p.isArchived));
+      // All org members can see all projects in their organization
+      // (User is already verified as org member via OrganizationContext)
+      setProjects(projectsList.filter(p => !p.isArchived));
 
       // Set current project if not already set
-      if (!currentProject && memberProjects.length > 0) {
+      const visibleProjects = projectsList.filter(p => !p.isArchived);
+      if (!currentProject && visibleProjects.length > 0) {
         const savedProjectId = localStorage.getItem(
           `currentProjectId_${currentOrg.id}`
         );
-        const savedProject = memberProjects.find((p) => p.id === savedProjectId);
-        setCurrentProjectState(savedProject || memberProjects[0]);
+        const savedProject = visibleProjects.find((p) => p.id === savedProjectId);
+        setCurrentProjectState(savedProject || visibleProjects[0]);
       }
     } catch (error) {
       console.error('Error fetching projects:', error);
