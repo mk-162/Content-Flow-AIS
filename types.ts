@@ -2,9 +2,12 @@ import { Timestamp } from 'firebase/firestore';
 
 // UI Navigation
 export enum Screen {
+  FEED = 'feed',                // New feed-based workflow
   CATEGORIES = 'categories',
+  BRIEFS = 'briefs',            // Briefs sub-screen under Content Engine
   POSTS = 'posts',
   LIVE_POSTS = 'live_posts',
+  PUBLISHING = 'publishing',    // Launch Pad - review & publish content
   PROJECTS = 'projects',
   SETTINGS = 'settings',
   ADMIN = 'admin'
@@ -384,9 +387,22 @@ export interface Project {
     imageGeneration?: {
       enabled: boolean;
       autoGenerate?: boolean;
-      provider: 'nano-banana-2'; // Extensible
+      provider: 'nano-banana-2'; // Extensible - future: 'dall-e-3', 'midjourney', etc.
       defaultStylePrompt: string;
       defaultAspectRatio: '16:9' | '1:1' | '4:3';
+      // Design brief for image generation
+      designBrief?: string;
+      // Style constraints (checkboxes that inject system prompts)
+      styleConstraints?: {
+        noTextInImages?: boolean;        // "Do not include any text, words, or letters in the image"
+        noLogos?: boolean;               // "Do not include logos or brand marks"
+        photorealistic?: boolean;        // "Generate photorealistic images"
+        illustrationStyle?: boolean;     // "Use illustration/vector art style"
+        minimalistStyle?: boolean;       // "Use minimalist, clean aesthetic"
+        abstractStyle?: boolean;         // "Use abstract, conceptual imagery"
+      };
+      // Phase 2: Reference image for style matching
+      referenceImageUrl?: string;        // URL to uploaded style reference image
     };
     // WordPress Export (credentials per project, enabled at org level)
     wordpress?: {
@@ -412,6 +428,12 @@ export interface Project {
     };
     // Deep Research (expensive - 20 credits, OFF by default)
     enableDeepResearch?: boolean;        // Must be explicitly enabled per project
+    // Launch Pad settings
+    launchPad?: {
+      defaultToDraft: boolean;           // New posts start as drafts (default: false)
+    };
+    // Default author name for posts
+    defaultAuthorName?: string;
   };
   businessProfile?: BusinessProfile;
   // Channel/Content type (from onboarding)
@@ -459,15 +481,31 @@ export interface Category {
     providerId: string;
     aspectRatio: string;
   };
+  // Per-category content settings (overrides project defaults)
+  contentSettings?: {
+    targetArticles: number;           // Target number of articles (null = use project default)
+    rollUpSubcategories: boolean;     // Include subcategory counts toward this target
+    autoReplenish: boolean;           // Auto-generate stubs when below target
+  };
+  // Enhanced SEO fields (for topical authority strategy)
+  searchIntent?: 'informational' | 'commercial' | 'navigational' | 'transactional';  // Primary search intent
+  keywordCluster?: string[];          // Target keyword cluster for this category
+  contentGapOpportunity?: string;     // Underserved angle this category addresses
+  categoryTier?: 'pillar' | 'cluster';  // Topical authority hierarchy
 }
 
 // Posts
 export enum PostStatus {
-  PENDING = 'pending',           // Idea only, no content yet
+  // New feed-based workflow statuses
+  PITCH = 'pitch',               // Ready for generate/skip decision
+  SKIPPED = 'skipped',           // User skipped this pitch
   GENERATING = 'generating',     // AI is writing content
+  READY = 'ready',               // Content ready to launch (renamed from NEEDS_REVIEW)
+  PUBLISHED = 'published',       // Live on site
+  // Legacy statuses (kept for backward compatibility during transition)
+  PENDING = 'pending',           // Idea only, no content yet
   NEEDS_REVIEW = 'needs_review', // Content ready for human review
   APPROVED = 'approved',         // Reviewed, ready to publish
-  PUBLISHED = 'published',       // Live on site
   ARCHIVED = 'archived',         // Soft delete (recoverable)
   REJECTED = 'rejected'          // Rejected by editor
 }
@@ -520,6 +558,10 @@ export interface Post {
   contentFormat?: ContentFormat;    // Content format type for diversity
   primaryAngle?: string;            // Main angle/hook of this post
   targetKeyword?: string;           // Primary keyword this post targets
+  // Enhanced SEO fields
+  contentTier?: 'pillar' | 'cluster';  // Topical authority classification
+  serpFeature?: 'featured-snippet' | 'people-also-ask' | 'list-snippet' | 'table-snippet';  // Target SERP feature
+  searchIntent?: 'informational' | 'commercial' | 'transactional' | 'navigational';  // Search intent type
   // Category Page Content (when isCategoryPage is true)
   isCategoryPage?: boolean;         // Discriminator for category pages vs regular posts
   categoryPageContent?: {
@@ -537,6 +579,25 @@ export interface Post {
     questionsToAnswer: string[];          // Search questions to address
     generatedAt: Timestamp;
   };
+  // New feed workflow: pitch data for generate/skip decision
+  pitch?: {
+    headline: string;                     // The article title/hook
+    keyPoints: string[];                  // Bullet points of coverage
+    targetKeywords: {
+      keyword: string;
+      volume: number;                     // Monthly search volume
+      difficulty: 'easy' | 'medium' | 'hard';
+    }[];
+    estimatedWordCount?: number;
+  };
+  // Draft flag - holds post back from launch
+  isDraft?: boolean;                      // true = held in drafts, won't launch
+  // Reviewed flag - user has manually reviewed this post
+  isReviewed?: boolean;                   // true = user has reviewed, ready for "reviewed-only" launch
+  // Author name (overrides project default when set)
+  authorName?: string;
+  // Pending action flag for live posts - tracks what will happen on next launch
+  pendingAction?: 'edit' | 'delete';      // Shows badge on live posts with pending changes
 }
 
 // Generation Queue
@@ -545,7 +606,10 @@ export enum TaskType {
   GENERATE_CONTENT = 'Generate Content',
   GENERATE_IMAGE = 'Generate Image',
   GENERATE_CATEGORY_PAGE = 'Generate Category Page',
-  GOOGLE_DEEP_RESEARCH = 'Google Deep Research'
+  GOOGLE_DEEP_RESEARCH = 'Google Deep Research',
+  // New feed workflow task types
+  GENERATE_PITCH = 'Generate Pitch',             // Generate pitch only (for feed cards)
+  GENERATE_FROM_PITCH = 'Generate From Pitch'    // Full article from approved pitch
 }
 
 export enum TaskStatus {

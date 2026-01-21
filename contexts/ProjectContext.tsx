@@ -78,14 +78,15 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children }) =>
         ...doc.data(),
       })) as Project[];
 
-      console.log('[ProjectContext] Projects found:', projectsList.map(p => ({ id: p.id, name: p.name, archived: p.isArchived })));
+      console.log('[ProjectContext] Projects found:', projectsList.map(p => ({ id: p.id, name: p.name, isArchived: p.isArchived })));
 
       // All org members can see all projects in their organization
-      // (User is already verified as org member via OrganizationContext)
-      setProjects(projectsList.filter(p => !p.isArchived));
+      const visibleProjects = projectsList.filter(p => !p.isArchived);
+      console.log('[ProjectContext] After archive filter:', visibleProjects.length, 'projects');
+
+      setProjects(visibleProjects);
 
       // Set current project if not already set
-      const visibleProjects = projectsList.filter(p => !p.isArchived);
       if (!currentProject && visibleProjects.length > 0) {
         const savedProjectId = localStorage.getItem(
           `currentProjectId_${currentOrg.id}`
@@ -301,14 +302,24 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children }) =>
 
       // Clone categories if requested
       if (options.includeCategories) {
-        const categoriesSnapshot = await getDocs(
-          collection(db, `organizations/${currentOrg.id}/projects/${sourceProjectId}/categories`)
-        );
+        // Fix #4: Add error handling and data validation for Firestore query
+        let categoriesSnapshot;
+        try {
+          categoriesSnapshot = await getDocs(
+            collection(db, `organizations/${currentOrg.id}/projects/${sourceProjectId}/categories`)
+          );
+        } catch (error) {
+          console.error('Error fetching categories for cloning:', error);
+          throw new Error('Failed to fetch categories from source project. Please try again.');
+        }
 
-        const allCategories = categoriesSnapshot.docs.map(docSnap => ({
-          id: docSnap.id,
-          ...docSnap.data(),
-        })) as Category[];
+        // Filter out deleted/non-existent docs and validate data exists
+        const allCategories = categoriesSnapshot.docs
+          .filter(docSnap => docSnap.exists())
+          .map(docSnap => ({
+            id: docSnap.id,
+            ...docSnap.data(),
+          })) as Category[];
 
         // Separate parent categories and subcategories
         const parentCategories = allCategories.filter(c => !c.parentId);

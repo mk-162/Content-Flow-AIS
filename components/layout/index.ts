@@ -4,3 +4,5 @@ export { TopBar } from './TopBar';
 export { UserMenu } from './UserMenu';
 export { AdminPanel } from './AdminPanel';
 export { CreditsButton } from './CreditsButton';
+export { CategoryDropdown } from './CategoryDropdown';
+export { ProjectSelector } from './ProjectSelector';

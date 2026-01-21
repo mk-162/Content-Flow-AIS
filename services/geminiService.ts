@@ -9,8 +9,9 @@ import { deduplicationService } from './deduplicationService';
 
 const getClient = () => {
   const apiKey = process.env.API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key not found");
+  // Fix #5: Check for empty string in addition to null/undefined
+  if (!apiKey || apiKey.trim() === '') {
+    throw new Error("API Key not found or empty. Please configure VITE_GEMINI_API_KEY in .env.local");
   }
   return new GoogleGenAI({ apiKey });
 };
@@ -184,8 +185,10 @@ export interface GeneratedTitleData {
   title: string;
   teaser: string;
   keywords: string[];
-  searchIntent?: 'informational' | 'commercial' | 'transactional';
+  searchIntent?: 'informational' | 'commercial' | 'transactional' | 'navigational';
   contentFormat?: ContentFormat;
+  contentTier?: 'pillar' | 'cluster';
+  serpFeature?: 'featured-snippet' | 'people-also-ask' | 'list-snippet' | 'table-snippet';
 }
 
 export const generateCategoryTitles = async (
@@ -352,8 +355,8 @@ export const generateCategoryTitles = async (
         prompt = `${fullContext}\n\n${prompt}`;
       }
     } else {
-      // Fallback prompt with comprehensive context
-      prompt = `You are an expert Content Strategist specializing in AI-optimized content.
+      // Fallback prompt with comprehensive SEO context
+      prompt = `You are an expert SEO Content Strategist specializing in high-CTR titles and SERP optimization.
 
 ${fullContext || 'No business context available.'}
 
@@ -363,19 +366,30 @@ ${fullContext || 'No business context available.'}
 
 ---
 
-**TASK:** Generate exactly ${count} high-quality blog post ideas for this category.
+**TASK:** Generate exactly ${count} high-quality, SEO-optimized blog post ideas for this category.
 
-CRITICAL REQUIREMENTS:
-1. Titles MUST be directly relevant to the category AND the business context above
-2. Titles should address the target audience's needs and pain points
-3. Each title should be specific, actionable, and SEO-friendly
-4. Titles should cover topics that AI assistants frequently answer questions about
-5. Include power words that drive engagement
+**SEO & CTR OPTIMIZATION:**
+1. **Title Structure:** 50-60 characters, place keyword within first 5 words
+2. **Power Words:** Use proven, essential, ultimate, complete, definitive, unexpected
+3. **Numbers:** Include numbers or years (e.g., "7 Ways...", "2026 Guide...")
+4. **SERP Features:** Target featured snippets with "How to", lists, or comparisons
+5. **Topical Authority:** Classify as pillar (broad) or cluster (specific supporting content)
 
-For each idea, provide:
-1. A catchy, SEO-friendly Title specific to this business
-2. A Teaser: 1-2 sentence description guiding what the post should cover
-3. Keywords: 3-5 target SEO keywords relevant to this specific business`;
+**CRITICAL REQUIREMENTS:**
+1. Titles MUST be directly relevant to the category AND business context
+2. Titles should address target audience needs and pain points
+3. Each title should target specific keywords with clear search intent
+4. Balance SEO optimization with authentic, non-clickbait titles
+5. Classify each as pillar or cluster content
+
+**OUTPUT:** For each idea, provide:
+1. title: SEO-optimized (50-60 chars, keyword + power word/number)
+2. teaser: 1-2 sentences with specific subtopics
+3. keywords: 3-5 target keywords (primary first)
+4. searchIntent: informational, commercial, transactional, or navigational
+5. contentFormat: how-to, listicle, comparison, guide, case-study, news, opinion, review
+6. contentTier: pillar (comprehensive) or cluster (supporting)
+7. serpFeature: featured-snippet, people-also-ask, list-snippet, or table-snippet`;
     }
 
     console.log('[Gemini] Calling generateContent with 60s timeout and retry...');
@@ -397,7 +411,9 @@ For each idea, provide:
                     teaser: { type: Type.STRING },
                     keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
                     searchIntent: { type: Type.STRING },
-                    contentFormat: { type: Type.STRING }
+                    contentFormat: { type: Type.STRING },
+                    contentTier: { type: Type.STRING, description: 'pillar or cluster for topical authority' },
+                    serpFeature: { type: Type.STRING, description: 'Target SERP feature: featured-snippet, people-also-ask, list-snippet, table-snippet' }
                   },
                   required: ['title', 'teaser', 'keywords']
                 }
@@ -499,31 +515,38 @@ For each idea, provide:
 };
 
 // Helper function to strip common preambles from AI output
+// Fix #7: Use bounded quantifiers to prevent ReDoS
 const stripPreamble = (content: string): string => {
+  // Limit input size to prevent ReDoS on extremely long content
+  const MAX_PREAMBLE_CHECK_LENGTH = 500;
+  const contentToCheck = content.slice(0, MAX_PREAMBLE_CHECK_LENGTH);
+  const restOfContent = content.slice(MAX_PREAMBLE_CHECK_LENGTH);
+
   // Common preamble patterns that AI models add
+  // Use bounded quantifiers [^:\n]{0,100} instead of .*? to prevent catastrophic backtracking
   const preamblePatterns = [
-    /^Here is.*?:\s*/i,
-    /^Here's.*?:\s*/i,
-    /^This is.*?:\s*/i,
-    /^Below is.*?:\s*/i,
-    /^I'll create.*?:\s*/i,
-    /^I've created.*?:\s*/i,
-    /^I have created.*?:\s*/i,
-    /^Let me.*?:\s*/i,
+    /^Here is[^:\n]{0,100}:\s*/i,
+    /^Here's[^:\n]{0,100}:\s*/i,
+    /^This is[^:\n]{0,100}:\s*/i,
+    /^Below is[^:\n]{0,100}:\s*/i,
+    /^I'll create[^:\n]{0,100}:\s*/i,
+    /^I've created[^:\n]{0,100}:\s*/i,
+    /^I have created[^:\n]{0,100}:\s*/i,
+    /^Let me[^:\n]{0,100}:\s*/i,
     /^Certainly[!,]?\s*/i,
     /^Sure[!,]?\s*/i,
     /^Of course[!,]?\s*/i,
   ];
 
-  let cleaned = content.trim();
+  let cleaned = contentToCheck.trim();
 
   // Remove preambles from the beginning
   for (const pattern of preamblePatterns) {
     cleaned = cleaned.replace(pattern, '');
   }
 
-  // Remove any leading newlines or whitespace
-  cleaned = cleaned.trim();
+  // Remove any leading newlines or whitespace and rejoin with rest of content
+  cleaned = (cleaned + restOfContent).trim();
 
   return cleaned;
 };
@@ -873,28 +896,66 @@ export const generatePostOutline = async (
           : orgData.targetAudience.demographics.geographic;
       }
 
-      // Fallback to hardcoded prompt (Article default)
-      prompt = `
+      // Fallback to hardcoded SEO-optimized prompt (Article default)
+      prompt = `You are an expert content writer and SEO specialist creating content designed to rank in position 1-3.
+
       ${businessContextBlock}
 
-      Write a detailed ${contentType.toLowerCase()} about: "${title}" in the category "${categoryName}".
-
+      **ARTICLE BRIEF**
+      Topic: "${title}"
+      Category: "${categoryName}"
       ${categoryDescription ? `Category Context: ${categoryDescription}` : ''}
       Tone: ${tone}
       Target Geographic Location: ${geographic}
-      ${teaser ? `**Specific Instructions/Focus:** ${teaser}` : ''}
-      ${tags && tags.length > 0 ? `**Target Keywords to Include:** ${tags.join(', ')}` : ''}
+      ${teaser ? `**Specific Focus/Angle:** ${teaser}` : ''}
+      ${tags && tags.length > 0 ? `**Target Keywords:** ${tags.join(', ')} (use primary in first 100 words, H2s, and conclusion)` : ''}
 
       ${orgData?.brandMessage ? `**Brand Message:** ${orgData.brandMessage}` : ''}
       ${orgData?.brandCompliance ? `**Compliance Guidelines:** ${orgData.brandCompliance}` : ''}
 
-      IMPORTANT:
-      - DO NOT include the title as a heading (H1 or H2). The title "${title}" will be added separately as front matter.
-      - Start directly with an engaging introduction paragraph.
-      - Use H2 (##) for section headings, H3 (###) for subsections.
-      - Do not include any preambles like "Here is..." or "Sure...".
-      - Use spelling, terminology, and cultural references appropriate for ${geographic} audience.
-      - Format in clean Markdown.`;
+      **SEO-OPTIMIZED STRUCTURE:**
+
+      1. **FEATURED SNIPPET TARGET** (40-60 words)
+         - Open with direct, concise answer to the topic
+         - Include primary keyword immediately
+         - Format for answer box eligibility
+
+      2. **Hook & Introduction** (100-150 words)
+         - Primary keyword in first sentence
+         - Present compelling problem or statistic
+         - Promise what reader will learn
+
+      3. **Main Content** (4-6 H2 sections)
+         - Include keywords in H2 headings naturally
+         - Use H3 subsections for depth
+         - Add specific examples and data (E-E-A-T signals)
+         - Include **[INTERNAL_LINK: topic]** placeholders (3-5 total)
+         - Short paragraphs (2-4 sentences)
+
+      4. **FAQ Section** (3-5 Q&A pairs for People Also Ask)
+         - Format: **Q: [Question with long-tail keyword]**
+         - Concise 2-3 sentence answers
+
+      5. **Key Takeaways** (5-7 bullet points)
+         - Scannable summary with keyword variations
+
+      6. **Conclusion** (100-150 words)
+         - Reinforce primary keyword
+         - Clear call to action
+
+      7. **Meta Elements** (at end)
+         - **Meta Title** (50-60 chars): Primary keyword + benefit
+         - **Meta Description** (150-160 chars): Primary keyword, value prop, CTA
+
+      **REQUIREMENTS:**
+      - DO NOT include the title as H1 (added as front matter)
+      - Start directly with featured snippet section
+      - Use H2 (##) for sections, H3 (###) for subsections
+      - NO preambles like "Here is..." or "Sure..."
+      - Use ${geographic} spelling/terminology
+      - Target 8th-9th grade reading level
+      - Include real examples and specific data (E-E-A-T)
+      - Format in clean Markdown with bold, lists, tables where relevant`;
     }
 
     console.log('[Gemini] 📤 Calling API with model:', modelVersion);
@@ -1410,6 +1471,76 @@ Description: "Reviews of energy gels." (This is a subtopic of Nutrition, not a t
 // ============================================
 
 import { fetchWebsiteContent, extractTextContent } from './websiteAnalysisService';
+
+/**
+ * Generate additional research context by analyzing a website URL.
+ * This is used to auto-populate the "Additional Research Context" textarea.
+ */
+export const generateAdditionalContext = async (
+  websiteUrl: string
+): Promise<string> => {
+  console.log(`[Gemini] Generating additional context for: ${websiteUrl}`);
+  const ai = getClient();
+
+  // Fetch Website Content
+  let websiteContent = '';
+  try {
+    const pageContent = await fetchWebsiteContent(websiteUrl);
+    websiteContent = extractTextContent(pageContent.html);
+    console.log(`[Gemini] Successfully fetched ${websiteContent.length} chars of content`);
+  } catch (error) {
+    console.warn('[Gemini] Could not fetch website content:', error);
+    throw new Error('Unable to fetch website content. Please check the URL and try again.');
+  }
+
+  if (!websiteContent || websiteContent.length < 100) {
+    throw new Error('Not enough content found on the website to generate context.');
+  }
+
+  const prompt = `You are a business analyst helping to document a company's key information for content generation purposes.
+
+Based on the website content below, generate a comprehensive summary that would help an AI understand this business better for content creation. Include:
+
+1. **Business Overview**: What the company does, their main products/services
+2. **Target Audience**: Who their ideal customers are, demographics, pain points
+3. **Unique Value Proposition**: What makes them different from competitors
+4. **Key Services/Products**: Detailed list of what they offer
+5. **Industry & Market**: What industry they operate in, market position
+6. **Brand Voice & Tone**: How they communicate (professional, friendly, technical, etc.)
+7. **Geographic Focus**: Where they operate or serve customers
+8. **Any Compliance/Regulatory Notes**: If relevant to their industry
+
+Format this as a clear, detailed text summary (NOT JSON). Write in third person about the business. Be specific and include details from the website content.
+
+Website URL: ${websiteUrl}
+
+Website Content:
+"""
+${websiteContent.substring(0, 20000)}
+"""
+
+Generate a comprehensive business context summary:`;
+
+  try {
+    const response = await withRetry(() => withTimeout(
+      ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+      }),
+      60000
+    ));
+
+    const text = response.text || '';
+    if (!text) {
+      throw new Error('No response generated');
+    }
+
+    return text.trim();
+  } catch (error) {
+    console.error('[Gemini] Generate additional context failed:', error);
+    throw new Error('Failed to generate context. Please try again.');
+  }
+};
 
 export const fetchBrandInfo = async (
   websiteUrl: string,

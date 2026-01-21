@@ -3,12 +3,12 @@ import { useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, Save, Terminal, Cpu, AlertTriangle, FileText, Share2, Mail, BookOpen, Lightbulb, FolderTree, Globe, HelpCircle, X, ExternalLink, Code, RotateCcw } from 'lucide-react';
 import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
-import { AdminConfig, ContentType, PromptType } from '../types';
+import { AdminConfig, ContentType, PromptType, ContentFormat } from '../types';
 import { clearCaches } from '../services/geminiService';
 
 // DEFAULT PROMPTS - Content Generation
 const DEFAULT_CONTENT_PROMPTS: Record<ContentType, string> = {
-    [ContentType.ARTICLE]: `You are an expert content writer creating a comprehensive, SEO-optimized blog post.
+    [ContentType.ARTICLE]: `You are an expert content writer and SEO specialist creating a comprehensive, search-optimized blog post designed to rank in position 1-3 for target keywords.
 
 **ARTICLE BRIEF**
 Topic: "{{topic}}"
@@ -19,7 +19,7 @@ Tone: {{tone}}
 
 {{#if researchData}}
 **SEO REQUIREMENTS**
-Primary Keyword: {{primaryKeyword}} (use in first 100 words, H1, and at least one H2)
+Primary Keyword: {{primaryKeyword}} (use in first 100 words, H1, at least one H2, and conclusion)
 Secondary Keywords: {{secondaryKeywords}} (incorporate naturally throughout)
 Target Word Count: {{targetWordCount}} words
 Questions to Address: {{questionsToAnswer}}
@@ -29,35 +29,99 @@ Questions to Address: {{questionsToAnswer}}
 **COMPETITIVE DIFFERENTIATION**
 Competitor average word count: {{avgCompetitorWordCount}} words
 Topics competitors miss: {{missingTopics}}
-Your goal: Be MORE comprehensive and address the missing topics
+Your goal: Be MORE comprehensive, address missing topics, and provide unique insights
 {{/if}}
 
-**BRAND VOICE**
+**BRAND VOICE & E-E-A-T SIGNALS**
 Brand Message: {{brandMessage}}
 Compliance Guidelines: {{brandCompliance}}
 Target Keywords: {{keywords}}
+Trust Signals: Include real examples, specific data/statistics, actionable advice, and nuanced insights
 
 {{#if teaser}}
 **Specific Focus/Angle:** {{teaser}}
 {{/if}}
 
-**STRUCTURE**
-1. **Hook** (50-100 words) - Start with primary keyword, grab attention
-2. **Context** (100-150 words) - Why this matters to the reader
-3. **Main Content** (800-1200 words) - 3-5 H2 sections with H3 subsections
-   {{#if questionsToAnswer}}- Address the questions listed above{{/if}}
-4. **Key Takeaways** - Bullet point summary
-5. **Conclusion** - Clear call to action
+**ARTICLE STRUCTURE**
 
-**REQUIREMENTS**
-- Write in {{tone}} tone
-- {{#if primaryKeyword}}Use "{{primaryKeyword}}" in first 100 words{{/if}}
-- Naturally incorporate keywords: {{keywords}}
-- Align with brand message: {{brandMessage}}
-- Follow compliance: {{brandCompliance}}
-- Use markdown formatting (H2, H3, bullets, bold)
-- Start directly with the hook (no preambles like "Here is...")
-- {{#if targetWordCount}}Target {{targetWordCount}} words{{/if}}`,
+1. **FEATURED SNIPPET TARGET** (40-60 words)
+   - Open with a direct, concise answer to the primary query
+   - Format for answer box eligibility: definition, process, or list
+   - Include primary keyword in this section
+   - Use clear, scannable formatting
+
+2. **Hook & Introduction** (100-150 words)
+   - Start with primary keyword in first sentence
+   - Present a compelling problem, statistic, or question
+   - Promise what the reader will learn
+   - Establish credibility briefly
+
+3. **Main Content** ({{targetWordCount}} words across 4-6 H2 sections)
+
+   **H2 Structure Guidelines:**
+   - Each H2 should include primary or secondary keywords naturally
+   - Use question-based H2s where relevant (matches voice search)
+   - Follow logical progression: What → Why → How → When/Where
+   - Include 2-4 H3 subsections under each H2 for depth
+
+   **Content Requirements:**
+   - Open each section with topic sentence containing keyword variant
+   - Include specific examples, data points, or case studies (E-E-A-T)
+   - Use short paragraphs (2-4 sentences max) for readability
+   {{#if questionsToAnswer}}- Address these questions: {{questionsToAnswer}}{{/if}}
+   - Add **[INTERNAL_LINK: relevant topic]** placeholders (3-5 total)
+
+   **Content Enhancements:**
+   - Use numbered lists for step-by-step processes
+   - Use bullet points for features, benefits, or options
+   - Include comparison tables where relevant (markdown format)
+   - Bold key terms and important takeaways
+
+4. **FAQ Section** (3-5 Q&A pairs targeting People Also Ask)
+   - Format: **Q: [Question with long-tail keyword]**
+   - Provide concise 2-3 sentence answers (50-75 words each)
+   {{#if questionsToAnswer}}- Prioritize: {{questionsToAnswer}}{{/if}}
+
+5. **Key Takeaways** (5-7 bullet points)
+   - Summarize main insights in scannable format
+   - Each bullet should be actionable or memorable
+   - Incorporate keyword variations naturally
+
+6. **Conclusion & Call to Action** (100-150 words)
+   - Reinforce primary keyword and main value proposition
+   - Clear, specific call to action
+   - End with forward-looking statement or next step
+
+7. **Meta Elements** (generate at end)
+   - **Meta Title** (50-60 characters): Primary keyword + benefit/number
+   - **Meta Description** (150-160 characters): Primary keyword, value prop, CTA
+
+**SEO & READABILITY REQUIREMENTS**
+
+**Keyword Optimization:**
+- Primary keyword density: 1-2% (natural usage, never forced)
+- Use primary keyword in: first 100 words, at least 2 H2s, conclusion, meta description
+- Distribute secondary keywords across H2/H3 headings
+- Use keyword variations and synonyms to avoid repetition
+
+**E-E-A-T Signals (Expertise, Experience, Authoritativeness, Trust):**
+- Include first-hand experience or real examples
+- Reference specific data, statistics, or timeframes
+- Use authoritative language while maintaining {{tone}} tone
+- Add specific, actionable advice showing expert knowledge
+
+**Readability:**
+- Target reading level: 8th-9th grade
+- Average sentence length: 15-20 words
+- Paragraph length: 2-4 sentences maximum
+- Use transition words for flow
+- Use active voice for 80%+ of sentences
+
+**Formatting Standards:**
+- Use markdown formatting (H2, H3, bullets, bold, tables)
+- Start directly with featured snippet (no preambles)
+- {{#if targetWordCount}}Target {{targetWordCount}} words{{/if}}
+- Never use "Here is..." or similar AI preambles`,
 
     [ContentType.SOCIAL_MEDIA]: `Create a compelling social media post for: "{{topic}}"
 
@@ -132,7 +196,7 @@ Return clean Markdown content only.`
 
 // DEFAULT PROMPTS - System Prompts
 const DEFAULT_SYSTEM_PROMPTS: Record<PromptType, string> = {
-    [PromptType.TITLE_GENERATION]: `You are an expert SEO Content Strategist.
+    [PromptType.TITLE_GENERATION]: `You are an expert SEO Content Strategist specializing in high-CTR titles and SERP optimization.
 
 {{#if projectContext}}
 {{projectContext}}
@@ -166,20 +230,70 @@ Generate DIFFERENT angles and perspectives.
 {{suggestedFormats}}
 {{/if}}
 
-CRITICAL REQUIREMENTS:
+**SEO & CTR OPTIMIZATION FRAMEWORK**
+
+1. **Title Structure Guidelines:**
+   - Length: 50-60 characters (optimal for SERPs)
+   - Place primary keyword within first 5 words when natural
+   - Use numbers, years, or specific data (e.g., "7 Ways...", "2026 Guide...")
+   - Include power words: proven, essential, ultimate, complete, definitive, unexpected, overlooked, hidden
+   - Format: "[Number] [Power Word] [Keyword] [Benefit/Promise]"
+
+2. **SERP Feature Targeting:**
+   - "how-to" formats: Use "How to [Result]" (targets featured snippets)
+   - listicles: Lead with numbers (targets list snippets)
+   - questions: Mirror "People Also Ask" phrasing
+   - comparisons: Use "vs" format (targets comparison tables)
+   - guides: Include year + "Guide" or "Complete"
+
+3. **Topical Authority Signals:**
+   - Classify each title as:
+     * **Pillar** (comprehensive, broad topic, 2000+ words)
+     * **Cluster** (specific subtopic supporting a pillar, 1000-1500 words)
+   - Pillar titles: "Complete Guide", "Everything You Need to Know"
+   - Cluster titles: Target long-tail keywords and specific questions
+
+4. **CTR Psychology:**
+   - Use curiosity gaps moderately ("Why [Common Belief] is Wrong")
+   - Include tangible benefits ("That Actually Works", "Without [Pain Point]")
+   - Add time elements when relevant ("in 2026", "in 10 Minutes")
+
+5. **Keyword Placement:**
+   - Primary keyword: Position 1-5 for informational intent
+   - Primary keyword: Position 3-7 for commercial intent
+   - Use modifiers: "best", "top", "free", "vs", "how to", "guide"
+
+**CRITICAL REQUIREMENTS:**
 1. All ideas MUST be directly relevant to the project and business context
 2. {{#if researchData}}Each title should target a specific keyword from the research{{/if}}
 3. {{#if existingTitles}}Generate completely NEW angles - avoid similar topics{{/if}}
-4. Include search intent (informational/commercial/transactional)
+4. Balance optimization with authenticity - avoid clickbait
+5. Ensure titles deliver on their promise
 
+**OUTPUT FORMAT:**
 For each idea, provide:
-1. **Title**: Compelling, click-worthy, 50-60 characters, targets a specific keyword
-2. **Teaser**: 1-2 sentence description guiding what the post should cover
-3. **Keywords**: 3-5 target SEO keywords from the research data
-4. **searchIntent**: Type of search intent (informational, commercial, transactional)
-5. **contentFormat**: Suggested format (how-to, listicle, comparison, guide, case-study, news, opinion, review)
 
-Return as JSON: { ideas: [{ title, teaser, keywords, searchIntent, contentFormat }] }`,
+1. **title**: SEO-optimized title (50-60 characters, includes keyword + power word/number)
+2. **teaser**: 1-2 sentence description (mention 2-3 specific subtopics)
+3. **keywords**: Array of 3-5 SEO keywords (first = primary target)
+4. **searchIntent**: "informational" | "commercial" | "transactional" | "navigational"
+5. **contentFormat**: "how-to" | "listicle" | "comparison" | "guide" | "case-study" | "news" | "opinion" | "review"
+6. **contentTier**: "pillar" | "cluster" (for topical authority strategy)
+7. **serpFeature**: Primary SERP feature to target:
+   - "featured-snippet" | "people-also-ask" | "list-snippet" | "table-snippet"
+
+Return as JSON:
+{
+  "ideas": [{
+    "title": "string",
+    "teaser": "string",
+    "keywords": ["primary", "secondary", "long-tail"],
+    "searchIntent": "informational|commercial|transactional|navigational",
+    "contentFormat": "how-to|listicle|comparison|guide|case-study|news|opinion|review",
+    "contentTier": "pillar|cluster",
+    "serpFeature": "featured-snippet|people-also-ask|list-snippet|table-snippet"
+  }]
+}`,
 
     [PromptType.CATEGORY_SUGGESTIONS]: `You are an Editorial Director creating compelling content categories.
 
@@ -194,16 +308,28 @@ For each suggestion, think editorially:
 
 Return as JSON array of strings (each string is a specific category angle or sub-niche).`,
 
-    [PromptType.CATEGORY_BREAKDOWN]: `You are an Editorial Director creating compelling content categories for a media brand.
+    [PromptType.CATEGORY_BREAKDOWN]: `You are an SEO-Driven Editorial Director creating content categories that build topical authority and organic search dominance.
 
 {{#if parentCategory}}
 **PARENT CATEGORY TO EXPAND**
 └─ "{{parentCategory}}"
 
-**TASK:** Create 6 distinct subcategories that bring "{{parentCategory}}" to life.
+**TASK:** Create 6 distinct CLUSTER subcategories that expand "{{parentCategory}}" into a comprehensive topic cluster.
 {{#if query}}Focus specifically on: "{{query}}"{{/if}}
+
+**HIERARCHY CONTEXT:** You are creating CLUSTER CATEGORIES that support the parent pillar:
+- Target more specific long-tail keywords than the parent
+- Address specific search intents within the broader topic
+- Create natural internal linking opportunities back to the parent
+- Fill content gaps competitors have overlooked
 {{else}}
-**TASK:** Create 6 distinct, high-value content categories related to: "{{query}}"
+**TASK:** Create 6 distinct, high-value PILLAR CATEGORIES related to: "{{query}}"
+
+**HIERARCHY CONTEXT:** You are creating TOP-LEVEL PILLAR CATEGORIES:
+- Target broad, high-volume search terms with strategic importance
+- Serve as comprehensive hubs that can be expanded into subcategories
+- Establish topical authority in distinct subject areas
+- Support a scalable content architecture
 {{/if}}
 
 **CATEGORY REQUIREMENTS:**
@@ -211,25 +337,68 @@ Return as JSON array of strings (each string is a specific category angle or sub
 2. Categories must be specific - no generic "Tips & Tricks" or "Industry Basics"
 3. Think editorially: what would make someone EXCITED to dive into this category?
 4. Mix practical utility with storytelling potential
+5. **SEO-FIRST:** Category names MUST include searchable terms people actually use
+
+**SEO ARCHITECTURE REQUIREMENTS:**
+
+**1. KEYWORD STRATEGY**
+- Category name should contain a primary target keyword (high volume or strategic)
+- Description should naturally incorporate 2-3 related semantic keywords
+- Balance search volume with ranking difficulty
+{{#if parentCategory}}
+- Target long-tail variations of the parent topic
+{{else}}
+- Focus on broad head terms with subcategory expansion potential
+{{/if}}
+
+**2. SEARCH INTENT MAPPING**
+Each category must serve a dominant search intent:
+- **Informational:** Learning, guides, how-to content
+- **Commercial:** Comparison, reviews, best-of lists
+- **Navigational:** Brand/product specific
+- **Transactional:** High purchase intent
+
+Mix intents across the 6 categories to capture the full customer journey.
+
+**3. TOPICAL AUTHORITY SIGNALS**
+- Each category should cover a distinct semantic cluster
+- Avoid keyword cannibalization (categories shouldn't compete for same keywords)
+- Create logical progression (awareness → consideration → decision)
+
+**4. CONTENT GAP TARGETING**
+Identify opportunities competitors are missing:
+- Underserved audience segments
+- Emerging trends or new technologies
+- Geographic or demographic niches
+- Question-based content
 
 **DESCRIPTION REQUIREMENTS - THIS IS CRITICAL:**
-Each description must be a compelling EDITORIAL BRIEF (3-4 sentences) that:
+Each description must be a compelling EDITORIAL BRIEF (4-5 sentences) that:
 - Paints a vivid picture of what content belongs here
 - Uses evocative, magazine-quality language that SELLS the category
 - Includes specific content angles, themes, and story hooks
 - Describes the reader transformation - what they'll discover or experience
+- **Naturally incorporates 2-3 semantic keywords for topical relevance**
 - Makes someone WANT to explore this category
 
 **EXAMPLE GOOD DESCRIPTION:**
-"Epic multi-day routes and weekend escapes across dramatic landscapes. From coastal cliff paths to moorland climbs—each route framed as an experience, not just a ride. Features terrain insights, elevation profiles, seasonal timing, café stops, and the 'type of rider' each adventure suits. Where exploration meets storytelling."
+"Master sophisticated email sequences that convert subscribers into customers. From welcome series and abandoned cart recovery to behavior-triggered campaigns—each guide breaks down automation workflows. Features platform comparisons, A/B testing strategies, deliverability optimization, and ROI tracking. Transform your email list into a revenue engine."
 
 **EXAMPLE BAD DESCRIPTION:**
-"Content about cycling routes." (too generic, no editorial vision, doesn't inspire)
+"Content about email marketing." (too generic, no editorial vision, missing keywords)
 
 Return as JSON array of objects with:
-- "name": Category name (2-4 words, evocative and specific)
-- "description": Rich editorial brief (3-4 sentences - make it COMPELLING)
-- "reason": Why this category will captivate the target audience`,
+- "name": Category name (2-5 words, SEO-friendly with target keyword)
+- "description": Rich editorial brief (4-5 sentences, keyword-rich and compelling)
+- "reason": Why this category will captivate the audience AND build topical authority
+- "searchIntent": "informational" | "commercial" | "navigational" | "transactional"
+- "keywordCluster": Array of 3-5 related keywords this category should target
+- "contentGapOpportunity": One specific underserved angle this category addresses
+{{#if parentCategory}}
+- "pillarConnection": How this cluster supports the parent's topical authority
+{{else}}
+- "subcategoryPotential": Array of 2-3 potential subcategory expansion ideas
+{{/if}}`,
 
     [PromptType.BRAND_RESEARCH]: `You are a Brand Analyst specializing in digital marketing.
 

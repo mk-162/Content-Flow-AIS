@@ -14,9 +14,11 @@ import {
   MessageCircle,
   Square,
   CheckSquare,
+  Award,
 } from 'lucide-react';
 import { useOnboarding } from '../../contexts/OnboardingContext';
 import { ChannelRecommendation, ChannelType, CHANNEL_TYPE_LABELS } from '../../types';
+import { ChannelCardSkeleton } from '../ui/Skeleton';
 
 // ============================================================================
 // CHANNEL ICON MAP
@@ -55,9 +57,10 @@ const formatNumber = (num: number): string => {
 interface ChannelCardProps {
   channel: ChannelRecommendation;
   onSelect: (id: string) => void;
+  isBestMatch?: boolean;
 }
 
-const ChannelCard: React.FC<ChannelCardProps> = ({ channel, onSelect }) => {
+const ChannelCard: React.FC<ChannelCardProps> = ({ channel, onSelect, isBestMatch = false }) => {
   const IconComponent = CHANNEL_ICONS[channel.channelType];
   const colorName = CHANNEL_COLORS[channel.channelType];
 
@@ -101,16 +104,33 @@ const ChannelCard: React.FC<ChannelCardProps> = ({ channel, onSelect }) => {
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      whileHover={{ y: -2 }}
+      whileHover={{ y: -2, boxShadow: '0 10px 40px rgba(0, 0, 0, 0.3)' }}
       onClick={() => onSelect(channel.id)}
+      tabIndex={0}
+      role="button"
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect(channel.id);
+        }
+      }}
       className={`
-        relative bg-slate-900/70 border p-5 cursor-pointer transition-all
+        relative bg-slate-900/70 border p-5 cursor-pointer transition-all focus:outline-none focus:ring-2 focus:ring-cyan-500/50
         ${channel.selected
           ? colors.selected + ' bg-slate-800/50'
           : 'border-slate-700 hover:border-slate-600'
         }
+        ${isBestMatch ? 'ring-2 ring-emerald-500/30' : ''}
       `}
     >
+      {/* Best Match Badge - Section 2 UX Fix */}
+      {isBestMatch && (
+        <div className="absolute -top-3 left-4 px-3 py-1 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 shadow-lg">
+          <Award className="w-3.5 h-3.5" />
+          Best Match
+        </div>
+      )}
+
       {/* Checkbox - prominent selection indicator */}
       <div className="absolute top-4 right-4">
         {channel.selected ? (
@@ -121,7 +141,7 @@ const ChannelCard: React.FC<ChannelCardProps> = ({ channel, onSelect }) => {
       </div>
 
       {/* Channel Type Badge */}
-      <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 border text-xs font-medium uppercase tracking-wider mb-4 ${colors.badge}`}>
+      <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 border text-xs font-medium uppercase tracking-wider mb-4 ${isBestMatch ? 'mt-2' : ''} ${colors.badge}`}>
         <IconComponent className="w-3.5 h-3.5" />
         {CHANNEL_TYPE_LABELS[channel.channelType]}
       </div>
@@ -256,11 +276,11 @@ export const ChannelRecommendationStep: React.FC = () => {
         </p>
       </motion.div>
 
-      {/* Loading State */}
+      {/* Loading State with Skeleton Cards */}
       {loading && channels.length === 0 && (
-        <div className="text-center py-12">
-          <div className="w-12 h-12 border-3 border-cyan-500/30 border-t-cyan-500 rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-slate-400">Generating channel recommendations...</p>
+        <div className="grid md:grid-cols-2 gap-4 mb-8">
+          <ChannelCardSkeleton />
+          <ChannelCardSkeleton />
         </div>
       )}
 
@@ -270,21 +290,27 @@ export const ChannelRecommendationStep: React.FC = () => {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.2 }}
-          className="grid md:grid-cols-2 gap-4 mb-8"
+          className="grid md:grid-cols-2 gap-6 mb-8"
         >
-          {channels.map((channel, index) => (
-            <motion.div
-              key={channel.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.1 * index }}
-            >
-              <ChannelCard
-                channel={channel}
-                onSelect={selectChannel}
-              />
-            </motion.div>
-          ))}
+          {channels.map((channel, index) => {
+            // First channel (highest demand) gets Best Match badge
+            const isBestMatch = index === 0;
+            return (
+              <motion.div
+                key={channel.id}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.1 * index }}
+                className={isBestMatch ? 'pt-3' : ''}
+              >
+                <ChannelCard
+                  channel={channel}
+                  onSelect={selectChannel}
+                  isBestMatch={isBestMatch}
+                />
+              </motion.div>
+            );
+          })}
         </motion.div>
       )}
 

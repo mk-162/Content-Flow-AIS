@@ -3,8 +3,6 @@ import { TopBar } from './TopBar';
 
 interface AppShellProps {
   children: React.ReactNode;
-  /** Show project indicator in TopBar */
-  showProject?: boolean;
   /** Custom className for the main content area */
   contentClassName?: string;
 }
@@ -12,18 +10,17 @@ interface AppShellProps {
 /**
  * AppShell provides a consistent layout wrapper for authenticated pages.
  * It includes:
- * - TopBar with logo, org selector, user menu, credits/admin panel
+ * - TopBar with logo, org selector (if multi-org), credits/admin panel, user menu
  * - Main content area (children)
  */
 export const AppShell: React.FC<AppShellProps> = ({
   children,
-  showProject = true,
   contentClassName = '',
 }) => {
   return (
     <div className="flex flex-col h-screen bg-[#0f172a] text-slate-200 font-sans">
-      {/* Top Bar (includes Credits for users, Admin Panel for admins) */}
-      <TopBar showProject={showProject} />
+      {/* Top Bar - Simplified: Logo | Org (if multi-org) | spacer | Credits | User */}
+      <TopBar />
 
       {/* Main Content */}
       <main className={`flex-1 flex flex-col overflow-hidden ${contentClassName}`}>

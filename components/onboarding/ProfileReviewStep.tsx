@@ -21,7 +21,8 @@ import {
   Award,
 } from 'lucide-react';
 import { useOnboarding } from '../../contexts/OnboardingContext';
-import { BusinessProfile } from '../../types';
+import { BusinessProfile, BrandVoice } from '../../types';
+import { BrandVoiceEditModal } from '../ui/BrandVoiceEditModal';
 
 // ============================================================================
 // TOOLTIP COMPONENT
@@ -265,6 +266,8 @@ export const ProfileReviewStep: React.FC = () => {
   const profile = session?.businessProfile;
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
+  // State for BrandVoice modal (Section 2 UX fix - replace pipe-separated format)
+  const [showBrandVoiceModal, setShowBrandVoiceModal] = useState(false);
 
   const handleEdit = (field: string, currentValue: string) => {
     setEditingField(field);
@@ -298,6 +301,33 @@ export const ProfileReviewStep: React.FC = () => {
           categories: categories,
         }
       });
+    } else if (editingField === 'contentStyle') {
+      // Parse format: "types: blog, guide | length: medium | level: intermediate"
+      try {
+        const parts = editValue.split('|').map(p => p.trim());
+        const updates: any = { ...profile!.contentStyle };
+
+        for (const part of parts) {
+          const [key, value] = part.split(':').map(s => s.trim());
+          if (key === 'types' && value) {
+            updates.types = value.split(',').map(t => t.trim()).filter(Boolean);
+          } else if (key === 'length' && value) {
+            updates.averageLength = value;
+          } else if (key === 'level' && value) {
+            updates.technicalLevel = value;
+          }
+        }
+
+        updateProfile({ contentStyle: updates });
+      } catch {
+        // If parsing fails, just update types as comma-separated
+        updateProfile({
+          contentStyle: {
+            ...profile!.contentStyle,
+            types: editValue.split(',').map(t => t.trim()).filter(Boolean),
+          }
+        });
+      }
     }
 
     setEditingField(null);
@@ -716,64 +746,128 @@ export const ProfileReviewStep: React.FC = () => {
           )}
         </ProfileCard>
 
-        {/* Brand Voice */}
+        {/* Brand Voice - Now uses modal for editing (Section 2 UX fix) */}
         <ProfileCard
           icon={<MessageSquare className="w-4 h-4" />}
           title="Brand Voice"
           source="Blog posts, About page copy"
+          onEdit={() => setShowBrandVoiceModal(true)}
+          isEditing={false}
         >
-          <ul className="space-y-1">
-            <li>
-              <strong className="text-slate-400">Tone:</strong>{' '}
+          <div className="space-y-3">
+            {/* Tone chips */}
+            <div>
+              <span className="text-xs text-slate-500 uppercase tracking-wider block mb-2">Tone</span>
               {profile.brandVoice?.tone?.length ? (
-                <span className="text-white">{profile.brandVoice.tone.join(', ')}</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {profile.brandVoice.tone.map((t, i) => (
+                    <span key={i} className="px-2.5 py-1 bg-cyan-500/10 text-cyan-400 text-xs border border-cyan-500/20">
+                      {t}
+                    </span>
+                  ))}
+                </div>
               ) : (
                 <NotSpecified fieldName="tone" />
               )}
-            </li>
-            <li>
-              <strong className="text-slate-400">Style:</strong>{' '}
+            </div>
+
+            {/* Style badge */}
+            <div>
+              <span className="text-xs text-slate-500 uppercase tracking-wider block mb-2">Writing Style</span>
               {profile.brandVoice?.style ? (
-                <span className="text-white">{profile.brandVoice.style}</span>
+                <span className="inline-block px-3 py-1.5 bg-slate-800 text-white text-sm border border-slate-700">
+                  {profile.brandVoice.style}
+                </span>
               ) : (
                 <NotSpecified fieldName="writing style" />
               )}
-            </li>
-            <li>
-              <strong className="text-slate-400">Personality:</strong>{' '}
+            </div>
+
+            {/* Personality chips */}
+            <div>
+              <span className="text-xs text-slate-500 uppercase tracking-wider block mb-2">Personality</span>
               {profile.brandVoice?.personality?.length ? (
-                <span className="text-white">{profile.brandVoice.personality.join(', ')}</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {profile.brandVoice.personality.map((p, i) => (
+                    <span key={i} className="px-2.5 py-1 bg-emerald-500/10 text-emerald-400 text-xs border border-emerald-500/20">
+                      {p}
+                    </span>
+                  ))}
+                </div>
               ) : (
                 <NotSpecified fieldName="personality traits" />
               )}
-            </li>
-          </ul>
+            </div>
+          </div>
         </ProfileCard>
+
+        {/* Brand Voice Edit Modal */}
+        <BrandVoiceEditModal
+          isOpen={showBrandVoiceModal}
+          brandVoice={profile.brandVoice || { tone: [], style: '', personality: [] }}
+          onSave={(updates) => updateProfile({ brandVoice: { ...profile.brandVoice, ...updates } })}
+          onClose={() => setShowBrandVoiceModal(false)}
+        />
 
         {/* Content Style */}
         <ProfileCard
           icon={<FileText className="w-4 h-4" />}
           title="Content Style"
           source="Blog, Resources section"
+          onEdit={() => handleEdit('contentStyle',
+            `types: ${profile.contentStyle?.types?.join(', ') || ''} | length: ${profile.contentStyle?.averageLength || ''} | level: ${profile.contentStyle?.technicalLevel || ''}`
+          )}
+          isEditing={editingField === 'contentStyle'}
         >
-          <div className="flex flex-wrap gap-2 mb-2">
-            {profile.contentStyle?.types?.length > 0 ? (
-              profile.contentStyle.types.map((type, i) => (
-                <span
-                  key={i}
-                  className="px-2 py-1 bg-cyan-500/10 text-xs text-cyan-400 rounded"
+          {editingField === 'contentStyle' ? (
+            <div className="flex flex-col gap-2">
+              <label className="text-xs text-slate-500">
+                Edit content style (format: types: type1, type2 | length: value | level: value)
+              </label>
+              <textarea
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                className="w-full h-24 px-3 py-2 bg-slate-800 border border-cyan-500/50 text-white text-sm focus:outline-none focus:border-cyan-500 rounded resize-y font-mono"
+                autoFocus
+                placeholder="types: blog posts, how-to guides | length: medium (1000-2000 words) | level: intermediate"
+              />
+              <div className="flex justify-end gap-2 mt-1">
+                <button
+                  onClick={handleCancelEdit}
+                  className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-sm rounded"
                 >
-                  {type}
-                </span>
-              ))
-            ) : (
-              <NotSpecified fieldName="content types" />
-            )}
-          </div>
-          <p className="text-xs text-slate-500">
-            Length: {profile.contentStyle?.averageLength || <NotSpecified fieldName="content length" />} |{' '}
-            Level: {profile.contentStyle?.technicalLevel || <NotSpecified fieldName="technical level" />}
-          </p>
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveEdit}
+                  className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-sm rounded"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-wrap gap-2 mb-2">
+                {profile.contentStyle?.types?.length > 0 ? (
+                  profile.contentStyle.types.map((type, i) => (
+                    <span
+                      key={i}
+                      className="px-2 py-1 bg-cyan-500/10 text-xs text-cyan-400 rounded"
+                    >
+                      {type}
+                    </span>
+                  ))
+                ) : (
+                  <NotSpecified fieldName="content types" />
+                )}
+              </div>
+              <p className="text-xs text-slate-500">
+                Length: {profile.contentStyle?.averageLength || <NotSpecified fieldName="content length" />} |{' '}
+                Level: {profile.contentStyle?.technicalLevel || <NotSpecified fieldName="technical level" />}
+              </p>
+            </>
+          )}
         </ProfileCard>
       </motion.div>
 

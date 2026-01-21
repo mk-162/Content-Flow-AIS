@@ -11,9 +11,7 @@ import {
   ChevronRight,
   Zap,
   X,
-  ExternalLink,
   Coins,
-  Globe,
   Sparkles,
   FileText,
   BookOpen,
@@ -65,11 +63,9 @@ const DEMO_SITES: Record<ChannelType, string> = {
 };
 
 interface ProjectStats {
-  categoryCount: number;
   titleCount: number;      // PENDING posts (stubs)
   reviewCount: number;     // NEEDS_REVIEW + GENERATING
   liveCount: number;       // PUBLISHED
-  channelUrl?: string;     // from settings.deployment.customDomain
 }
 
 export const ProjectDashboard: React.FC = () => {
@@ -147,11 +143,6 @@ export const ProjectDashboard: React.FC = () => {
 
       for (const project of projects) {
         try {
-          // Get category count
-          const categoriesSnapshot = await getDocs(
-            collection(db, `organizations/${currentOrg.id}/projects/${project.id}/categories`)
-          );
-
           // Get posts and count by status
           const postsSnapshot = await getDocs(
             collection(db, `organizations/${currentOrg.id}/projects/${project.id}/posts`)
@@ -172,15 +163,10 @@ export const ProjectDashboard: React.FC = () => {
             }
           });
 
-          // Get custom domain URL from project settings
-          const channelUrl = project.settings?.deployment?.customDomain;
-
           stats[project.id] = {
-            categoryCount: categoriesSnapshot.size,
             titleCount,
             reviewCount,
             liveCount,
-            channelUrl,
           };
         } catch (error) {
           console.error(`Error fetching stats for project ${project.id}:`, error);
@@ -524,11 +510,9 @@ export const ProjectDashboard: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {projects.map((project, index) => {
                   const stats = projectStats[project.id] || {
-                    categoryCount: 0,
                     titleCount: 0,
                     reviewCount: 0,
                     liveCount: 0,
-                    channelUrl: undefined,
                   };
                   const ChannelIcon = project.channelType ? CHANNEL_ICONS[project.channelType] : Folder;
 
@@ -571,31 +555,15 @@ export const ProjectDashboard: React.FC = () => {
                           </div>
                         </div>
 
-                        {/* Channel URL - fixed height for consistent card layout */}
-                        <div className="h-5 mt-1">
-                          {stats.channelUrl && (
-                            <a
-                              href={stats.channelUrl.startsWith('http://') || stats.channelUrl.startsWith('https://') ? stats.channelUrl : `https://${stats.channelUrl}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-cyan-400 transition-colors"
-                            >
-                              <Globe className="w-3 h-3" />
-                              <span>{stats.channelUrl.replace(/^https?:\/\//, '')}</span>
-                              <ExternalLink className="w-3 h-3 opacity-50" />
-                            </a>
-                          )}
-                        </div>
                       </div>
 
                       {/* Stats Grid */}
                       <div className="p-4 bg-slate-950/50">
-                        <div className="grid grid-cols-4 gap-3">
+                        <div className="grid grid-cols-3 gap-3">
                           {!projectStats[project.id] ? (
                             // Loading skeleton
                             <>
-                              {[1, 2, 3, 4].map((i) => (
+                              {[1, 2, 3].map((i) => (
                                 <div key={i} className="bg-slate-800/50 p-3 text-center animate-pulse">
                                   <div className="h-7 w-8 bg-slate-700 mx-auto mb-1" />
                                   <div className="h-2 w-12 bg-slate-700 mx-auto" />
@@ -604,10 +572,6 @@ export const ProjectDashboard: React.FC = () => {
                             </>
                           ) : (
                             <>
-                              <div className="bg-slate-800/50 p-3 text-center">
-                                <p className="text-xl font-bold text-white">{stats.categoryCount}</p>
-                                <p className="text-[10px] text-slate-500 uppercase tracking-widest mt-1">Categories</p>
-                              </div>
                               <div className="bg-slate-800/50 p-3 text-center">
                                 <p className="text-xl font-bold text-white">{stats.titleCount}</p>
                                 <p className="text-[10px] text-slate-500 uppercase tracking-widest mt-1">Titles</p>

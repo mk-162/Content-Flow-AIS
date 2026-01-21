@@ -75,7 +75,7 @@ export const ProjectSelectionStep: React.FC = () => {
           Let's create your first project
         </h1>
         <p className="text-slate-400">
-          Based on your profile, we've identified {projects.length} main content areas
+          Based on your profile, we've identified {projects.length} main content engines
         </p>
       </motion.div>
 

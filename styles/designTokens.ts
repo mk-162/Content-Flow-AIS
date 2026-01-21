@@ -309,3 +309,136 @@ export const presets = {
   // Modal with common sizing
   modalMd: `${modal.backdrop}`,
 } as const;
+
+// =============================================================================
+// FEED DESIGN SYSTEM (for new feed-based workspace)
+// =============================================================================
+
+export const feedColors = {
+  // Backgrounds
+  background: {
+    page: '#0a0a0f',        // Near black - page background
+    card: '#111118',        // Card background
+    cardHover: '#16161f',   // Card hover state
+    elevated: '#1c1c26',    // Modals, dropdowns
+  },
+
+  // Brand colors
+  brand: {
+    primary: '#06b6d4',     // Cyan - primary actions
+    magic: '#8b5cf6',       // Purple - AI/magic moments
+    success: '#10b981',     // Green - approvals, launches
+    warning: '#f59e0b',     // Amber - pending actions
+  },
+
+  // Text
+  text: {
+    primary: '#f4f4f5',     // Headlines, key content
+    secondary: '#a1a1aa',   // Supporting text
+    muted: '#52525b',       // Labels, hints
+    inverse: '#0a0a0f',     // Text on bright backgrounds
+  },
+
+  // Borders
+  border: {
+    subtle: '#27272a',      // Card borders
+    medium: '#3f3f46',      // Dividers
+    focus: '#06b6d4',       // Focus states
+  },
+
+  // SEO Traffic Light System
+  seo: {
+    high: '#10b981',        // High volume (5K+) / Easy difficulty
+    medium: '#f59e0b',      // Medium volume (1K-5K) / Medium difficulty
+    low: '#ef4444',         // Low volume (<1K) / Hard difficulty
+  },
+
+  // State colors
+  state: {
+    generating: '#8b5cf6',  // Purple pulse for AI working
+    ready: '#10b981',       // Green for ready to launch
+    launched: '#06b6d4',    // Cyan for published
+    skipped: '#52525b',     // Muted for skipped
+  }
+} as const;
+
+export const feedTypography = {
+  // Headlines - for card titles (Space Grotesk)
+  pitchTitle: 'font-display text-2xl font-semibold leading-tight tracking-tight',
+
+  // Section labels (Space Grotesk, uppercase)
+  sectionLabel: 'font-display text-xs font-semibold uppercase tracking-widest text-zinc-500',
+
+  // Key points (Plus Jakarta Sans)
+  keyPoint: 'font-sans text-[15px] font-medium leading-relaxed',
+
+  // Data values (JetBrains Mono)
+  dataValue: 'font-mono text-sm font-medium',
+
+  // Status labels
+  statusLabel: 'font-display text-[10px] font-bold uppercase tracking-widest',
+} as const;
+
+export const feedCard = {
+  // Base card styling
+  base: 'bg-[#111118] border border-[#27272a]',
+
+  // Interactive card
+  interactive: 'bg-[#111118] border border-[#27272a] hover:border-[#3f3f46] transition-colors',
+
+  // Card with generating state (purple glow)
+  generating: 'bg-[#111118] border border-[#8b5cf6]/30 shadow-[0_0_20px_rgba(139,92,246,0.15)]',
+
+  // Card with ready state (green left border)
+  ready: 'bg-[#111118] border border-[#27272a] border-l-4 border-l-[#10b981]',
+
+  // Card sections
+  section: 'border-t border-[#27272a] py-4',
+} as const;
+
+export const feedButton = {
+  // Primary action (cyan)
+  primary: 'bg-[#06b6d4] hover:bg-[#0891b2] text-[#0a0a0f] font-bold uppercase tracking-wider text-xs px-6 py-3 transition-colors',
+
+  // Launch action (green)
+  launch: 'bg-[#10b981] hover:bg-[#059669] text-[#0a0a0f] font-bold uppercase tracking-wider text-xs px-6 py-3 transition-colors',
+
+  // Ghost/secondary (transparent)
+  ghost: 'bg-transparent hover:bg-[#27272a] text-[#a1a1aa] hover:text-[#f4f4f5] font-bold uppercase tracking-wider text-xs px-4 py-3 border border-[#27272a] transition-colors',
+
+  // Cancel (subtle)
+  cancel: 'bg-transparent hover:bg-[#27272a] text-[#52525b] hover:text-[#a1a1aa] font-medium text-xs px-4 py-2 transition-colors',
+} as const;
+
+// =============================================================================
+// CATEGORY CARDS (for tabbed workspace)
+// =============================================================================
+
+export const categoryColors = {
+  // Parent category card styling
+  parent: {
+    background: 'linear-gradient(135deg, #1a1625 0%, #12111a 100%)',
+    border: 'rgba(168, 85, 247, 0.3)',
+    borderHover: 'rgba(168, 85, 247, 0.5)',
+    accent: '#a855f7',
+    glow: 'rgba(168, 85, 247, 0.1)',
+  },
+  // Subcategory card styling
+  subcategory: {
+    background: 'linear-gradient(135deg, #161422 0%, #0f0e14 100%)',
+    border: 'rgba(139, 92, 246, 0.25)',
+    borderHover: 'rgba(139, 92, 246, 0.4)',
+    accent: '#8b5cf6',
+    glow: 'rgba(139, 92, 246, 0.1)',
+  },
+} as const;
+
+export const categoryCard = {
+  // Parent category card
+  parent: 'border-l-4 border-l-purple-500',
+  parentHover: 'hover:border-purple-500/50 hover:shadow-[0_0_20px_rgba(168,85,247,0.1)]',
+
+  // Subcategory card
+  subcategory: 'border-l-4 border-l-violet-500',
+  subcategoryHover: 'hover:border-violet-500/40 hover:shadow-[0_0_20px_rgba(139,92,246,0.1)]',
+} as const;

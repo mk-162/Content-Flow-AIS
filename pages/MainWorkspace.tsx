@@ -2,16 +2,21 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   FolderTree,
-  FileText,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Settings,
   Globe,
   Zap,
+  Layers,
+  Rocket,
+  FileText,
 } from 'lucide-react';
 import { CategoryWorkspace } from '../components/CategoryWorkspace';
-import { PostsWorkspace } from '../components/PostsWorkspace';
+import { TabbedCategoryWorkspace, BriefsTab, CategoriesTab } from '../components/workspace';
 import { LivePostsWorkspace } from '../components/LivePostsWorkspace';
+import { PublishingWorkspace } from '../components/PublishingWorkspace';
+import { ProgressHeader, ContentFeed, ContentFeedHandle, StatusFilter, SortOption, CategoryQuickPanel } from '../components/feed';
 import { useAuth } from '../contexts/AuthContext';
 import { useOrganization } from '../contexts/OrganizationContext';
 import { useProject } from '../contexts/ProjectContext';
@@ -40,12 +45,16 @@ import {
 import { db } from '../lib/firebase';
 // Note: Content generation now handled by Cloud Function (processGenerationQueue)
 import { ProjectSettings } from '../components/ProjectSettings';
-import { TopBar } from '../components/layout';
+import { TopBar, ProjectSelector } from '../components/layout';
 import { creditService, CREDIT_COSTS } from '../services/creditService';
 import { imageGenerationService } from '../services/imageGenerationService';
 import { CreditManagementModal } from '../components/CreditManagementModal';
 import { MigrationConfirmationModal } from '../components/MigrationConfirmationModal';
 import { useAutoGeneration } from '../hooks/useAutoGeneration';
+import { WorkspaceTour } from '../components/onboarding/WorkspaceTour';
+import { useWorkspaceTour } from '../hooks/useWorkspaceTour';
+import { ErrorBoundary } from '../components/ErrorBoundary';
+import { AlertTriangle, RefreshCw } from 'lucide-react';
 
 interface ExtendedGenerationTask extends GenerationTask {
   requestedCount?: number;
@@ -66,7 +75,7 @@ export const MainWorkspace: React.FC = () => {
   const [posts, setPosts] = useState<Post[]>([]);
   const [tasks, setTasks] = useState<ExtendedGenerationTask[]>([]);
   const [notifications, setNotifications] = useState<{ id: string; msg: string; type: 'success' | 'info' }[]>([]);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
   const [showMigrationModal, setShowMigrationModal] = useState(false);
@@ -74,6 +83,14 @@ export const MainWorkspace: React.FC = () => {
   const [generatingPostIds, setGeneratingPostIds] = useState<Set<string>>(new Set());
   const [notifiedFailedTasks, setNotifiedFailedTasks] = useState<Set<string>>(new Set());
   const [notifiedDegradedTasks, setNotifiedDegradedTasks] = useState<Set<string>>(new Set());
+
+  // Feed filter state
+  const [feedStatusFilter, setFeedStatusFilter] = useState<StatusFilter>('all');
+  const [feedCategoryFilter, setFeedCategoryFilter] = useState<string | null>(null);
+  const [feedSearchQuery, setFeedSearchQuery] = useState('');
+  const [feedSortOption, setFeedSortOption] = useState<SortOption>('date');
+  const [isCategoryPanelOpen, setIsCategoryPanelOpen] = useState(false);
+  const contentFeedRef = React.useRef<ContentFeedHandle>(null);
   const initialLoadCompleteRef = React.useRef(false);
   const initialFailedTaskIdsRef = React.useRef<Set<string>>(new Set());
   const initialDegradedTaskIdsRef = React.useRef<Set<string>>(new Set());
@@ -85,6 +102,9 @@ export const MainWorkspace: React.FC = () => {
       setNotifications((prev) => prev.filter((n) => n.id !== id));
     }, 3000);
   };
+
+  // Workspace onboarding tour
+  const workspaceTour = useWorkspaceTour();
 
   // Auto-generation hook
   const autoGen = useAutoGeneration(
@@ -137,8 +157,11 @@ export const MainWorkspace: React.FC = () => {
   }, [currentOrg?.id, currentProject?.id]);
 
   // Real-time listener for categories
+  // Fix #8: Add cancelled flag to prevent race condition when org/project changes
   useEffect(() => {
     if (!currentOrg || !currentProject) return;
+
+    let cancelled = false;
 
     const categoriesRef = collection(
       db,
@@ -148,6 +171,7 @@ export const MainWorkspace: React.FC = () => {
     const unsubscribe = onSnapshot(
       categoriesRef,
       (snapshot) => {
+        if (cancelled) return; // Ignore updates after cleanup
         const categoriesData = snapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
@@ -157,18 +181,25 @@ export const MainWorkspace: React.FC = () => {
         setLoading(false);
       },
       (error) => {
+        if (cancelled) return;
         console.error('Error listening to categories:', error);
         notify('Error loading categories', 'info');
         setLoading(false);
       }
     );
 
-    return unsubscribe;
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [currentOrg, currentProject]);
 
   // Real-time listener for posts
+  // Fix #8: Add cancelled flag to prevent race condition when org/project changes
   useEffect(() => {
     if (!currentOrg || !currentProject) return;
+
+    let cancelled = false;
 
     const postsRef = collection(
       db,
@@ -178,6 +209,7 @@ export const MainWorkspace: React.FC = () => {
     const unsubscribe = onSnapshot(
       postsRef,
       (snapshot) => {
+        if (cancelled) return; // Ignore updates after cleanup
         const postsData = snapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
@@ -185,17 +217,33 @@ export const MainWorkspace: React.FC = () => {
         setPosts(postsData);
       },
       (error) => {
+        if (cancelled) return;
         console.error('Error listening to posts:', error);
         notify('Error loading posts', 'info');
       }
     );
 
-    return unsubscribe;
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [currentOrg, currentProject]);
 
+  // Track when tasks have had their first load
+  const [tasksInitiallyLoaded, setTasksInitiallyLoaded] = useState(false);
+
   // Real-time listener for generation queue
+  // Fix #8: Add cancelled flag to prevent race condition when org/project changes
   useEffect(() => {
     if (!currentOrg || !currentProject) return;
+
+    let cancelled = false;
+
+    // Reset all tracking refs on project change
+    setTasksInitiallyLoaded(false);
+    initialLoadCompleteRef.current = false;
+    initialFailedTaskIdsRef.current = new Set();
+    initialDegradedTaskIdsRef.current = new Set();
 
     const queueRef = collection(db, 'generationQueue');
     const q = query(
@@ -207,34 +255,39 @@ export const MainWorkspace: React.FC = () => {
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
+        if (cancelled) return; // Ignore updates after cleanup
         const tasksData = snapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
         })) as ExtendedGenerationTask[];
         setTasks(tasksData);
+        setTasksInitiallyLoaded(true); // Mark first load complete
       },
       (error) => {
+        if (cancelled) return;
         console.error('Error listening to queue:', error);
+        setTasksInitiallyLoaded(true); // Also mark complete on error to prevent blocking
       }
     );
 
-    return unsubscribe;
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [currentOrg, currentProject]);
 
   // Monitor for failed tasks and notify user (only NEW failures, not historical ones)
   useEffect(() => {
+    // Wait for tasks to actually load from Firestore before processing
+    if (!tasksInitiallyLoaded) return;
+
     const failedTasks = tasks.filter(t => t.status === TaskStatus.FAILED);
 
     // On first load, capture existing failed task IDs without notifying
-    if (!initialLoadCompleteRef.current && failedTasks.length > 0) {
+    if (!initialLoadCompleteRef.current) {
       initialFailedTaskIdsRef.current = new Set(failedTasks.map(t => t.id));
       initialLoadCompleteRef.current = true;
-      return;
-    }
-
-    // Mark initial load complete even if no failed tasks
-    if (!initialLoadCompleteRef.current) {
-      initialLoadCompleteRef.current = true;
+      return; // Don't notify on first load
     }
 
     for (const task of failedTasks) {
@@ -278,18 +331,23 @@ export const MainWorkspace: React.FC = () => {
       notify(userMessage, 'info');
       setNotifiedFailedTasks(prev => new Set([...prev, task.id]));
     }
-  }, [tasks, notifiedFailedTasks]);
+  }, [tasks, notifiedFailedTasks, tasksInitiallyLoaded]);
 
   // Monitor for completed tasks with degraded mode (only NEW, not historical)
+  const initialDegradedLoadRef = React.useRef(false);
   useEffect(() => {
+    // Wait for tasks to load before processing
+    if (!tasksInitiallyLoaded) return;
+
     const degradedTasks = tasks.filter(
       t => t.status === TaskStatus.COMPLETED &&
         t.result?.degradedMode === true
     );
 
     // Capture initial degraded task IDs on first load without notifying
-    if (initialDegradedTaskIdsRef.current.size === 0 && degradedTasks.length > 0) {
+    if (!initialDegradedLoadRef.current) {
       initialDegradedTaskIdsRef.current = new Set(degradedTasks.map(t => t.id));
+      initialDegradedLoadRef.current = true;
       return;
     }
 
@@ -306,7 +364,7 @@ export const MainWorkspace: React.FC = () => {
       );
       setNotifiedDegradedTasks(prev => new Set([...prev, task.id]));
     }
-  }, [tasks, notifiedDegradedTasks]);
+  }, [tasks, notifiedDegradedTasks, tasksInitiallyLoaded]);
 
   // Cleanup: Reset orphaned posts and stale tasks (runs periodically, not on every state change)
   const cleanedUpItemsRef = React.useRef<Set<string>>(new Set());
@@ -992,10 +1050,162 @@ export const MainWorkspace: React.FC = () => {
   ).length;
   const reviewCount = posts.filter((p) => p.status === PostStatus.NEEDS_REVIEW).length;
 
+  // Feed stats for ProgressHeader
+  const feedStats = {
+    pitches: posts.filter((p) => p.status === PostStatus.PITCH || p.status === PostStatus.PENDING).length,
+    generating: posts.filter((p) => p.status === PostStatus.GENERATING).length,
+    ready: posts.filter((p) => p.status === PostStatus.READY || p.status === PostStatus.NEEDS_REVIEW).length,
+    launched: posts.filter((p) => p.status === PostStatus.PUBLISHED).length,
+  };
+
+  // Feed action handlers
+  const handleFeedGenerate = async (postId: string) => {
+    const post = posts.find((p) => p.id === postId);
+    if (post) {
+      await queueContentGeneration(post);
+    }
+  };
+
+  const handleBulkGenerate = async () => {
+    const pitchPosts = posts.filter(
+      (p) => p.status === PostStatus.PITCH || p.status === PostStatus.PENDING
+    );
+    if (pitchPosts.length === 0) return;
+
+    notify(`Generating ${pitchPosts.length} articles...`, 'info');
+    for (const post of pitchPosts) {
+      await queueContentGeneration(post);
+    }
+  };
+
+  const handleFeedSkip = async (postId: string) => {
+    if (!currentOrg || !currentProject) return;
+    try {
+      const postRef = doc(
+        db,
+        `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`,
+        postId
+      );
+      await updateDoc(postRef, {
+        status: PostStatus.SKIPPED,
+        updatedAt: Timestamp.now(),
+      });
+      notify('Post skipped', 'success');
+    } catch (error) {
+      console.error('Error skipping post:', error);
+      notify('Failed to skip post', 'info');
+    }
+  };
+
+  const handleFeedCancel = async (postId: string) => {
+    // For now, just reset to PITCH/PENDING status
+    // TODO: Cancel the actual task in generationQueue
+    if (!currentOrg || !currentProject) return;
+    try {
+      const postRef = doc(
+        db,
+        `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`,
+        postId
+      );
+      await updateDoc(postRef, {
+        status: PostStatus.PITCH,
+        updatedAt: Timestamp.now(),
+      });
+      notify('Generation cancelled', 'info');
+    } catch (error) {
+      console.error('Error cancelling generation:', error);
+      notify('Failed to cancel', 'info');
+    }
+  };
+
+  const handleFeedApprove = async (postId: string) => {
+    await updatePostStatus(postId, PostStatus.APPROVED);
+    notify('Approved → Launch Pad', 'success');
+  };
+
+  const handleFeedPreview = (postId: string) => {
+    // Switch to Launch Pad for post preview
+    setCurrentScreen(Screen.PUBLISHING);
+    notify('Opening in Launch Pad...', 'info');
+  };
+
+  const handleApproveAll = async () => {
+    const readyPosts = posts.filter(
+      (p) => p.status === PostStatus.READY || p.status === PostStatus.NEEDS_REVIEW
+    );
+    for (const post of readyPosts) {
+      await updatePostStatus(post.id, PostStatus.APPROVED);
+    }
+    notify(`Approved ${readyPosts.length} articles → Launch Pad`, 'success');
+  };
+
+  // Handler for updating pitch stub fields (title, teaser, keyPoints, metaDescription, metaKeywords)
+  const handleFeedUpdateStub = async (postId: string, updates: { title?: string; teaser?: string; keyPoints?: string[]; metaDescription?: string; metaKeywords?: string[] }) => {
+    if (!currentOrg || !currentProject) return;
+    try {
+      const postRef = doc(
+        db,
+        `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`,
+        postId
+      );
+
+      const updateData: any = { updatedAt: Timestamp.now() };
+      if (updates.title !== undefined) updateData.title = updates.title;
+      if (updates.teaser !== undefined) updateData.teaser = updates.teaser;
+      if (updates.keyPoints !== undefined) {
+        updateData['pitch.keyPoints'] = updates.keyPoints;
+      }
+      if (updates.metaDescription !== undefined) updateData.metaDescription = updates.metaDescription;
+      if (updates.metaKeywords !== undefined) updateData.metaKeywords = updates.metaKeywords;
+
+      await updateDoc(postRef, updateData);
+    } catch (error) {
+      console.error('Error updating stub:', error);
+      notify('Failed to save changes', 'info');
+    }
+  };
+
+  // Handler for updating featured image on pitch cards
+  const handleFeedImageUpdate = async (postId: string, image: {
+    url: string;
+    prompt: string;
+    altText: string;
+    generatedAt: any;
+    providerId: string;
+    aspectRatio: string;
+  } | undefined) => {
+    if (!currentOrg || !currentProject) return;
+    try {
+      const postRef = doc(
+        db,
+        `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`,
+        postId
+      );
+
+      if (image) {
+        await updateDoc(postRef, {
+          heroImage: image,
+          updatedAt: Timestamp.now(),
+        });
+        notify('Image updated', 'success');
+      } else {
+        // Remove the image
+        await updateDoc(postRef, {
+          heroImage: null,
+          updatedAt: Timestamp.now(),
+        });
+        notify('Image removed', 'info');
+      }
+    } catch (error) {
+      console.error('Error updating image:', error);
+      notify('Failed to update image', 'info');
+    }
+  };
+
   return (
     <div className="flex flex-col h-screen bg-[#0f172a] text-slate-200 font-sans selection:bg-cyan-500/30">
-      {/* TOP BAR */}
-      <TopBar showProject={true} />
+      {/* TOP BAR - Simplified: Logo | Org (if multi-org) | spacer | Credits | User */}
+      <TopBar />
 
       {/* MAIN AREA: Sidebar + Content */}
       <div className="flex flex-1 overflow-hidden">
@@ -1006,49 +1216,85 @@ export const MainWorkspace: React.FC = () => {
               bg-slate-950 border-r border-slate-800 flex flex-col shrink-0 z-40 transition-all duration-300 ease-in-out
             `}
         >
-          {/* Header: Collapse Toggle + Project Selector */}
-          <div className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'justify-between'} p-4 border-b border-slate-800`}>
-            {!isSidebarCollapsed && (
-              <span className="text-sm font-medium text-slate-400 uppercase tracking-wider">Workspace</span>
+          {/* Header: Project Selector + Collapse Toggle */}
+          <div className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-2'} p-3 border-b border-slate-800`}>
+            {isSidebarCollapsed ? (
+              <ProjectSelector collapsed={true} />
+            ) : (
+              <>
+                <div className="flex-1 min-w-0">
+                  <ProjectSelector collapsed={false} />
+                </div>
+                <button
+                  onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+                  className="p-1 text-slate-500 hover:text-white hover:bg-slate-800 transition-colors shrink-0"
+                  title="Collapse sidebar"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+              </>
             )}
-            <button
-              onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-              className="p-1 text-slate-500 hover:text-white hover:bg-slate-800 transition-colors"
-              title={isSidebarCollapsed ? 'Expand' : 'Collapse'}
-            >
-              {isSidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-            </button>
+            {isSidebarCollapsed && (
+              <button
+                onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+                className="p-1 text-slate-500 hover:text-white hover:bg-slate-800 transition-colors mt-2"
+                title="Expand sidebar"
+              >
+                <ChevronRight size={16} />
+              </button>
+            )}
           </div>
 
           {/* Main Navigation */}
           <nav className="flex-1 py-4 overflow-y-auto">
+            {/* Content Engine with sub-items */}
+            <div className="mb-1">
+              <NavButton
+                active={currentScreen === Screen.CATEGORIES || currentScreen === Screen.BRIEFS}
+                onClick={() => setCurrentScreen(Screen.CATEGORIES)}
+                icon={<Layers />}
+                label="Content Engine"
+                collapsed={isSidebarCollapsed}
+              />
+              {/* Sub-navigation items */}
+              {!isSidebarCollapsed && (
+                <div className="ml-6 border-l border-slate-800 pl-2 mt-1 space-y-0.5">
+                  <SubNavButton
+                    active={currentScreen === Screen.CATEGORIES}
+                    onClick={() => setCurrentScreen(Screen.CATEGORIES)}
+                    icon={<FolderTree size={14} />}
+                    label="Categories"
+                  />
+                  <SubNavButton
+                    active={currentScreen === Screen.BRIEFS}
+                    onClick={() => setCurrentScreen(Screen.BRIEFS)}
+                    icon={<FileText size={14} />}
+                    label="Briefs"
+                    badge={posts.filter(p =>
+                      !p.isCategoryPage &&
+                      (p.status === PostStatus.PITCH || p.status === PostStatus.PENDING)
+                    ).length || undefined}
+                  />
+                </div>
+              )}
+            </div>
             <NavButton
-              active={currentScreen === Screen.CATEGORIES}
-              onClick={() => setCurrentScreen(Screen.CATEGORIES)}
-              icon={<FolderTree />}
-              label="Categories"
-              collapsed={isSidebarCollapsed}
-            />
-            <NavButton
-              active={currentScreen === Screen.POSTS}
-              onClick={() => setCurrentScreen(Screen.POSTS)}
-              icon={<FileText />}
-              label="Posts"
-              badge={
-                activeTaskCount > 0
-                  ? activeTaskCount
-                  : reviewCount > 0
-                    ? reviewCount
-                    : undefined
-              }
-              badgeColor={activeTaskCount > 0 ? 'bg-cyan-500' : 'bg-emerald-500'}
+              active={currentScreen === Screen.PUBLISHING}
+              onClick={() => setCurrentScreen(Screen.PUBLISHING)}
+              icon={<Rocket />}
+              label="Launch Pad"
+              badge={posts.filter(p =>
+                (p.status === PostStatus.READY || p.status === PostStatus.NEEDS_REVIEW || p.status === PostStatus.APPROVED) &&
+                !p.isDraft
+              ).length || undefined}
+              badgeColor="bg-cyan-500"
               collapsed={isSidebarCollapsed}
             />
             <NavButton
               active={currentScreen === Screen.LIVE_POSTS}
               onClick={() => setCurrentScreen(Screen.LIVE_POSTS)}
               icon={<Globe />}
-              label="Live Posts"
+              label="Live"
               badge={posts.filter(p => p.status === PostStatus.PUBLISHED).length || undefined}
               badgeColor="bg-emerald-500"
               collapsed={isSidebarCollapsed}
@@ -1058,7 +1304,7 @@ export const MainWorkspace: React.FC = () => {
               active={currentScreen === Screen.SETTINGS}
               onClick={() => setCurrentScreen(Screen.SETTINGS)}
               icon={<Settings />}
-              label="Project Settings"
+              label="Settings"
               collapsed={isSidebarCollapsed}
             />
           </nav>
@@ -1131,48 +1377,151 @@ export const MainWorkspace: React.FC = () => {
             ))}
           </div>
 
+          {currentScreen === Screen.FEED && (
+            <ErrorBoundary
+              fallbackUI={
+                <div className="flex-1 flex flex-col items-center justify-center bg-[#0a0f1a] p-8">
+                  <div className="max-w-md text-center">
+                    <div className="w-16 h-16 mx-auto mb-4 bg-red-500/10 flex items-center justify-center">
+                      <AlertTriangle className="w-8 h-8 text-red-500" />
+                    </div>
+                    <h2 className="text-xl font-bold text-white mb-2">Feed Error</h2>
+                    <p className="text-slate-400 text-sm mb-6">
+                      Something went wrong loading the content feed. Your data is safe.
+                    </p>
+                    <button
+                      onClick={() => window.location.reload()}
+                      className="flex items-center justify-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium transition-colors mx-auto"
+                    >
+                      <RefreshCw size={16} />
+                      Reload Page
+                    </button>
+                  </div>
+                </div>
+              }
+            >
+              <div className="flex-1 flex flex-col h-full overflow-hidden">
+                <ProgressHeader
+                  stats={feedStats}
+                  categories={categories}
+                  posts={posts}
+                  onBulkGenerate={handleBulkGenerate}
+                  activeStatusFilter={feedStatusFilter}
+                  activeCategoryFilter={feedCategoryFilter}
+                  onStatusFilterChange={setFeedStatusFilter}
+                  onCategoryFilterChange={setFeedCategoryFilter}
+                  searchQuery={feedSearchQuery}
+                  onSearchChange={setFeedSearchQuery}
+                  sortOption={feedSortOption}
+                  onSortChange={setFeedSortOption}
+                  onOpenCategoryPanel={() => setIsCategoryPanelOpen(true)}
+                  onScrollToReady={() => contentFeedRef.current?.scrollToReady()}
+                />
+                <ContentFeed
+                  ref={contentFeedRef}
+                  posts={posts}
+                  categories={categories}
+                  onGenerate={handleFeedGenerate}
+                  onSkip={handleFeedSkip}
+                  onCancel={handleFeedCancel}
+                  onDelete={handleFeedSkip}
+                  onPreview={handleFeedPreview}
+                  onApprove={handleFeedApprove}
+                  onUpdateStub={handleFeedUpdateStub}
+                  onImageUpdate={handleFeedImageUpdate}
+                  statusFilter={feedStatusFilter}
+                  categoryFilter={feedCategoryFilter}
+                  searchQuery={feedSearchQuery}
+                  sortOption={feedSortOption}
+                />
+                {/* Category Quick Panel - for editing images and research from Feed view */}
+                <CategoryQuickPanel
+                  category={feedCategoryFilter ? categories.find(c => c.id === feedCategoryFilter) || null : null}
+                  isOpen={isCategoryPanelOpen}
+                  onClose={() => setIsCategoryPanelOpen(false)}
+                  onUpdateCategory={updateCategory}
+                  onQueueGoogleDeepResearch={queueGoogleDeepResearch}
+                  onNavigateToCategories={() => {
+                    setIsCategoryPanelOpen(false);
+                    setCurrentScreen(Screen.CATEGORIES);
+                  }}
+                  organization={currentOrg || undefined}
+                  project={currentProject || undefined}
+                />
+              </div>
+            </ErrorBoundary>
+          )}
+
           {currentScreen === Screen.CATEGORIES && (
-            <div className="flex-1 w-full h-full overflow-hidden">
-              <CategoryWorkspace
+            <div className="flex-1 w-full h-full overflow-hidden bg-[#0a0a0f]">
+              <CategoriesTab
                 categories={categories}
                 posts={posts}
                 tasks={tasks}
-                isAddingCategory={isAddingCategory}
-                onAddCategory={addCategory}
+                project={currentProject}
+                organization={currentOrg}
+                creditBalance={currentOrg?.credits?.balance || 0}
+                onResearch={queueGoogleDeepResearch}
+                onGenerateStubs={queueTitleGeneration}
+                onViewArticles={(categoryId, categoryName) => {
+                  setCurrentScreen(Screen.BRIEFS);
+                }}
                 onUpdateCategory={updateCategory}
                 onDeleteCategory={deleteCategory}
-                onMoveCategory={moveCategory}
-                onQueueTitles={queueTitleGeneration}
-                onQueueContent={queueContentGeneration}
-                onQueueCategoryPageRegenerate={queueCategoryPageRegenerate}
-                onQueueGoogleDeepResearch={queueGoogleDeepResearch}
-                onCreateCategoryPage={createCategoryPage}
-                onUpdatePost={updatePostFields}
-                onDeletePost={deletePost}
-                organizationId={currentOrg?.id}
-                projectId={currentProject?.id}
-                organization={currentOrg || undefined}
-                project={currentProject || undefined}
+                onAddCategory={addCategory}
+                onAddSubcategory={(parentId, name, description) => addCategory(name, parentId, description, false)}
               />
             </div>
           )}
 
-          {currentScreen === Screen.POSTS && (
-            <PostsWorkspace
+          {currentScreen === Screen.BRIEFS && (
+            <div className="flex-1 w-full h-full overflow-hidden bg-[#0a0a0f]">
+              <BriefsTab
+                posts={posts}
+                categories={categories}
+                filter={null}
+                onClearFilter={() => {}}
+                onGenerate={(postId) => {
+                  const post = posts.find(p => p.id === postId);
+                  if (post) queueContentGeneration(post);
+                }}
+                onBulkGenerate={() => {
+                  const pitchPosts = posts.filter(p =>
+                    !p.isCategoryPage &&
+                    (p.status === PostStatus.PITCH || p.status === PostStatus.PENDING)
+                  );
+                  pitchPosts.forEach(post => queueContentGeneration(post));
+                }}
+                onSkip={deletePost}
+                onUpdateBrief={(postId, updates) => {
+                  const updateData: Partial<Post> = {};
+                  if (updates.title !== undefined) updateData.title = updates.title;
+                  if (updates.teaser !== undefined) updateData.teaser = updates.teaser;
+                  if (updates.metaDescription !== undefined) updateData.metaDescription = updates.metaDescription;
+                  if (updates.metaKeywords !== undefined) updateData.metaKeywords = updates.metaKeywords;
+                  updatePostFields(postId, updateData);
+                }}
+                onImageUpdate={handleFeedImageUpdate}
+                onLaunch={(postId) => updatePostStatus(postId, PostStatus.PUBLISHED)}
+                onBackToCategories={() => setCurrentScreen(Screen.CATEGORIES)}
+              />
+            </div>
+          )}
+
+          {currentScreen === Screen.LIVE_POSTS && (
+            <LivePostsWorkspace
               posts={posts}
               categories={categories}
-              tasks={tasks}
               onUpdateStatus={updatePostStatus}
               onUpdatePost={updatePostFields}
               onDeletePost={deletePost}
-              onQueueContent={queueContentGeneration}
               project={currentProject}
               organization={currentOrg}
             />
           )}
 
-          {currentScreen === Screen.LIVE_POSTS && (
-            <LivePostsWorkspace
+          {currentScreen === Screen.PUBLISHING && (
+            <PublishingWorkspace
               posts={posts}
               categories={categories}
               onUpdateStatus={updatePostStatus}
@@ -1195,6 +1544,13 @@ export const MainWorkspace: React.FC = () => {
           )}
         </main>
       </div>
+
+      {/* Onboarding Tour */}
+      <WorkspaceTour
+        isActive={workspaceTour.isActive}
+        onComplete={workspaceTour.completeTour}
+        onDismiss={workspaceTour.dismissTour}
+      />
     </div>
   );
 };
@@ -1231,6 +1587,27 @@ const NavButton = ({ active, onClick, icon, label, badge, badgeColor = 'bg-cyan-
           ${badgeColor}
         `}
       >
+        {badge}
+      </span>
+    )}
+  </button>
+);
+
+const SubNavButton = ({ active, onClick, icon, label, badge }: any) => (
+  <button
+    onClick={onClick}
+    className={`
+      w-full flex items-center gap-2 py-2 px-3 text-xs font-medium transition-all
+      ${active
+        ? 'text-cyan-400 bg-cyan-500/10'
+        : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'
+      }
+    `}
+  >
+    {icon}
+    <span className={active ? 'text-white' : ''}>{label}</span>
+    {badge !== undefined && (
+      <span className="ml-auto flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold text-black bg-cyan-500">
         {badge}
       </span>
     )}

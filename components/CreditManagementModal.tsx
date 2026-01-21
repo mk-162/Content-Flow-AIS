@@ -85,18 +85,27 @@ export const CreditManagementModal: React.FC<CreditManagementModalProps> = ({ is
     };
 
     // Calculate usage stats from transactions
+    // Fix #2: Create immutable snapshot to avoid race conditions during calculation
     const usageStats = useMemo<UsageStats>(() => {
         const periodStart = currentOrg?.credits?.lastRefillAt?.toDate() || new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 
-        const periodTransactions = allTransactions.filter(tx => {
+        // Create immutable snapshot to ensure consistent calculations
+        const snapshot = [...allTransactions];
+
+        const periodTransactions = snapshot.filter(tx => {
             const txDate = tx.createdAt?.toDate?.() || new Date(0);
             return tx.type === 'usage' && txDate >= periodStart;
         });
 
+        // Calculate all stats from the same filtered set
+        const titleTxs = periodTransactions.filter(t => t.metadata?.feature === 'title_generation');
+        const articleTxs = periodTransactions.filter(t => t.metadata?.feature === 'article_generation');
+        const imageTxs = periodTransactions.filter(t => t.metadata?.feature === 'image_generation');
+
         return {
-            titlesGenerated: periodTransactions.filter(t => t.metadata?.feature === 'title_generation').reduce((sum, t) => sum + Math.abs(t.amount), 0),
-            articlesGenerated: periodTransactions.filter(t => t.metadata?.feature === 'article_generation').length,
-            imagesGenerated: periodTransactions.filter(t => t.metadata?.feature === 'image_generation').length,
+            titlesGenerated: titleTxs.reduce((sum, t) => sum + Math.abs(t.amount), 0),
+            articlesGenerated: articleTxs.length,
+            imagesGenerated: imageTxs.length,
             totalCreditsUsed: periodTransactions.reduce((sum, t) => sum + Math.abs(t.amount), 0)
         };
     }, [allTransactions, currentOrg?.credits?.lastRefillAt]);
@@ -321,7 +330,7 @@ export const CreditManagementModal: React.FC<CreditManagementModalProps> = ({ is
                             <button
                                 onClick={() => {
                                     onClose();
-                                    navigate('/admin/settings', { state: { tab: 'billing' } });
+                                    navigate('/upgrade');
                                 }}
                                 className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors"
                             >

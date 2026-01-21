@@ -19,7 +19,9 @@ import {
     ChevronDown,
     ArrowLeft,
     Zap,
-    RefreshCw
+    RefreshCw,
+    Image,
+    Sparkles
 } from 'lucide-react';
 import { Project, ContentType, PromptType, PromptOverrides, BusinessProfile, Category, TaskType, TIER_FEATURES, SubscriptionTier } from '../types';
 import { doc, updateDoc, collection, getDocs, writeBatch, query, where, addDoc, Timestamp } from 'firebase/firestore';
@@ -86,11 +88,28 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
     const [autoGenEnabled, setAutoGenEnabled] = useState(project.settings?.autoGeneration?.enabled ?? true);
     const [stubThreshold, setStubThreshold] = useState(project.settings?.autoGeneration?.stubThreshold ?? 5);
 
+    // Form State - Launch Pad
+    const [defaultToDraft, setDefaultToDraft] = useState(project.settings?.launchPad?.defaultToDraft ?? false);
+
+    // Form State - Default Author
+    const [defaultAuthorName, setDefaultAuthorName] = useState(project.settings?.defaultAuthorName || '');
+
     // Deep Research State
     const [enableDeepResearch, setEnableDeepResearch] = useState(project.settings?.enableDeepResearch ?? false);
     const [categories, setCategories] = useState<Category[]>([]);
     const [researchRunning, setResearchRunning] = useState(false);
     const [researchProgress, setResearchProgress] = useState<string | null>(null);
+
+    // Image Generation Settings State
+    const [imageDesignBrief, setImageDesignBrief] = useState(project.settings?.imageGeneration?.designBrief || '');
+    const [imageStyleConstraints, setImageStyleConstraints] = useState(project.settings?.imageGeneration?.styleConstraints || {
+        noTextInImages: false,
+        noLogos: false,
+        photorealistic: false,
+        illustrationStyle: false,
+        minimalistStyle: false,
+        abstractStyle: false
+    });
 
     // UI State - Collapsible Sections
     const [showBusinessContext, setShowBusinessContext] = useState(false);
@@ -140,6 +159,20 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
             return;
         }
 
+        // Fix #10: Validate numeric inputs before saving
+        const validatedVelocity = Math.max(1, Math.min(100, Number(velocity) || 10));
+        const validatedStubThreshold = Math.max(1, Math.min(25, Number(stubThreshold) || 5));
+
+        // Check for NaN or invalid values
+        if (isNaN(validatedVelocity) || !isFinite(validatedVelocity)) {
+            setSuccessMsg('Invalid velocity value');
+            return;
+        }
+        if (isNaN(validatedStubThreshold) || !isFinite(validatedStubThreshold)) {
+            setSuccessMsg('Invalid stub threshold value');
+            return;
+        }
+
         setLoading(true);
         try {
             const projectRef = doc(db, `organizations/${project.organizationId}/projects/${project.id}`);
@@ -147,15 +180,21 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
                 name: projectName.trim(),
                 description: projectDescription.trim(),
                 businessProfile: businessProfile || null, // Save updated profile
-                'settings.publishVelocity': Number(velocity),
+                'settings.publishVelocity': validatedVelocity, // Use validated value
                 'settings.positioningStatement': positioning,
                 'settings.rules': rules,
                 'settings.autoGeneration': {
                     enabled: autoGenEnabled,
-                    stubThreshold: stubThreshold,
+                    stubThreshold: validatedStubThreshold, // Use validated value
                     migrationPromptShown: project.settings?.autoGeneration?.migrationPromptShown
                 },
+                'settings.launchPad': {
+                    defaultToDraft: defaultToDraft
+                },
+                'settings.defaultAuthorName': defaultAuthorName.trim() || null,
                 'settings.enableDeepResearch': enableDeepResearch,
+                'settings.imageGeneration.designBrief': imageDesignBrief.trim() || null,
+                'settings.imageGeneration.styleConstraints': imageStyleConstraints,
                 'settings.wordpress': wpSiteUrl ? {
                     siteUrl: wpSiteUrl,
                     username: wpUsername,
@@ -383,6 +422,22 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
                                 className="w-full bg-slate-950 border border-slate-700 py-3 px-4 text-slate-200 focus:border-cyan-500 outline-none transition-colors resize-y min-h-[80px]"
                             />
                         </div>
+
+                        <div className="space-y-2">
+                            <label className="block text-sm font-medium text-slate-400">
+                                Default Author Name
+                            </label>
+                            <input
+                                type="text"
+                                value={defaultAuthorName}
+                                onChange={(e) => setDefaultAuthorName(e.target.value)}
+                                placeholder="e.g., John Smith"
+                                className="w-full bg-slate-950 border border-slate-700 py-3 px-4 text-slate-200 focus:border-cyan-500 outline-none transition-colors"
+                            />
+                            <p className="text-xs text-slate-500">
+                                This name will appear as the author on all posts. Can be overridden per-post.
+                            </p>
+                        </div>
                     </div>
                 </section>
 
@@ -422,7 +477,24 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
 
                     {showBusinessContext && (
                         <div className="px-6 pb-6 space-y-6 border-t border-slate-800 pt-6">
-                            {/* Business Identify */}
+                            {/* Website URL */}
+                            <div className="space-y-2">
+                                <label className="block text-sm font-medium text-slate-400">
+                                    Website URL
+                                </label>
+                                <input
+                                    type="url"
+                                    value={businessProfile?.websiteUrl || ''}
+                                    onChange={(e) => handleProfileUpdate('websiteUrl', e.target.value)}
+                                    className="w-full bg-slate-950 border border-slate-700 py-3 px-4 text-slate-200 focus:border-emerald-500 outline-none transition-colors font-mono text-sm"
+                                    placeholder="https://example.com"
+                                />
+                                <p className="text-xs text-slate-500">
+                                    The URL used for research and analysis. Update this if your website changes.
+                                </p>
+                            </div>
+
+                            {/* Business Identity */}
                             <div className="space-y-2">
                                 <label className="block text-sm font-medium text-slate-400">
                                     Business Name
@@ -744,6 +816,221 @@ export const ProjectSettings: React.FC<Props> = ({ project, onUpdate }) => {
                             {enableDeepResearch && canUseDeepResearch ? ` + ${CREDIT_COSTS.GOOGLE_DEEP_RESEARCH} credits (research)` : ''}
                             {(project.settings?.imageGeneration?.autoGenerate ?? true) && autoGenEnabled ? ` + ${stubThreshold * CREDIT_COSTS.IMAGE_GENERATION} credits (images)` : ''}
                         </p>
+                    </div>
+                </section>
+
+                {/* Launch Pad Settings */}
+                <section className="bg-slate-900 border border-slate-800 p-6 space-y-6">
+                    <div className="flex items-center gap-3 text-cyan-400 mb-2">
+                        <Settings size={20} />
+                        <h2 className="text-lg font-bold text-slate-200">Launch Pad</h2>
+                    </div>
+
+                    <p className="text-slate-400 text-sm">
+                        Control how new content appears in the Launch Pad publishing queue.
+                    </p>
+
+                    <div className="bg-slate-950 border border-slate-700 p-4">
+                        <div className="flex items-center justify-between">
+                            <div className="flex-1">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-slate-200 font-medium">Default New Posts to Draft</span>
+                                </div>
+                                <p className="text-xs text-slate-500 mt-1">
+                                    When enabled, newly generated articles are held in drafts and won't launch until you release them
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setDefaultToDraft(!defaultToDraft)}
+                                className={`relative w-12 h-6 rounded-full transition-colors ${defaultToDraft ? 'bg-cyan-500' : 'bg-slate-700'}`}
+                            >
+                                <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${defaultToDraft ? 'translate-x-6' : ''}`} />
+                            </button>
+                        </div>
+                        {defaultToDraft && (
+                            <div className="mt-3 p-3 bg-cyan-500/5 border border-cyan-500/20 text-cyan-400 text-xs">
+                                <strong>Workflow:</strong> Generated content → Drafts → Release when ready → Launch
+                            </div>
+                        )}
+                    </div>
+                </section>
+
+                {/* Image Generation Settings */}
+                <section className="bg-slate-900 border border-slate-800 p-6 space-y-6">
+                    <div className="flex items-center gap-3 text-pink-400 mb-2">
+                        <Image size={20} />
+                        <h2 className="text-lg font-bold text-slate-200">Image Generation</h2>
+                    </div>
+
+                    <p className="text-slate-400 text-sm">
+                        Configure how AI generates images for your content. These settings apply to all hero images and category images.
+                    </p>
+
+                    {/* Style Constraints - Checkboxes */}
+                    <div className="space-y-3">
+                        <label className="block text-sm font-medium text-slate-300 mb-3">
+                            Style Constraints
+                        </label>
+                        <p className="text-xs text-slate-500 mb-4">
+                            Select constraints to automatically inject into image generation prompts.
+                        </p>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {/* No Text in Images */}
+                            <label className="flex items-start gap-3 p-3 bg-slate-950 border border-slate-700 hover:border-slate-600 cursor-pointer transition-colors">
+                                <input
+                                    type="checkbox"
+                                    checked={imageStyleConstraints.noTextInImages || false}
+                                    onChange={(e) => setImageStyleConstraints(prev => ({
+                                        ...prev,
+                                        noTextInImages: e.target.checked
+                                    }))}
+                                    className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-pink-500 focus:ring-pink-500 focus:ring-offset-slate-900"
+                                />
+                                <div>
+                                    <span className="text-sm text-slate-200 font-medium">No Text in Images</span>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Prevents text, words, or letters from appearing in generated images
+                                    </p>
+                                </div>
+                            </label>
+
+                            {/* No Logos */}
+                            <label className="flex items-start gap-3 p-3 bg-slate-950 border border-slate-700 hover:border-slate-600 cursor-pointer transition-colors">
+                                <input
+                                    type="checkbox"
+                                    checked={imageStyleConstraints.noLogos || false}
+                                    onChange={(e) => setImageStyleConstraints(prev => ({
+                                        ...prev,
+                                        noLogos: e.target.checked
+                                    }))}
+                                    className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-pink-500 focus:ring-pink-500 focus:ring-offset-slate-900"
+                                />
+                                <div>
+                                    <span className="text-sm text-slate-200 font-medium">No Logos</span>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Excludes logos and brand marks from images
+                                    </p>
+                                </div>
+                            </label>
+
+                            {/* Photorealistic */}
+                            <label className="flex items-start gap-3 p-3 bg-slate-950 border border-slate-700 hover:border-slate-600 cursor-pointer transition-colors">
+                                <input
+                                    type="checkbox"
+                                    checked={imageStyleConstraints.photorealistic || false}
+                                    onChange={(e) => setImageStyleConstraints(prev => ({
+                                        ...prev,
+                                        photorealistic: e.target.checked,
+                                        illustrationStyle: e.target.checked ? false : prev.illustrationStyle,
+                                        abstractStyle: e.target.checked ? false : prev.abstractStyle
+                                    }))}
+                                    className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-pink-500 focus:ring-pink-500 focus:ring-offset-slate-900"
+                                />
+                                <div>
+                                    <span className="text-sm text-slate-200 font-medium">Photorealistic</span>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Generate realistic, photo-quality images
+                                    </p>
+                                </div>
+                            </label>
+
+                            {/* Illustration Style */}
+                            <label className="flex items-start gap-3 p-3 bg-slate-950 border border-slate-700 hover:border-slate-600 cursor-pointer transition-colors">
+                                <input
+                                    type="checkbox"
+                                    checked={imageStyleConstraints.illustrationStyle || false}
+                                    onChange={(e) => setImageStyleConstraints(prev => ({
+                                        ...prev,
+                                        illustrationStyle: e.target.checked,
+                                        photorealistic: e.target.checked ? false : prev.photorealistic
+                                    }))}
+                                    className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-pink-500 focus:ring-pink-500 focus:ring-offset-slate-900"
+                                />
+                                <div>
+                                    <span className="text-sm text-slate-200 font-medium">Illustration Style</span>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Use vector art or illustration aesthetics
+                                    </p>
+                                </div>
+                            </label>
+
+                            {/* Minimalist */}
+                            <label className="flex items-start gap-3 p-3 bg-slate-950 border border-slate-700 hover:border-slate-600 cursor-pointer transition-colors">
+                                <input
+                                    type="checkbox"
+                                    checked={imageStyleConstraints.minimalistStyle || false}
+                                    onChange={(e) => setImageStyleConstraints(prev => ({
+                                        ...prev,
+                                        minimalistStyle: e.target.checked
+                                    }))}
+                                    className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-pink-500 focus:ring-pink-500 focus:ring-offset-slate-900"
+                                />
+                                <div>
+                                    <span className="text-sm text-slate-200 font-medium">Minimalist</span>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Clean, simple aesthetic with minimal elements
+                                    </p>
+                                </div>
+                            </label>
+
+                            {/* Abstract */}
+                            <label className="flex items-start gap-3 p-3 bg-slate-950 border border-slate-700 hover:border-slate-600 cursor-pointer transition-colors">
+                                <input
+                                    type="checkbox"
+                                    checked={imageStyleConstraints.abstractStyle || false}
+                                    onChange={(e) => setImageStyleConstraints(prev => ({
+                                        ...prev,
+                                        abstractStyle: e.target.checked,
+                                        photorealistic: e.target.checked ? false : prev.photorealistic
+                                    }))}
+                                    className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-pink-500 focus:ring-pink-500 focus:ring-offset-slate-900"
+                                />
+                                <div>
+                                    <span className="text-sm text-slate-200 font-medium">Abstract</span>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Conceptual, artistic imagery over literal representation
+                                    </p>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    {/* Design Brief */}
+                    <div className="space-y-2">
+                        <label className="block text-sm font-medium text-slate-300">
+                            Image Design Brief
+                        </label>
+                        <textarea
+                            value={imageDesignBrief}
+                            onChange={(e) => setImageDesignBrief(e.target.value)}
+                            rows={4}
+                            placeholder="Describe your visual style preferences...
+
+Examples:
+- Corporate tech aesthetic with blue gradients
+- Warm, friendly illustrations with soft colors
+- Bold, high-contrast photography style
+- Nature-inspired imagery with earth tones"
+                            className="w-full bg-slate-950 border border-slate-700 py-3 px-4 text-slate-200 text-sm focus:border-pink-500 outline-none transition-colors resize-y min-h-[100px] placeholder:text-slate-600"
+                        />
+                        <p className="text-xs text-slate-500">
+                            This brief is included with every image generation prompt to maintain visual consistency.
+                        </p>
+                    </div>
+
+                    {/* Phase 2 Notice */}
+                    <div className="p-4 bg-slate-950/50 border border-dashed border-slate-700">
+                        <div className="flex items-center gap-2 text-slate-400 mb-2">
+                            <Sparkles size={16} />
+                            <span className="text-sm font-medium">Coming Soon</span>
+                        </div>
+                        <ul className="text-xs text-slate-500 space-y-1">
+                            <li>• Upload reference images to match your brand style</li>
+                            <li>• Select from multiple image generation models</li>
+                            <li>• Custom aspect ratios per content type</li>
+                        </ul>
                     </div>
                 </section>
 

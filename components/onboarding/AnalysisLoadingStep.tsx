@@ -207,29 +207,45 @@ export const AnalysisLoadingStep: React.FC = () => {
             </div>
           </motion.div>
 
-          {/* Explainer Video */}
+          {/* What to Expect Panel - Replaces placeholder video */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: 0.3 }}
-            className="bg-slate-900/50 border border-slate-800 p-4"
+            className="bg-gradient-to-br from-slate-900/80 to-slate-800/50 border border-slate-700/50 p-5"
           >
-            <p className="text-xs text-slate-500 uppercase tracking-wider mb-3">
-              Watch a 2 minute video while you wait
+            <p className="text-xs text-slate-500 uppercase tracking-wider mb-4">
+              What happens next
             </p>
-            <div className="relative aspect-video bg-slate-800 overflow-hidden">
-              {/* Replace VIDEO_ID with your actual YouTube/Vimeo video ID */}
-              <iframe
-                src="https://www.youtube.com/embed/VIDEO_ID?autoplay=0&rel=0"
-                title="How MissionContent Works"
-                className="absolute inset-0 w-full h-full"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-              />
+            <div className="space-y-3">
+              <div className="flex items-start gap-3 p-3 bg-slate-900/50 border border-slate-800">
+                <div className="w-6 h-6 bg-cyan-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <span className="text-cyan-400 text-xs font-bold">1</span>
+                </div>
+                <div>
+                  <p className="text-sm text-white font-medium">Review your profile</p>
+                  <p className="text-xs text-slate-500">Verify and refine AI-detected insights</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3 p-3 bg-slate-900/50 border border-slate-800">
+                <div className="w-6 h-6 bg-cyan-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <span className="text-cyan-400 text-xs font-bold">2</span>
+                </div>
+                <div>
+                  <p className="text-sm text-white font-medium">Choose your channel</p>
+                  <p className="text-xs text-slate-500">Select the best content channel for your business</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3 p-3 bg-slate-900/50 border border-slate-800">
+                <div className="w-6 h-6 bg-emerald-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <span className="text-emerald-400 text-xs font-bold">3</span>
+                </div>
+                <div>
+                  <p className="text-sm text-white font-medium">Start creating</p>
+                  <p className="text-xs text-slate-500">Get AI-powered content suggestions instantly</p>
+                </div>
+              </div>
             </div>
-            <p className="text-xs text-slate-500 mt-2 text-center">
-              See how AI-powered content helps businesses grow
-            </p>
           </motion.div>
         </div>
 

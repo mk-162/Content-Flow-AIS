@@ -13,10 +13,18 @@ export const URLInputStep: React.FC = () => {
   const [isValid, setIsValid] = useState(false);
 
   // Pre-fill URL from query parameter (from home page CTA)
+  // Also support ?demo=true to auto-trigger demo mode
   useEffect(() => {
     const urlParam = searchParams.get('url');
     if (urlParam && !url) {
       setUrl(urlParam);
+    }
+
+    // Dev testing: auto-trigger demo mode with ?demo=true
+    const demoParam = searchParams.get('demo');
+    if (demoParam === 'true' && !loading) {
+      console.log('[Dev] Auto-triggering demo mode via URL param');
+      startAnalysis('', true);
     }
   }, [searchParams]);
 
@@ -54,66 +62,77 @@ export const URLInputStep: React.FC = () => {
   };
 
   return (
-    <div className="text-center">
+    <div className="text-center relative">
+      {/* Mission Control Grid Background */}
+      <div className="absolute inset-0 mission-grid pointer-events-none" />
+
       {/* Hero Section */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1 }}
+        className="relative"
       >
-        <div className="inline-flex items-center gap-2 px-4 py-2 bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-sm mb-6">
+        <motion.div
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ delay: 0.05 }}
+          className="inline-flex items-center gap-2 px-4 py-2 bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-sm mb-6"
+        >
           <Sparkles className="w-4 h-4" />
           AI-Powered Content Intelligence
-        </div>
+        </motion.div>
 
-        <h1 className="text-4xl md:text-5xl font-bold mb-4">
+        <h1 className="text-4xl md:text-5xl font-display font-bold mb-4 tracking-tight">
           Discover Your Content
-          <span className="text-cyan-400"> Opportunity Score</span>
+          <span className="block text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-cyan-300 to-emerald-400">
+            Opportunity Score
+          </span>
         </h1>
 
-        <p className="text-xl text-slate-400 mb-8 max-w-2xl mx-auto">
+        <p className="text-lg md:text-xl text-slate-400 mb-8 max-w-2xl mx-auto leading-relaxed">
           AI assistants are answering your customers' questions.
-          <br />
+          <br className="hidden sm:block" />
           Let's find out how many answers you're missing.
         </p>
       </motion.div>
 
-      {/* URL Input Form */}
+      {/* URL Input Form - Mobile Responsive */}
       <motion.form
         onSubmit={handleSubmit}
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2 }}
-        className="max-w-2xl mx-auto mb-8"
+        className="max-w-2xl mx-auto mb-8 relative"
       >
-        <div className="relative">
-          <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500">
-            <Globe className="w-5 h-5" />
+        {/* Mobile: Stacked layout / Desktop: Inline layout */}
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1">
+            <Globe className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
+            <input
+              type="text"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://your-website.com"
+              disabled={loading}
+              className={`
+                w-full pl-12 pr-4 py-4 text-base sm:text-lg
+                bg-slate-900 border-2 text-white placeholder-slate-500
+                focus:outline-none transition-all glow-cyan
+                ${error ? 'border-red-500/50 focus:border-red-500' : 'border-slate-700 focus:border-cyan-500'}
+                ${isValid ? 'border-emerald-500/50' : ''}
+              `}
+            />
           </div>
-          <input
-            type="text"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://your-website.com"
-            disabled={loading}
-            className={`
-              w-full pl-12 pr-36 py-4 text-lg
-              bg-slate-900 border-2 text-white placeholder-slate-500
-              focus:outline-none transition-colors
-              ${error ? 'border-red-500/50 focus:border-red-500' : 'border-slate-700 focus:border-cyan-500'}
-              ${isValid ? 'border-green-500/50' : ''}
-            `}
-          />
           <button
             type="submit"
             disabled={loading || !isValid}
             className={`
-              absolute right-2 top-1/2 -translate-y-1/2
-              px-6 py-2.5 font-bold text-sm uppercase tracking-wider
-              flex items-center gap-2 transition-all
+              px-6 sm:px-8 py-4 font-bold text-sm uppercase tracking-wider
+              flex items-center justify-center gap-2 transition-all whitespace-nowrap
               ${loading || !isValid
                 ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
-                : 'bg-cyan-600 hover:bg-cyan-500 text-white cursor-pointer'
+                : 'bg-cyan-600 hover:bg-cyan-500 text-white cursor-pointer glow-cyan'
               }
             `}
           >
@@ -150,22 +169,22 @@ export const URLInputStep: React.FC = () => {
           <motion.p
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="mt-2 text-green-400 text-sm text-left flex items-center gap-1"
+            className="mt-2 text-emerald-400 text-sm text-left flex items-center gap-1"
           >
-            <span className="w-2 h-2 bg-green-400 rounded-full" />
+            <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
             Valid URL - ready to analyze
           </motion.p>
         )}
       </motion.form>
 
-      {/* Trust badges */}
+      {/* Trust badges - Updated messaging per audit */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.3 }}
         className="text-slate-500 text-sm mb-8"
       >
-        No signup required. Results in 60 seconds.
+        No signup required. Results in ~2 minutes.
       </motion.div>
 
       {/* Demo Mode Button */}

@@ -1,8 +1,42 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { LogIn, Mail, Lock, AlertCircle } from 'lucide-react';
 import MissionLogo from '../Mission.svg';
+
+// Onboarding session storage key (matches OnboardingContext)
+const ONBOARDING_STORAGE_KEY = 'missioncontent_onboarding_session';
+
+// Convert Firebase error codes to friendly messages
+const getFriendlyErrorMessage = (error: any): string => {
+  const errorCode = error?.code || '';
+  const errorMessage = error?.message || '';
+
+  switch (errorCode) {
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'Incorrect email or password. Please check your details and try again.';
+    case 'auth/invalid-email':
+      return 'Please enter a valid email address.';
+    case 'auth/user-disabled':
+      return 'This account has been disabled. Please contact support.';
+    case 'auth/too-many-requests':
+      return 'Too many failed attempts. Please wait a few minutes and try again.';
+    case 'auth/network-request-failed':
+      return 'Network error. Please check your internet connection.';
+    case 'auth/popup-closed-by-user':
+      return 'Sign-in was cancelled. Please try again.';
+    case 'auth/account-exists-with-different-credential':
+      return 'An account already exists with this email. Try signing in with a different method.';
+    default:
+      // Check if it's a Firebase error message format
+      if (errorMessage.includes('auth/')) {
+        return 'Unable to sign in. Please check your details and try again.';
+      }
+      return errorMessage || 'An unexpected error occurred. Please try again.';
+  }
+};
 
 // Google Icon SVG Component
 const GoogleIcon = () => (
@@ -28,6 +62,7 @@ const GoogleIcon = () => (
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { signIn, signInWithGoogle } = useAuth();
 
   const [email, setEmail] = useState('');
@@ -36,14 +71,52 @@ export const LoginPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 
+  // Check if user came from onboarding
+  const returnTo = searchParams.get('returnTo');
+
+  // Helper to check if onboarding session exists and is valid
+  const hasValidOnboardingSession = (): boolean => {
+    try {
+      const stored = localStorage.getItem(ONBOARDING_STORAGE_KEY);
+      if (!stored) return false;
+
+      const session = JSON.parse(stored);
+      // Check if session has expired
+      if (new Date(session.expiresAt) < new Date()) {
+        localStorage.removeItem(ONBOARDING_STORAGE_KEY);
+        return false;
+      }
+      // Check if session has required data
+      return !!(session.businessProfile || session.selectedChannel);
+    } catch (error) {
+      console.warn('[LoginPage] Failed to parse onboarding session:', error);
+      // Clear corrupted session data
+      try {
+        localStorage.removeItem(ONBOARDING_STORAGE_KEY);
+      } catch { /* ignore cleanup errors */ }
+      return false;
+    }
+  };
+
+  // Handle post-login navigation
+  const handlePostLoginNavigation = () => {
+    // If came from onboarding and has valid session, resume onboarding
+    if (returnTo === 'onboarding' && hasValidOnboardingSession()) {
+      console.log('[LoginPage] Resuming onboarding session after login');
+      navigate('/onboarding');
+    } else {
+      navigate('/');
+    }
+  };
+
   const handleGoogleSignIn = async () => {
     setError('');
     try {
       setGoogleLoading(true);
       await signInWithGoogle();
-      navigate('/');
+      handlePostLoginNavigation();
     } catch (err: any) {
-      setError(err.message || 'Failed to sign in with Google');
+      setError(getFriendlyErrorMessage(err));
     } finally {
       setGoogleLoading(false);
     }
@@ -61,9 +134,9 @@ export const LoginPage: React.FC = () => {
     try {
       setLoading(true);
       await signIn(email, password);
-      navigate('/');
+      handlePostLoginNavigation();
     } catch (err: any) {
-      setError(err.message || 'Failed to sign in');
+      setError(getFriendlyErrorMessage(err));
     } finally {
       setLoading(false);
     }

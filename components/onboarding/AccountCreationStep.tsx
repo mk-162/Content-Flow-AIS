@@ -16,6 +16,7 @@ import {
   ProjectMemberRole,
   TIER_LIMITS,
 } from '../../types';
+import { generateAndCreateCategories } from '../../services/categoryGenerationService';
 
 // Demo account constants
 const DEMO_FREE_CREDITS = 50;
@@ -108,6 +109,17 @@ export const AccountCreationStep: React.FC = () => {
       channelRecommendations: session?.channelRecommendations || [],
       // Mark the selected channel as used (for Channel Shortcuts feature)
       usedChannelRecommendationIds: session?.selectedChannel ? [session.selectedChannel.id] : [],
+      // Store unselected project suggestions for upsell on projects page
+      suggestedProjects: (session?.suggestedProjects || [])
+        .filter(p => !p.selected)
+        .map(p => ({
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          icon: p.icon,
+          coverage: p.coverage,
+          estimatedOpportunities: p.estimatedOpportunities,
+        })),
       systemPrompts: {},
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
@@ -173,6 +185,32 @@ export const AccountCreationStep: React.FC = () => {
 
     // Set flag for new user onboarding tooltip
     localStorage.setItem('showOnboardingTooltip', 'true');
+
+    // Generate AI-powered categories with descriptions (2 parents + 3 subs each)
+    // This runs after the project is created so categories are ready when user lands on workspace
+    if (session?.businessProfile) {
+      console.log('[AccountCreation] Generating AI-powered categories...');
+      try {
+        const result = await generateAndCreateCategories(
+          projectId,
+          orgId,
+          session.businessProfile,
+          selectedChannel?.title || 'Content Channel'
+        );
+        console.log('[AccountCreation] Category generation result:', result);
+
+        // Notify user if fallback categories were used
+        if (!result.success || result.error) {
+          localStorage.setItem('categoryGenerationWarning',
+            result.error || 'AI categories unavailable - generic categories were created instead.');
+        }
+      } catch (catError: any) {
+        console.error('[AccountCreation] Category generation failed:', catError);
+        // Store warning for display on workspace - don't block account creation
+        localStorage.setItem('categoryGenerationWarning',
+          `Category generation failed: ${catError.message || 'Unknown error'}. You can add categories manually in your workspace.`);
+      }
+    }
 
     // Clear onboarding session and redirect to workspace
     clearSession();
@@ -504,7 +542,7 @@ export const AccountCreationStep: React.FC = () => {
         <div className="mt-4 pt-4 border-t border-slate-800 text-center">
           <p className="text-sm text-slate-500">
             Already have an account?{' '}
-            <Link to="/login" className="text-cyan-400 hover:underline">Log in</Link>
+            <Link to="/login?returnTo=onboarding" className="text-cyan-400 hover:underline">Log in</Link>
           </p>
         </div>
       </motion.form>

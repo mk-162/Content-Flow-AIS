@@ -38,6 +38,16 @@ export function useAutoGeneration(
     const [isGenerating, setIsGenerating] = useState(false);
     const failureRecords = useRef<Map<string, FailureRecord>>(new Map());
     const processedFailedTaskIds = useRef<Set<string>>(new Set());
+    const prevProjectIdRef = useRef<string | undefined>(undefined);
+
+    // Fix #3: Clear tracked failures on project change to prevent memory leak
+    useEffect(() => {
+        if (project?.id !== prevProjectIdRef.current) {
+            processedFailedTaskIds.current.clear();
+            failureRecords.current.clear();
+            prevProjectIdRef.current = project?.id;
+        }
+    }, [project?.id]);
 
     // Track failed tasks and update failure records (circuit breaker)
     useEffect(() => {
@@ -61,8 +71,9 @@ export function useAutoGeneration(
         }
 
         // Cleanup: remove entries for tasks that are no longer in pendingTasks to prevent memory growth
-        // Keep the set size bounded by removing stale entries
-        if (processedFailedTaskIds.current.size > 100) {
+        // Keep the set size bounded by removing stale entries (lower threshold for smaller projects)
+        const MAX_TRACKED_FAILURES = 50;
+        if (processedFailedTaskIds.current.size > MAX_TRACKED_FAILURES) {
             const currentFailedCategoryIds = new Set(
                 pendingTasks
                     .filter(t => t.status === TaskStatus.FAILED && t.categoryId)
@@ -74,29 +85,62 @@ export function useAutoGeneration(
                     processedFailedTaskIds.current.delete(key);
                 }
             }
+
+            // If still too large, keep only the most recent half
+            if (processedFailedTaskIds.current.size > MAX_TRACKED_FAILURES) {
+                const entries = Array.from(processedFailedTaskIds.current);
+                processedFailedTaskIds.current = new Set(entries.slice(-MAX_TRACKED_FAILURES / 2));
+            }
         }
     }, [pendingTasks]);
 
-    // Check if a category is in cooldown and cleanup expired records
-    // Note: This function has a side effect - it removes expired cooldown records
-    const checkAndCleanupCooldown = useCallback((categoryId: string): boolean => {
+    // Fix #1: Separate cooldown check from cleanup to avoid side effects during render
+    // This function only checks - no side effects
+    const isInCooldown = useCallback((categoryId: string): boolean => {
         const record = failureRecords.current.get(categoryId);
         if (!record) return false;
 
         const timeSinceFailure = Date.now() - record.lastFailedAt;
 
-        // Still in cooldown - return true without cleanup
+        // Still in cooldown
         if (record.count >= MAX_FAILURES_BEFORE_COOLDOWN && timeSinceFailure < FAILURE_COOLDOWN_MS) {
             return true;
         }
 
-        // Cooldown expired - cleanup the record and return false
-        if (timeSinceFailure >= FAILURE_COOLDOWN_MS) {
-            failureRecords.current.delete(categoryId);
-        }
-
         return false;
     }, []);
+
+    // Cleanup expired cooldown records in a separate effect (not during render)
+    useEffect(() => {
+        const cleanupInterval = setInterval(() => {
+            const now = Date.now();
+            for (const [categoryId, record] of failureRecords.current.entries()) {
+                if (now - record.lastFailedAt >= FAILURE_COOLDOWN_MS) {
+                    failureRecords.current.delete(categoryId);
+                }
+            }
+        }, 60000); // Cleanup every minute
+
+        return () => clearInterval(cleanupInterval);
+    }, []);
+
+    // Helper to count articles including subcategories (for rollup)
+    const getArticleCountWithRollup = useCallback((categoryId: string, includeSubcategories: boolean): number => {
+        let count = posts.filter(
+            p => p.categoryId === categoryId && p.status === PostStatus.PENDING
+        ).length;
+
+        if (includeSubcategories) {
+            const subcategories = categories.filter(c => c.parentId === categoryId);
+            for (const sub of subcategories) {
+                count += posts.filter(
+                    p => p.categoryId === sub.id && p.status === PostStatus.PENDING
+                ).length;
+            }
+        }
+
+        return count;
+    }, [categories, posts]);
 
     // Calculate which categories are below threshold
     const { categoriesBelowThreshold, totalStubsNeeded } = useMemo(() => {
@@ -106,14 +150,23 @@ export function useAutoGeneration(
             return { categoriesBelowThreshold: [], totalStubsNeeded: 0 };
         }
 
-        const threshold = project?.settings?.autoGeneration?.stubThreshold ?? 5;
+        const projectDefaultThreshold = project?.settings?.autoGeneration?.stubThreshold ?? 5;
         const results: Array<{ category: Category; currentCount: number; needed: number }> = [];
 
         for (const category of categories) {
-            // Count PENDING posts (stubs) for this category
-            const stubCount = posts.filter(
-                p => p.categoryId === category.id && p.status === PostStatus.PENDING
-            ).length;
+            // Check if auto-replenish is explicitly disabled for this category
+            if (category.contentSettings?.autoReplenish === false) {
+                continue;
+            }
+
+            // Get per-category target or fall back to project default
+            const threshold = category.contentSettings?.targetArticles ?? projectDefaultThreshold;
+
+            // Determine whether to include subcategory counts (rollup)
+            const shouldRollUp = category.contentSettings?.rollUpSubcategories ?? true;
+
+            // Count stubs - with rollup if enabled
+            const stubCount = getArticleCountWithRollup(category.id, shouldRollUp);
 
             // Check if there's already a pending generation task for this category
             const hasPendingTask = pendingTasks.some(
@@ -123,7 +176,7 @@ export function useAutoGeneration(
             );
 
             // Check circuit breaker - skip categories in cooldown after repeated failures
-            const inCooldown = checkAndCleanupCooldown(category.id);
+            const inCooldown = isInCooldown(category.id);
 
             if (stubCount < threshold && !hasPendingTask && !inCooldown) {
                 const needed = threshold - stubCount;
@@ -133,7 +186,7 @@ export function useAutoGeneration(
 
         const total = results.reduce((sum, r) => sum + r.needed, 0);
         return { categoriesBelowThreshold: results, totalStubsNeeded: total };
-    }, [categories, posts, project, pendingTasks, checkAndCleanupCooldown]);
+    }, [categories, posts, project, pendingTasks, isInCooldown, getArticleCountWithRollup]);
 
     // Determine if migration prompt should be shown
     const showMigrationPrompt = useMemo(() => {
@@ -187,48 +240,71 @@ export function useAutoGeneration(
 
         setIsGenerating(true);
 
+        // Fix #6: Handle each write individually and report partial success
+        const results = { researchSuccess: 0, researchFailed: 0, stubsSuccess: 0, stubsFailed: 0 };
+
         try {
             // Queue research for categories that need it (stubs will be chained after research)
             for (const { category } of needsResearch) {
-                await addDoc(collection(db, 'generationQueue'), {
-                    type: TaskType.GOOGLE_DEEP_RESEARCH,
-                    organizationId: orgId,
-                    projectId: project.id,
-                    categoryId: category.id,
-                    categoryName: category.name,
-                    status: TaskStatus.QUEUED,
-                    progress: 0,
-                    createdBy: userId,
-                    startedAt: Timestamp.now(),
-                });
+                try {
+                    await addDoc(collection(db, 'generationQueue'), {
+                        type: TaskType.GOOGLE_DEEP_RESEARCH,
+                        organizationId: orgId,
+                        projectId: project.id,
+                        categoryId: category.id,
+                        categoryName: category.name,
+                        status: TaskStatus.QUEUED,
+                        progress: 0,
+                        createdBy: userId,
+                        startedAt: Timestamp.now(),
+                    });
+                    results.researchSuccess++;
+                } catch (err) {
+                    console.error(`[useAutoGeneration] Failed to queue research for ${category.name}:`, err);
+                    results.researchFailed++;
+                }
             }
 
             // Queue stubs for categories that already have research (or research-first is off)
             for (const { category, needed } of readyForStubs) {
-                await addDoc(collection(db, 'generationQueue'), {
-                    type: TaskType.GENERATE_TITLES,
-                    organizationId: orgId,
-                    projectId: project.id,
-                    categoryId: category.id,
-                    categoryName: category.name,
-                    status: TaskStatus.QUEUED,
-                    progress: 0,
-                    createdBy: userId,
-                    startedAt: Timestamp.now(),
-                    requestedCount: needed,
-                });
+                try {
+                    await addDoc(collection(db, 'generationQueue'), {
+                        type: TaskType.GENERATE_TITLES,
+                        organizationId: orgId,
+                        projectId: project.id,
+                        categoryId: category.id,
+                        categoryName: category.name,
+                        status: TaskStatus.QUEUED,
+                        progress: 0,
+                        createdBy: userId,
+                        startedAt: Timestamp.now(),
+                        requestedCount: needed,
+                    });
+                    results.stubsSuccess++;
+                } catch (err) {
+                    console.error(`[useAutoGeneration] Failed to queue stubs for ${category.name}:`, err);
+                    results.stubsFailed++;
+                }
             }
 
-            // Build notification message
-            const parts: string[] = [];
-            if (needsResearch.length > 0) {
-                parts.push(`Deep research on ${needsResearch.length} ${needsResearch.length === 1 ? 'category' : 'categories'} (stubs will follow)`);
+            // Build notification message with success/failure counts
+            const totalFailed = results.researchFailed + results.stubsFailed;
+            if (totalFailed > 0 && results.researchSuccess + results.stubsSuccess === 0) {
+                notify('Failed to queue auto-generation');
+            } else if (totalFailed > 0) {
+                const successCount = results.researchSuccess + results.stubsSuccess;
+                notify(`Queued ${successCount} tasks, ${totalFailed} failed`);
+            } else {
+                const parts: string[] = [];
+                if (results.researchSuccess > 0) {
+                    parts.push(`Deep research on ${results.researchSuccess} ${results.researchSuccess === 1 ? 'category' : 'categories'} (stubs will follow)`);
+                }
+                if (results.stubsSuccess > 0) {
+                    const totalStubs = readyForStubs.reduce((sum, c) => sum + c.needed, 0);
+                    parts.push(`${totalStubs} article ideas across ${results.stubsSuccess} ${results.stubsSuccess === 1 ? 'category' : 'categories'}`);
+                }
+                notify(`Generating: ${parts.join(' + ')}`);
             }
-            if (readyForStubs.length > 0) {
-                const totalStubs = readyForStubs.reduce((sum, c) => sum + c.needed, 0);
-                parts.push(`${totalStubs} article ideas across ${readyForStubs.length} ${readyForStubs.length === 1 ? 'category' : 'categories'}`);
-            }
-            notify(`Generating: ${parts.join(' + ')}`);
         } catch (error) {
             console.error('[useAutoGeneration] Error queuing generation:', error);
             notify('Failed to queue auto-generation');

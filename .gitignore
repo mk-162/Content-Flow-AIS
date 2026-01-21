@@ -30,3 +30,14 @@ serviceAccountKey.json
 *.njsproj
 *.sln
 *.sw?
+
+# Firebase cache
+.firebase/
+
+# Playwright MCP screenshots
+.playwright-mcp/
+
+# Temp files and folders
+temp/
+nul
+tmpclaude*

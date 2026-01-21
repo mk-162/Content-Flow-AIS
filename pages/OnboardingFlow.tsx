@@ -12,24 +12,27 @@ import { URLInputStep } from '../components/onboarding/URLInputStep';
 import { AnalysisLoadingStep } from '../components/onboarding/AnalysisLoadingStep';
 import { ProfileReviewStep } from '../components/onboarding/ProfileReviewStep';
 import { ChannelRecommendationStep } from '../components/onboarding/ChannelRecommendationStep';
-import { ProjectSelectionStep } from '../components/onboarding/ProjectSelectionStep';
+// ProjectSelectionStep removed - unused in current flow (Section 2 cleanup)
 import { CategoryGenerationStep } from '../components/onboarding/CategoryGenerationStep';
 import { AccountCreationStep } from '../components/onboarding/AccountCreationStep';
 import { SubcategoryGenerationStep } from '../components/onboarding/SubcategoryGenerationStep';
 import { WorkspaceIntroStep } from '../components/onboarding/WorkspaceIntroStep';
 import { OnboardingStep } from '../types';
 import MissionLogo from '../Mission.svg';
+import { OnboardingProgressBar } from '../components/ui/OnboardingProgressBar';
+import { MobileDesktopOverlay } from '../components/ui/MobileDesktopOverlay';
+import { ErrorBanner } from '../components/ui/ErrorBanner';
 
 // ============================================================================
 // STEP COMPONENTS MAP
 // ============================================================================
 
-const StepComponents: Record<OnboardingStep, React.FC> = {
+const StepComponents: Partial<Record<OnboardingStep, React.FC>> = {
   url_input: URLInputStep,
   analyzing: AnalysisLoadingStep,
   profile_review: ProfileReviewStep,
   channel_recommendations: ChannelRecommendationStep,
-  project_selection: ProjectSelectionStep,
+  // project_selection removed - unused in current flow
   category_generation: CategoryGenerationStep,
   account_creation: AccountCreationStep,
   subcategory_generation: SubcategoryGenerationStep,
@@ -73,7 +76,7 @@ const STEP_LABELS: Record<string, string> = {
   url_input: 'Analyze',
   profile_review: 'Profile',
   channel_recommendations: 'Channels',
-  project_selection: 'Project',
+  // project_selection removed - unused
   category_generation: 'Categories',
   subcategory_generation: 'Subcategories',
   account_creation: 'Account',
@@ -191,8 +194,18 @@ const ProgressIndicator: React.FC = () => {
 // ONBOARDING CONTENT
 // ============================================================================
 
+// Valid steps for ?step= param (dev testing)
+const VALID_DEV_STEPS: OnboardingStep[] = [
+  'url_input',
+  'analyzing',
+  'profile_review',
+  'channel_recommendations',
+  'account_creation',
+  'workspace_intro',
+];
+
 const OnboardingContent: React.FC = () => {
-  const { session, error, clearSession, initializeWithExistingProfile, nextStep } = useOnboarding();
+  const { session, error, clearSession, initializeWithExistingProfile, nextStep, goToStep, startAnalysis } = useOnboarding();
   const { user, loading: authLoading } = useAuth();
   const { currentOrg, loading: orgLoading } = useOrganization();
   const { projects, loading: projectsLoading } = useProject();
@@ -202,14 +215,50 @@ const OnboardingContent: React.FC = () => {
   const [showResumePrompt, setShowResumePrompt] = useState(false);
   const [checkComplete, setCheckComplete] = useState(false);
   const [existingUserInitialized, setExistingUserInitialized] = useState(false);
+  const [devStepHandled, setDevStepHandled] = useState(false);
 
   const currentStep = session?.currentStep || 'url_input';
   const CurrentStepComponent = StepComponents[currentStep];
 
+  // Dev testing: Jump to specific step with ?step=profile_review (etc.)
+  // This will auto-run demo mode first if needed to populate data
+  useEffect(() => {
+    if (devStepHandled || !session) return;
+
+    const stepParam = searchParams.get('step') as OnboardingStep | null;
+    if (!stepParam || !VALID_DEV_STEPS.includes(stepParam)) return;
+
+    // Don't process if we're already on that step
+    if (session.currentStep === stepParam) {
+      setDevStepHandled(true);
+      return;
+    }
+
+    console.log('[Dev] Jump to step via URL param:', stepParam);
+
+    // If jumping to a step that needs data (profile_review onwards), run demo mode first
+    const stepsNeedingData: OnboardingStep[] = ['profile_review', 'channel_recommendations', 'account_creation', 'workspace_intro'];
+    if (stepsNeedingData.includes(stepParam) && !session.businessProfile) {
+      console.log('[Dev] Running demo mode to populate data for step:', stepParam);
+      // Start demo analysis, then jump to step after it completes
+      startAnalysis('', true).then(() => {
+        setTimeout(() => {
+          goToStep(stepParam);
+          setDevStepHandled(true);
+        }, 100);
+      });
+    } else {
+      goToStep(stepParam);
+      setDevStepHandled(true);
+    }
+  }, [session, searchParams, devStepHandled, goToStep, startAnalysis]);
+
   // Check if this is an existing user creating a new project
   // Auto-detect: if user is logged in, treat as existing user mode (skip account creation)
+  // Exception: ?mode=new forces fresh analysis flow for logged-in users
   const modeParam = searchParams.get('mode');
-  const isExistingUserMode = modeParam === 'existing' || modeParam === 'project' || (!!user && !authLoading);
+  const isNewMode = modeParam === 'new';
+  const isExistingUserMode = !isNewMode && (modeParam === 'existing' || modeParam === 'project' || (!!user && !authLoading));
 
   // For existing user mode, wait for all data to load
   const isLoadingExistingData = isExistingUserMode && (authLoading || orgLoading || projectsLoading);
@@ -568,13 +617,27 @@ const OnboardingContent: React.FC = () => {
     );
   }
 
+  // Define progress steps for the global progress bar
+  const PROGRESS_STEPS = ['url_input', 'analyzing', 'profile_review', 'channel_recommendations', 'account_creation'];
+
   return (
     <div className="h-screen bg-[#0f172a] text-white flex flex-col">
-      {/* Background gradient */}
+      {/* Global Progress Bar - Section 7 */}
+      <OnboardingProgressBar
+        currentStep={currentStep}
+        steps={PROGRESS_STEPS}
+        visible={!['complete', 'workspace_intro'].includes(currentStep)}
+      />
+
+      {/* Mobile Overlay for Onboarding - Section 3 */}
+      <MobileDesktopOverlay isOnboarding={true} />
+
+      {/* Background gradient with mission grid */}
       <div className="fixed inset-0 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 -z-10" />
+      <div className="fixed inset-0 mission-grid opacity-50 -z-10" />
 
       {/* Header */}
-      <header className="flex-shrink-0 border-b border-slate-800 bg-slate-900/80 backdrop-blur-sm">
+      <header className="flex-shrink-0 border-b border-slate-800 bg-slate-900/80 backdrop-blur-sm mt-1">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <img src={MissionLogo} alt="MissionContent" className="h-10" />
@@ -663,17 +726,15 @@ const OnboardingContent: React.FC = () => {
             )}
           </AnimatePresence>
 
-          {/* Error banner */}
+          {/* Error banner - Using new ErrorBanner component (Section 5) */}
           <AnimatePresence>
             {error && (
-              <motion.div
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="mb-6 p-4 bg-red-500/10 border border-red-500/30 text-red-400 text-sm"
-              >
-                {error}
-              </motion.div>
+              <div className="mb-6">
+                <ErrorBanner
+                  message={error}
+                  variant="error"
+                />
+              </div>
             )}
           </AnimatePresence>
 

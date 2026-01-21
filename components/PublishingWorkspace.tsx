@@ -5,7 +5,8 @@ import { Post, Category, PostStatus, GenerationTask, TaskStatus, ContentType, To
 import {
     Search, Filter, User, CheckCircle, XCircle, Edit3, UploadCloud, Trash2,
     Loader2, ArrowRight, RefreshCw, Clock, Archive, X, GripVertical,
-    Sparkles, Hash, Type, AlignLeft, ChevronRight, Layout, Rocket, Globe
+    Sparkles, Hash, Type, AlignLeft, ChevronRight, Layout, Rocket, Globe, RotateCcw,
+    Pencil, Check
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { TiptapEditor, TiptapViewer } from './TiptapEditor';
@@ -27,7 +28,7 @@ interface Props {
 
 const PUBLISHING_FILTERS = [
     { label: 'Queued', value: 'QUEUED' },
-    { label: 'Live', value: 'LIVE' },
+    { label: 'Drafts', value: 'DRAFTS' },
     { label: 'Archived', value: 'ARCHIVED' },
 ];
 
@@ -49,6 +50,21 @@ export const PublishingWorkspace: React.FC<Props> = ({
     // WordPress export state
     const [isExporting, setIsExporting] = useState(false);
     const [exportResult, setExportResult] = useState<{ success: boolean; message: string } | null>(null);
+
+    // Action overlay notification
+    const [actionOverlay, setActionOverlay] = useState<{
+        show: boolean;
+        type: 'edit' | 'delete' | 'archive';
+        message: string;
+    } | null>(null);
+
+    // "Exclude drafts" toggle - when ON (default), drafts are excluded from launch
+    const [excludeDrafts, setExcludeDrafts] = useState(true);
+
+    // Author name editing state
+    const [isEditingAuthor, setIsEditingAuthor] = useState(false);
+    const [editAuthorName, setEditAuthorName] = useState('');
+
 
     // Layout resizing - shared across workspaces
     const [leftPaneWidth, setLeftPaneWidth] = usePaneWidth('leftPane');
@@ -76,14 +92,27 @@ export const PublishingWorkspace: React.FC<Props> = ({
         return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
     }, []);
 
-    // Filter Posts
-    const filteredPosts = useMemo(() => {
-        return posts.filter(post => {
+    // Filter Posts and split into launch-ready and drafts
+    // QUEUED now includes: READY, NEEDS_REVIEW, and APPROVED (all are "ready to launch")
+    const { filteredPosts, totalQueuedCount } = useMemo(() => {
+        if (!posts || !Array.isArray(posts)) {
+            return { filteredPosts: [], totalQueuedCount: 0 };
+        }
+        const filtered = posts.filter(post => {
+            // Exclude category pages
+            if (post.isCategoryPage) return false;
+
             let matchesStatus = false;
             if (statusFilter === 'QUEUED') {
-                matchesStatus = post.status === PostStatus.APPROVED;
-            } else if (statusFilter === 'LIVE') {
-                matchesStatus = post.status === PostStatus.PUBLISHED;
+                // Include READY, NEEDS_REVIEW, and APPROVED - all are content ready for launch (exclude drafts)
+                matchesStatus = (post.status === PostStatus.READY ||
+                                post.status === PostStatus.NEEDS_REVIEW ||
+                                post.status === PostStatus.APPROVED) && !post.isDraft;
+            } else if (statusFilter === 'DRAFTS') {
+                // Show posts marked as drafts
+                matchesStatus = (post.status === PostStatus.READY ||
+                                post.status === PostStatus.NEEDS_REVIEW ||
+                                post.status === PostStatus.APPROVED) && post.isDraft;
             } else if (statusFilter === 'ARCHIVED') {
                 matchesStatus = post.status === PostStatus.ARCHIVED;
             }
@@ -98,7 +127,17 @@ export const PublishingWorkspace: React.FC<Props> = ({
             const dateB = b.publishedAt || b.updatedAt;
             return (dateB?.toMillis() || 0) - (dateA?.toMillis() || 0);
         });
+
+        // Count posts for launch
+        const totalQueued = filtered.length;
+
+        return { filteredPosts: filtered, totalQueuedCount: totalQueued };
     }, [posts, statusFilter, searchQuery]);
+
+    // Toggle draft status
+    const handleToggleDraft = async (postId: string, isDraft: boolean) => {
+        await onUpdatePost(postId, { isDraft });
+    };
 
     const selectedPost = posts.find(p => p.id === selectedPostId);
 
@@ -132,8 +171,26 @@ export const PublishingWorkspace: React.FC<Props> = ({
                 let postsPublished = 0;
                 let postsUpdated = 0;
 
-                // Mark APPROVED posts as PUBLISHED
-                const approvedPosts = posts.filter(p => p.status === PostStatus.APPROVED);
+                // Get posts ready to launch (READY, NEEDS_REVIEW, or APPROVED)
+                // Exclude drafts and respect "only reviewed" toggle
+                const postsToLaunch = posts.filter(p => {
+                    // Must be in a launchable state
+                    const isLaunchable = p.status === PostStatus.READY ||
+                                        p.status === PostStatus.NEEDS_REVIEW ||
+                                        p.status === PostStatus.APPROVED;
+                    if (!isLaunchable) return false;
+
+                    // If "exclude drafts" is ON (default), skip drafts
+                    if (excludeDrafts && p.isDraft) return false;
+
+                    // Exclude category pages
+                    if (p.isCategoryPage) return false;
+
+                    return true;
+                });
+
+                // Legacy: also handle APPROVED posts for backward compatibility
+                const approvedPosts = postsToLaunch;
 
                 // Trigger launch animation if there are posts to publish
                 if (approvedPosts.length > 0) {
@@ -188,18 +245,69 @@ export const PublishingWorkspace: React.FC<Props> = ({
         if (!selectedPost) return;
 
         if (selectedPost.status === PostStatus.PUBLISHED) {
-            if (confirm("⚠️ You are editing a LIVE post.\n\nThis will push the post back into the launch queue. Changes will go live on the next launch.\n\nDo you want to proceed?")) {
-                await onUpdatePost(selectedPost.id, { content });
-                await onUpdateStatus(selectedPost.id, PostStatus.APPROVED);
-                setEditMode(false);
-            }
+            // For live posts, flag as pending edit and show overlay
+            await onUpdatePost(selectedPost.id, {
+                content,
+                pendingAction: 'edit'
+            });
+            setEditMode(false);
+            setActionOverlay({
+                show: true,
+                type: 'edit',
+                message: 'Moved to Launch Pad. Edit will go live on next launch.'
+            });
+            // Auto-dismiss after 3 seconds
+            setTimeout(() => setActionOverlay(null), 3000);
         } else {
             await onUpdatePost(selectedPost.id, { content });
             setEditMode(false);
         }
     };
 
+    const handleDeleteLivePost = async (postId: string) => {
+        const post = posts.find(p => p.id === postId);
+        if (!post) return;
+
+        if (post.status === PostStatus.PUBLISHED) {
+            // For live posts, flag as pending delete instead of immediate delete
+            await onUpdatePost(postId, { pendingAction: 'delete' });
+            setActionOverlay({
+                show: true,
+                type: 'delete',
+                message: 'Flagged for deletion. Will be removed on next launch.'
+            });
+            setTimeout(() => setActionOverlay(null), 3000);
+        } else {
+            // For non-live posts, delete immediately
+            if (confirm('Delete this post? This action cannot be undone.')) {
+                onDeletePost(postId);
+            }
+        }
+    };
+
+    const handleArchiveLivePost = async (postId: string) => {
+        const post = posts.find(p => p.id === postId);
+        if (!post) return;
+
+        if (post.status === PostStatus.PUBLISHED) {
+            // Archive and show overlay
+            await onUpdateStatus(postId, PostStatus.ARCHIVED);
+            setActionOverlay({
+                show: true,
+                type: 'archive',
+                message: 'Moved to Launch Pad. Will be unpublished on next launch.'
+            });
+            setTimeout(() => setActionOverlay(null), 3000);
+        } else {
+            if (confirm('Archive this post? It will be removed from the launch queue.')) {
+                onUpdateStatus(postId, PostStatus.ARCHIVED);
+            }
+        }
+    };
+
     const getCategoryBreadcrumb = (catId: string) => {
+        if (!categories || categories.length === 0) return 'Uncategorized';
+
         const trail: string[] = [];
         let current = categories.find(c => c.id === catId);
 
@@ -266,41 +374,38 @@ export const PublishingWorkspace: React.FC<Props> = ({
             >
                 {/* Header */}
                 <div className="p-4 border-b border-slate-800 bg-slate-900/30">
-                    <div className="mb-4">
-                        <h1 className="text-2xl font-bold text-white tracking-tight mb-1">Launch Pad</h1>
-                        <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Publish Content</p>
+                    {/* Top row: Title + Launch Button */}
+                    <div className="flex items-start justify-between gap-4 mb-4">
+                        <div>
+                            <h1 className="text-xl font-bold text-white tracking-tight">Launch Pad</h1>
+                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Publish Content</p>
+                        </div>
+
+                        {/* Launch Button - Always visible, disabled if no deployment */}
+                        {(() => {
+                            const hasDeployment = !!project?.settings?.deployment?.webhookUrl;
+                            const launchableCount = totalQueuedCount;
+                            const isDisabled = isBuilding || launchableCount === 0 || !hasDeployment || statusFilter !== 'QUEUED';
+
+                            return (
+                                <button
+                                    onClick={handleTriggerBuild}
+                                    disabled={isDisabled}
+                                    title={!hasDeployment ? 'Deployment not configured' : undefined}
+                                    className={`flex items-center gap-2 px-4 py-2 rounded text-sm font-medium transition-all ${
+                                        isDisabled
+                                            ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                                            : 'bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-white shadow-lg shadow-cyan-500/20'
+                                    }`}
+                                >
+                                    {isBuilding ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} />}
+                                    {isBuilding ? 'Launching...' : launchableCount > 0 ? `Launch ${launchableCount}` : 'Launch'}
+                                </button>
+                            );
+                        })()}
                     </div>
 
-                    {project?.settings?.deployment?.webhookUrl ? (
-                        <div className="mb-4 space-y-2">
-                            <button
-                                onClick={handleTriggerBuild}
-                                disabled={isBuilding}
-                                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all"
-                            >
-                                {isBuilding ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} />}
-                                {isBuilding ? 'Launching...' : 'Launch All'}
-                            </button>
-                            {(() => {
-                                const queuedCount = posts.filter(p => p.status === PostStatus.APPROVED).length;
-                                if (queuedCount > 0) {
-                                    return (
-                                        <p className="text-[10px] text-slate-500 text-center">
-                                            {queuedCount} post{queuedCount !== 1 ? 's' : ''} ready to publish
-                                        </p>
-                                    );
-                                }
-                                return <p className="text-[10px] text-slate-500 text-center">All posts are up to date</p>;
-                            })()}
-                        </div>
-                    ) : (
-                        <div className="mb-4 py-3 px-3 bg-slate-800/50 border border-slate-700 text-center">
-                            <p className="text-xs text-slate-400">Deployment not configured</p>
-                            <p className="text-[10px] text-slate-500 mt-1">Contact admin to set up CloudFlare deployment</p>
-                        </div>
-                    )}
-
-                    <div className="relative mb-3">
+                    <div className="relative mb-3 mt-2">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
                         <input
                             value={searchQuery}
@@ -362,58 +467,87 @@ export const PublishingWorkspace: React.FC<Props> = ({
                             No posts found in {statusFilter.toLowerCase()}
                         </div>
                     ) : (
-                        <AnimatePresence>
-                            {filteredPosts.map((post, index) => (
-                                <motion.div
-                                    key={post.id}
-                                    initial={{ opacity: 1, y: 0 }}
-                                    animate={isLaunching ? {
-                                        y: -1000,
-                                        opacity: 0,
-                                        transition: {
-                                            duration: 1.8,
-                                            delay: index * 0.08,
-                                            ease: [0.4, 0, 0.2, 1]
-                                        }
-                                    } : {
-                                        y: 0,
-                                        opacity: 1
-                                    }}
-                                    onClick={() => !isLaunching && setSelectedPostId(post.id)}
-                                    className={`
-                                        p-4 border-b border-slate-800/50 cursor-pointer transition-colors hover:bg-slate-900/50
-                                        ${selectedPostId === post.id ? 'bg-slate-900 border-l-2 border-l-purple-500' : 'border-l-2 border-l-transparent'}
-                                        ${isLaunching ? 'pointer-events-none' : ''}
-                                    `}
-                                >
-                                    <div className="flex justify-between items-start mb-1">
-                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider truncate max-w-[120px]">
-                                            {getCategoryBreadcrumb(post.categoryId)}
-                                        </span>
-                                        <span className={`text-[10px] font-bold uppercase ${post.status === PostStatus.PUBLISHED ? 'text-emerald-500' :
-                                                post.status === PostStatus.APPROVED ? 'text-purple-400' :
-                                                    'text-slate-500'
-                                            }`}>
-                                            {post.status === PostStatus.APPROVED ? 'QUEUED' : post.status}
-                                        </span>
-                                    </div>
-                                    <h3 className={`text-sm font-medium leading-snug mb-2 ${selectedPostId === post.id ? 'text-white' : 'text-slate-400'}`}>
-                                        {post.title}
-                                    </h3>
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex items-center gap-2">
-                                            <div className="w-5 h-5 bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-400">
-                                                {(post.editor || 'SJ').substring(0, 2).toUpperCase()}
-                                            </div>
-                                            <span className="text-xs text-slate-600">
-                                                {post.publishedAt ? `Updated: ${post.publishedAt.toDate().toLocaleDateString()}` :
-                                                        `Approved: ${post.updatedAt?.toDate().toLocaleDateString()}`}
+                        <>
+                            {/* Launch-Ready Posts */}
+                            <AnimatePresence>
+                                {filteredPosts.map((post, index) => (
+                                    <motion.div
+                                        key={post.id}
+                                        initial={{ opacity: 1, y: 0 }}
+                                        animate={isLaunching && statusFilter === 'QUEUED' ? {
+                                            y: -1000,
+                                            opacity: 0,
+                                            transition: {
+                                                duration: 1.8,
+                                                delay: index * 0.08,
+                                                ease: [0.4, 0, 0.2, 1]
+                                            }
+                                        } : {
+                                            y: 0,
+                                            opacity: 1
+                                        }}
+                                        onClick={() => !isLaunching && setSelectedPostId(post.id)}
+                                        className={`
+                                            p-4 border-b border-slate-800/50 cursor-pointer transition-colors hover:bg-slate-900/50
+                                            ${selectedPostId === post.id ? 'bg-slate-900 border-l-2 border-l-purple-500' : 'border-l-2 border-l-transparent'}
+                                            ${isLaunching ? 'pointer-events-none' : ''}
+                                        `}
+                                    >
+                                        <div className="flex justify-between items-start mb-1">
+                                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider truncate max-w-[120px]">
+                                                {getCategoryBreadcrumb(post.categoryId)}
+                                            </span>
+                                            <span className="text-[10px] font-bold uppercase text-purple-400">
+                                                {statusFilter === 'DRAFTS' ? 'DRAFT' : 'QUEUED'}
                                             </span>
                                         </div>
-                                    </div>
-                                </motion.div>
-                            ))}
-                        </AnimatePresence>
+                                        <h3 className={`text-sm font-medium leading-snug mb-2 ${selectedPostId === post.id ? 'text-white' : 'text-slate-400'}`}>
+                                            {post.title}
+                                        </h3>
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-[10px] text-slate-600">
+                                                {post.updatedAt?.toDate().toLocaleDateString()}
+                                            </span>
+                                            <div className="flex items-center gap-2">
+                                                {/* Draft toggle - next to launch area */}
+                                                {statusFilter === 'QUEUED' && (
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handleToggleDraft(post.id, !post.isDraft);
+                                                        }}
+                                                        className="flex items-center gap-1.5 group"
+                                                        title={post.isDraft ? "Release to launch queue" : "Mark as draft"}
+                                                    >
+                                                        <span className="text-[10px] font-medium text-slate-500 group-hover:text-slate-400">Draft</span>
+                                                        <div className={`w-7 h-4 rounded-full relative transition-colors ${
+                                                            post.isDraft ? 'bg-amber-500/30' : 'bg-slate-700'
+                                                        }`}>
+                                                            <div className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${
+                                                                post.isDraft ? 'right-0.5 bg-amber-400' : 'left-0.5 bg-slate-500'
+                                                            }`} />
+                                                        </div>
+                                                    </button>
+                                                )}
+                                                {/* Delete button */}
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        if (confirm('Delete this post? This action cannot be undone.')) {
+                                                            onDeletePost(post.id);
+                                                        }
+                                                    }}
+                                                    className="p-1 text-slate-600 hover:text-red-400 transition-colors"
+                                                    title="Delete post"
+                                                >
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </motion.div>
+                                ))}
+                            </AnimatePresence>
+                        </>
                     )}
                 </div>
             </div>
@@ -441,9 +575,30 @@ export const PublishingWorkspace: React.FC<Props> = ({
                                     {/* Internal Header */}
                                     <div className="p-8 pb-4 relative">
                                         {selectedPost.status === PostStatus.PUBLISHED && (
-                                            <div className="mb-4 flex items-center gap-2 p-2 bg-emerald-950/30 border border-emerald-900/50 rounded-sm">
-                                                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                                                <span className="text-xs text-emerald-400 font-medium">This post is LIVE on the website.</span>
+                                            <div className="mb-4 space-y-2">
+                                                <div className="flex items-center gap-2 p-2 bg-emerald-950/30 border border-emerald-900/50 rounded-sm">
+                                                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                                                    <span className="text-xs text-emerald-400 font-medium">This post is LIVE on the website.</span>
+                                                </div>
+                                                {selectedPost.pendingAction === 'edit' && (
+                                                    <div className="flex items-center gap-2 p-2 bg-blue-950/30 border border-blue-900/50 rounded-sm">
+                                                        <Pencil size={14} className="text-blue-400" />
+                                                        <span className="text-xs text-blue-400 font-medium">EDIT PENDING — Changes will go live on next launch.</span>
+                                                    </div>
+                                                )}
+                                                {selectedPost.pendingAction === 'delete' && (
+                                                    <div className="flex items-center gap-2 p-2 bg-rose-950/30 border border-rose-900/50 rounded-sm">
+                                                        <Trash2 size={14} className="text-rose-400" />
+                                                        <span className="text-xs text-rose-400 font-medium">DELETE PENDING — Will be removed on next launch.</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {selectedPost.isDraft && selectedPost.status === PostStatus.APPROVED && (
+                                            <div className="mb-4 flex items-center gap-2 p-2 bg-amber-950/30 border border-amber-900/50 rounded-sm">
+                                                <div className="w-2 h-2 rounded-full bg-amber-500" />
+                                                <span className="text-xs text-amber-400 font-medium">This post is a DRAFT and won't launch until the toggle is turned off.</span>
                                             </div>
                                         )}
 
@@ -456,18 +611,87 @@ export const PublishingWorkspace: React.FC<Props> = ({
                                         <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                                             <div className="flex items-center gap-3">
                                                 <div className="w-10 h-10 bg-purple-500/20 flex items-center justify-center text-purple-300 font-bold">
-                                                    {(selectedPost.editor || 'SJ').substring(0, 2).toUpperCase()}
+                                                    {(selectedPost.authorName || project?.settings?.defaultAuthorName || 'AU').substring(0, 2).toUpperCase()}
                                                 </div>
                                                 <div>
-                                                    <div className="text-sm font-medium text-slate-300">
-                                                        By {selectedPost.editor || 'Sarah Jenkins'}
-                                                    </div>
+                                                    {isEditingAuthor ? (
+                                                        <div className="flex items-center gap-2">
+                                                            <input
+                                                                type="text"
+                                                                value={editAuthorName}
+                                                                onChange={(e) => setEditAuthorName(e.target.value)}
+                                                                className="bg-slate-800 border border-slate-600 px-2 py-1 text-sm text-slate-200 focus:border-purple-500 outline-none w-40"
+                                                                placeholder="Author name"
+                                                                autoFocus
+                                                                onKeyDown={(e) => {
+                                                                    if (e.key === 'Enter') {
+                                                                        onUpdatePost(selectedPost.id, { authorName: editAuthorName.trim() || undefined });
+                                                                        setIsEditingAuthor(false);
+                                                                    } else if (e.key === 'Escape') {
+                                                                        setIsEditingAuthor(false);
+                                                                    }
+                                                                }}
+                                                            />
+                                                            <button
+                                                                onClick={() => {
+                                                                    onUpdatePost(selectedPost.id, { authorName: editAuthorName.trim() || undefined });
+                                                                    setIsEditingAuthor(false);
+                                                                }}
+                                                                className="p-1 text-emerald-400 hover:text-emerald-300 transition-colors"
+                                                                title="Save"
+                                                            >
+                                                                <Check size={16} />
+                                                            </button>
+                                                            <button
+                                                                onClick={() => setIsEditingAuthor(false)}
+                                                                className="p-1 text-slate-400 hover:text-slate-300 transition-colors"
+                                                                title="Cancel"
+                                                            >
+                                                                <X size={16} />
+                                                            </button>
+                                                        </div>
+                                                    ) : (
+                                                        <div className="flex items-center gap-2">
+                                                            <div className="text-sm font-medium text-slate-300">
+                                                                By {selectedPost.authorName || project?.settings?.defaultAuthorName || 'Unknown Author'}
+                                                            </div>
+                                                            <button
+                                                                onClick={() => {
+                                                                    setEditAuthorName(selectedPost.authorName || project?.settings?.defaultAuthorName || '');
+                                                                    setIsEditingAuthor(true);
+                                                                }}
+                                                                className="p-1 text-slate-500 hover:text-slate-300 transition-colors"
+                                                                title="Edit author name"
+                                                            >
+                                                                <Pencil size={14} />
+                                                            </button>
+                                                        </div>
+                                                    )}
                                                     <div className="text-xs text-slate-500">
                                                         {selectedPost.publishedAt ? selectedPost.publishedAt.toDate().toLocaleDateString() : selectedPost.updatedAt?.toDate().toLocaleDateString()}
                                                     </div>
                                                 </div>
                                             </div>
                                             <div className="flex items-center gap-2">
+                                                {/* Draft toggle - left of Edit button */}
+                                                {(selectedPost.status === PostStatus.READY ||
+                                                  selectedPost.status === PostStatus.NEEDS_REVIEW ||
+                                                  selectedPost.status === PostStatus.APPROVED) && (
+                                                    <button
+                                                        onClick={() => handleToggleDraft(selectedPost.id, !selectedPost.isDraft)}
+                                                        className="flex items-center gap-2 px-3 py-1.5 group"
+                                                        title={selectedPost.isDraft ? "Move to launch queue" : "Move to drafts"}
+                                                    >
+                                                        <span className="text-xs font-medium text-slate-400 group-hover:text-slate-300">Draft</span>
+                                                        <div className={`w-8 h-4 rounded-full relative transition-colors ${
+                                                            selectedPost.isDraft ? 'bg-amber-500/30' : 'bg-slate-700'
+                                                        }`}>
+                                                            <div className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${
+                                                                selectedPost.isDraft ? 'right-0.5 bg-amber-400' : 'left-0.5 bg-slate-500'
+                                                            }`} />
+                                                        </div>
+                                                    </button>
+                                                )}
                                                 <button
                                                     onClick={() => {
                                                         if (editMode) {
@@ -485,20 +709,13 @@ export const PublishingWorkspace: React.FC<Props> = ({
                                                     {editMode ? 'Save' : 'Edit'}
                                                 </button>
                                                 <button
-                                                    onClick={() => {
-                                                        if (confirm('Remove this post from the website? It will be queued for removal in the next launch.')) {
-                                                            onUpdateStatus(selectedPost.id, PostStatus.ARCHIVED);
-                                                        }
-                                                    }}
-                                                    className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider bg-slate-700 hover:bg-rose-600 text-slate-200 hover:text-white transition-colors"
+                                                    onClick={() => handleArchiveLivePost(selectedPost.id)}
+                                                    className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                                                    title="Archive post"
                                                 >
-                                                    Remove Post
+                                                    <Archive size={18} />
                                                 </button>
                                             </div>
-                                        </div>
-                                        <div className="mt-3 text-[10px] text-slate-500 space-y-1">
-                                            <p><span className="text-slate-400 font-medium">Edit:</span> Changes push post back into launch queue and update the site on next launch.</p>
-                                            <p><span className="text-slate-400 font-medium">Remove:</span> Adds removal request to queue for action on next launch.</p>
                                         </div>
                                     </div>
 
@@ -543,54 +760,35 @@ export const PublishingWorkspace: React.FC<Props> = ({
                 {/* Actions Header */}
                 {selectedPost && (
                     <div className="p-4 border-b border-slate-800 bg-slate-900/50 space-y-3">
-                        <div className="flex items-center justify-between">
-                            <span className={`
-                                px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider
-                                ${selectedPost.status === PostStatus.PUBLISHED ? 'bg-emerald-500/10 text-emerald-500' :
-                                        selectedPost.status === PostStatus.APPROVED ? 'bg-purple-500/10 text-purple-500' :
-                                            'bg-slate-800 text-slate-400'}
-                            `}>
-                                {selectedPost.status === PostStatus.APPROVED ? 'READY TO PUBLISH' : selectedPost.status.replace('_', ' ')}
-                            </span>
-                            <div className="flex items-center gap-1">
-                                {selectedPost.status !== PostStatus.ARCHIVED && (
-                                    <button
-                                        onClick={() => onUpdateStatus(selectedPost.id, PostStatus.ARCHIVED)}
-                                        className="p-1.5 text-slate-400 hover:bg-slate-700 transition-colors"
-                                        title="Archive"
-                                    >
-                                        <Archive size={16} />
-                                    </button>
-                                )}
-                            </div>
+                        <div>
+                            {/* Status Badge */}
+                            {(() => {
+                                const isQueued = selectedPost.status === PostStatus.READY ||
+                                                 selectedPost.status === PostStatus.NEEDS_REVIEW ||
+                                                 selectedPost.status === PostStatus.APPROVED;
+                                const isDraft = isQueued && selectedPost.isDraft;
+                                return (
+                                    <span className={`
+                                        px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider
+                                        ${selectedPost.status === PostStatus.PUBLISHED ? 'bg-emerald-500/10 text-emerald-500' :
+                                                isDraft ? 'bg-amber-500/10 text-amber-400' :
+                                                isQueued ? 'bg-purple-500/10 text-purple-500' :
+                                                    'bg-slate-800 text-slate-400'}
+                                    `}>
+                                        {isDraft ? 'DRAFT' : isQueued ? 'QUEUED' : selectedPost.status.replace('_', ' ')}
+                                    </span>
+                                );
+                            })()}
                         </div>
-
-                        {/* Context-aware action buttons */}
-                        {selectedPost.status === PostStatus.APPROVED && (
-                            <div className="space-y-2">
-                                <div className="flex gap-2">
-                                    <button
-                                        onClick={() => onUpdateStatus(selectedPost.id, PostStatus.NEEDS_REVIEW)}
-                                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold uppercase tracking-wider transition-all"
-                                    >
-                                        <RefreshCw size={14} />
-                                        Send Back to Review
-                                    </button>
-                                </div>
-                                <p className="text-xs text-slate-500 text-center">
-                                    This post will go live when you click "Publish All" above
-                                </p>
-                            </div>
-                        )}
 
                         {selectedPost.status === PostStatus.PUBLISHED && (
                             <div className="space-y-2">
                                 <button
-                                    onClick={() => onUpdateStatus(selectedPost.id, PostStatus.NEEDS_REVIEW)}
+                                    onClick={() => onUpdateStatus(selectedPost.id, PostStatus.READY)}
                                     className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold uppercase tracking-wider transition-all"
                                 >
                                     <RefreshCw size={14} />
-                                    Unpublish (Back to Review)
+                                    Unpublish (Back to Queue)
                                 </button>
                             </div>
                         )}
@@ -730,6 +928,41 @@ export const PublishingWorkspace: React.FC<Props> = ({
                                 Got it
                             </button>
                         </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Action Overlay Notification */}
+            <AnimatePresence>
+                {actionOverlay?.show && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 50 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 50 }}
+                        className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50"
+                    >
+                        <div className={`px-6 py-4 rounded-lg shadow-2xl flex items-center gap-3 ${
+                            actionOverlay.type === 'edit' ? 'bg-blue-900/95 border border-blue-700' :
+                            actionOverlay.type === 'delete' ? 'bg-rose-900/95 border border-rose-700' :
+                            'bg-amber-900/95 border border-amber-700'
+                        }`}>
+                            {actionOverlay.type === 'edit' && <Pencil size={20} className="text-blue-400" />}
+                            {actionOverlay.type === 'delete' && <Trash2 size={20} className="text-rose-400" />}
+                            {actionOverlay.type === 'archive' && <Archive size={20} className="text-amber-400" />}
+                            <span className={`text-sm font-medium ${
+                                actionOverlay.type === 'edit' ? 'text-blue-200' :
+                                actionOverlay.type === 'delete' ? 'text-rose-200' :
+                                'text-amber-200'
+                            }`}>
+                                {actionOverlay.message}
+                            </span>
+                            <button
+                                onClick={() => setActionOverlay(null)}
+                                className="ml-2 p-1 hover:bg-white/10 rounded transition-colors"
+                            >
+                                <X size={16} className="text-white/70" />
+                            </button>
+                        </div>
                     </motion.div>
                 )}
             </AnimatePresence>

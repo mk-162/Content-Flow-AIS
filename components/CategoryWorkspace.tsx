@@ -7,8 +7,10 @@ import {
     X, Check, Play, Trash2, FileText, AlertTriangle,
     GripVertical, ArrowRight, Tag, User, Edit2, RefreshCw, Info, Target, TrendingUp,
     FolderOpen, Eye, EyeOff, Save, ChevronDown, Zap, CheckCircle, Maximize2, Loader2,
-    Image as ImageIcon
+    Image as ImageIcon, Settings
 } from 'lucide-react';
+import { CategorySettingsModal } from './CategorySettingsModal';
+import { AddSubcategoryModal } from './AddSubcategoryModal';
 import { suggestCategories, AICategorySuggestion } from '../services/geminiService';
 import { researchService, getExistingResearch, isResearchStale } from '../services/researchService';
 import { fetchCategoryKeywords, getCategoryResearch, areKeywordsStale } from '../services/categoryKeywordService';
@@ -335,7 +337,7 @@ const BulkGenerateModal: React.FC<{
 };
 
 // ============================================================================
-// SORTABLE CATEGORY ROW
+// SORTABLE CATEGORY ROW - Redesigned for clarity
 // ============================================================================
 const SortableCategoryRow: React.FC<{
     category: Category;
@@ -345,6 +347,7 @@ const SortableCategoryRow: React.FC<{
     isExpanded: boolean;
     hasChildren: boolean;
     articleCount: number;
+    targetArticles: number;
     isGenerating: boolean;
     progress: number;
     onSelect: () => void;
@@ -352,6 +355,7 @@ const SortableCategoryRow: React.FC<{
     onToggleExpand: () => void;
     onGenerate: () => void;
     onAddSub: () => void;
+    onOpenSettings: () => void;
 }> = ({
     category,
     depth,
@@ -360,6 +364,7 @@ const SortableCategoryRow: React.FC<{
     isExpanded,
     hasChildren,
     articleCount,
+    targetArticles,
     isGenerating,
     progress,
     onSelect,
@@ -367,7 +372,9 @@ const SortableCategoryRow: React.FC<{
     onToggleExpand,
     onGenerate,
     onAddSub,
+    onOpenSettings,
 }) => {
+        const [isHovered, setIsHovered] = React.useState(false);
         const {
             attributes,
             listeners,
@@ -383,132 +390,193 @@ const SortableCategoryRow: React.FC<{
             opacity: isDragging ? 0.5 : 1,
         };
 
-        const indentPadding = depth * 12;
+        // 24px indent per level for clear hierarchy
+        const indentPx = depth * 24;
+        const progressPercent = Math.min(100, (articleCount / targetArticles) * 100);
+        const isComplete = articleCount >= targetArticles;
 
         return (
             <motion.div
                 ref={setNodeRef}
                 style={style}
                 layout={!isDragging}
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.2, ease: 'easeOut' }}
-                className={`
-                border-b border-slate-800/50 last:border-none transition-colors overflow-hidden
-                ${isSelected ? 'bg-slate-800' : 'hover:bg-slate-900/50'}
-                ${isDragging ? 'z-50' : ''}
-            `}
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.15 }}
+                className={`relative group ${isDragging ? 'z-50' : ''}`}
+                onMouseEnter={() => setIsHovered(true)}
+                onMouseLeave={() => setIsHovered(false)}
             >
+                {/* Tree connector line for children */}
+                {depth > 0 && (
+                    <div
+                        className="absolute top-0 bottom-0 border-l border-slate-700/40"
+                        style={{ left: `${indentPx - 12}px` }}
+                    />
+                )}
+
                 <div
+                    onClick={onSelect}
                     className={`
-                    flex items-center py-3 px-4 cursor-pointer relative
-                    ${isSelected ? 'border-l-2 border-cyan-500' : 'border-l-2 border-transparent'}
-                `}
-                    style={{ paddingLeft: `${16 + indentPadding}px` }}
+                        relative flex items-center gap-2 py-2.5 px-3 cursor-pointer
+                        transition-all duration-150
+                        ${isSelected
+                            ? 'bg-gradient-to-r from-cyan-950/60 to-transparent border-l-2 border-cyan-400'
+                            : 'border-l-2 border-transparent hover:bg-slate-800/40'
+                        }
+                    `}
+                    style={{ paddingLeft: `${12 + indentPx}px` }}
                 >
-                    {/* Indent Background */}
-                    {depth > 0 && (
-                        <div
-                            className="absolute top-0 bottom-0 left-0"
-                            style={{ width: `${indentPadding}px`, backgroundColor: '#0d364c' }}
-                        />
-                    )}
+                    {/* Left zone: Expand + Add grouped together */}
+                    <div className="flex items-center gap-0.5 shrink-0">
+                        {/* Expand/Collapse chevron */}
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                if (hasChildren) onToggleExpand();
+                            }}
+                            className={`
+                                w-6 h-6 flex items-center justify-center rounded
+                                transition-all duration-150
+                                ${hasChildren
+                                    ? 'text-slate-400 hover:text-white hover:bg-slate-700'
+                                    : 'text-slate-700/50'
+                                }
+                            `}
+                        >
+                            <ChevronRight
+                                size={14}
+                                className={`transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}
+                            />
+                        </button>
 
-                    {/* Expand/Collapse Arrow */}
-                    <button
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onToggleExpand();
-                        }}
-                        className={`shrink-0 mr-1 transition-colors ${hasChildren ? 'text-slate-500 hover:text-white' : 'text-transparent'}`}
-                        disabled={!hasChildren}
-                    >
-                        <ChevronRight
-                            size={14}
-                            className={`transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}
-                        />
-                    </button>
+                        {/* Add subcategory - appears on hover next to chevron */}
+                        <AnimatePresence>
+                            {isHovered && (
+                                <motion.button
+                                    initial={{ opacity: 0, scale: 0.8, width: 0 }}
+                                    animate={{ opacity: 1, scale: 1, width: 20 }}
+                                    exit={{ opacity: 0, scale: 0.8, width: 0 }}
+                                    transition={{ duration: 0.1 }}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onAddSub();
+                                    }}
+                                    className="w-5 h-5 flex items-center justify-center rounded bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 transition-colors overflow-hidden"
+                                    title="Add subcategory"
+                                >
+                                    <Plus size={12} strokeWidth={2.5} />
+                                </motion.button>
+                            )}
+                        </AnimatePresence>
+                    </div>
 
-                    {/* Drag Handle */}
+                    {/* Drag handle - subtle, appears on hover */}
                     <div
                         {...attributes}
                         {...listeners}
-                        className="shrink-0 cursor-grab active:cursor-grabbing text-slate-600 hover:text-slate-400 mr-2"
+                        className={`
+                            shrink-0 cursor-grab active:cursor-grabbing
+                            transition-opacity duration-150
+                            ${isHovered ? 'opacity-60 text-slate-500' : 'opacity-0'}
+                        `}
                     >
-                        <GripVertical size={14} />
+                        <GripVertical size={12} />
                     </div>
 
-                    {/* Checkbox */}
-                    <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={(e) => {
-                            e.stopPropagation();
-                            onCheck(e.target.checked);
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        className="appearance-none w-4 h-4 border border-slate-600 bg-slate-800 checked:bg-cyan-500 checked:border-cyan-500 cursor-pointer mr-3 shrink-0"
-                    />
+                    {/* Category type indicator */}
+                    <div className={`
+                        w-1.5 h-1.5 rounded-full shrink-0
+                        ${depth === 0
+                            ? 'bg-gradient-to-br from-cyan-400 to-blue-500'
+                            : 'bg-slate-600'
+                        }
+                    `} />
 
                     {/* Category Name */}
-                    <div className="flex-1 min-w-0 flex items-center gap-2" onClick={onSelect}>
-                        <h3 className={`truncate font-medium text-sm ${isSelected ? 'text-white' : 'text-slate-400 hover:text-slate-200'}`}>
+                    <div className="flex-1 min-w-0 flex items-center gap-2">
+                        <span className={`
+                            truncate text-sm
+                            ${isSelected
+                                ? 'text-white font-medium'
+                                : depth === 0
+                                    ? 'text-slate-200 font-medium'
+                                    : 'text-slate-400'
+                            }
+                        `}>
                             {category.name}
-                        </h3>
-                        {/* Research complete indicator */}
-                        {category.googleDeepResearch?.status === 'complete' && (
-                            <span className="flex items-center gap-0.5 text-[10px] text-emerald-400" title="Deep research complete">
-                                <Target size={10} />
-                            </span>
+                        </span>
+
+                        {/* Status indicators - inline with name */}
+                        {isGenerating && (
+                            <Loader2 size={12} className="animate-spin text-cyan-400 shrink-0" />
+                        )}
+                        {category.googleDeepResearch?.status === 'running' && !isGenerating && (
+                            <Loader2 size={12} className="animate-spin text-emerald-400 shrink-0" />
+                        )}
+                        {category.googleDeepResearch?.status === 'complete' &&
+                            category.googleDeepResearch?.status !== 'running' && (
+                            <Target size={10} className="text-emerald-400/70 shrink-0" />
                         )}
                     </div>
 
-                    {/* Progress Indicator - Circular loader */}
-                    {isGenerating && (
-                        <div className="mr-3">
-                            <Loader2 size={16} className="animate-spin text-cyan-400" />
-                        </div>
-                    )}
-                    {category.googleDeepResearch?.status === 'running' && !isGenerating && (
-                        <div className="mr-3">
-                            <Loader2 size={16} className="animate-spin text-emerald-400" />
-                        </div>
-                    )}
-
-                    {/* Action Buttons - Always Visible */}
-                    <div className="flex items-center gap-1 shrink-0">
-                        <button
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                onAddSub();
-                            }}
-                            className="w-7 h-7 flex items-center justify-center border border-slate-700 text-slate-500 hover:text-white hover:bg-slate-800 hover:border-slate-500 transition-colors"
-                            title="Add sub-area"
-                        >
-                            <Plus size={14} />
-                        </button>
-                        {/* Article Count - Clickable to open category */}
-                        <button
+                    {/* Right zone: Progress ring + Settings */}
+                    <div className="flex items-center gap-2 shrink-0">
+                        {/* Circular progress indicator */}
+                        <div
+                            className="flex items-center gap-1.5 cursor-pointer"
                             onClick={(e) => {
                                 e.stopPropagation();
                                 onSelect();
-                                // Also expand if has children
-                                if (hasChildren && !isExpanded) {
-                                    onToggleExpand();
-                                }
+                                if (hasChildren && !isExpanded) onToggleExpand();
                             }}
-                            className={`w-7 h-7 flex items-center justify-center border text-[10px] font-bold transition-colors ${
-                                articleCount > 0
-                                    ? (isSelected
-                                        ? 'bg-cyan-500 border-cyan-500 text-black'
-                                        : 'border-slate-700 bg-slate-800 text-slate-400 hover:border-cyan-500 hover:text-cyan-400')
-                                    : 'border-slate-800 bg-slate-900 text-slate-600'
-                            }`}
-                            title={`${articleCount} articles - Click to view`}
+                            title={`${articleCount}/${targetArticles} articles`}
                         >
-                            {articleCount}
-                        </button>
+                            <div className="relative w-5 h-5">
+                                <svg className="w-5 h-5 -rotate-90" viewBox="0 0 20 20">
+                                    <circle
+                                        cx="10" cy="10" r="7"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        className="text-slate-700"
+                                    />
+                                    <circle
+                                        cx="10" cy="10" r="7"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeDasharray={`${progressPercent * 0.44} 44`}
+                                        strokeLinecap="round"
+                                        className={isComplete ? 'text-emerald-400' : 'text-cyan-400'}
+                                    />
+                                </svg>
+                            </div>
+                            <span className={`text-xs tabular-nums ${isComplete ? 'text-emerald-400' : 'text-slate-500'}`}>
+                                {articleCount}
+                            </span>
+                        </div>
+
+                        {/* Settings - appears on hover */}
+                        <AnimatePresence>
+                            {isHovered && (
+                                <motion.button
+                                    initial={{ opacity: 0, width: 0 }}
+                                    animate={{ opacity: 1, width: 24 }}
+                                    exit={{ opacity: 0, width: 0 }}
+                                    transition={{ duration: 0.1 }}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onOpenSettings();
+                                    }}
+                                    className="w-6 h-6 flex items-center justify-center rounded text-slate-500 hover:text-white hover:bg-slate-700 transition-colors overflow-hidden"
+                                    title="Settings"
+                                >
+                                    <Settings size={13} />
+                                </motion.button>
+                            )}
+                        </AnimatePresence>
                     </div>
                 </div>
             </motion.div>
@@ -524,13 +592,15 @@ const CategoryTree: React.FC<{
     posts: Post[];
     selectedId: string | null;
     checkedIds: Set<string>;
+    defaultTargetArticles: number;
     onSelect: (id: string) => void;
     onCheck: (id: string, checked: boolean) => void;
     onCheckAll: (checked: boolean) => void;
     onAddSub: (id: string) => void;
     onGenerate: (cat: Category) => void;
+    onOpenSettings: (cat: Category) => void;
     onReorder: (activeId: string, overId: string, newParentId: string | null, reorderedSiblings: { id: string; order: number }[]) => void;
-}> = ({ categories, tasks, posts, selectedId, checkedIds, onSelect, onCheck, onCheckAll, onAddSub, onGenerate, onReorder }) => {
+}> = ({ categories, tasks, posts, selectedId, checkedIds, defaultTargetArticles, onSelect, onCheck, onCheckAll, onAddSub, onGenerate, onOpenSettings, onReorder }) => {
     const roots = categories.filter(c => c.parentId === null).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set(roots.map(r => r.id)));
     const [activeId, setActiveId] = useState<string | null>(null);
@@ -694,6 +764,7 @@ const CategoryTree: React.FC<{
                                 isExpanded={isExpanded}
                                 hasChildren={hasChildren}
                                 articleCount={getArticleCountWithChildren.get(cat.id) || 0}
+                                targetArticles={cat.contentSettings?.targetArticles ?? defaultTargetArticles}
                                 isGenerating={!!activeTask}
                                 progress={activeTask?.progress || 0}
                                 onSelect={() => onSelect(cat.id)}
@@ -701,6 +772,7 @@ const CategoryTree: React.FC<{
                                 onToggleExpand={() => toggleExpanded(cat.id)}
                                 onGenerate={() => onGenerate(cat)}
                                 onAddSub={() => onAddSub(cat.id)}
+                                onOpenSettings={() => onOpenSettings(cat)}
                             />
                         );
                     })}
@@ -2049,6 +2121,14 @@ export const CategoryWorkspace: React.FC<Props> = ({
     // Research report modal
     const [showResearchModal, setShowResearchModal] = useState(false);
 
+    // Category settings modal
+    const [showSettingsModal, setShowSettingsModal] = useState(false);
+    const [settingsCategory, setSettingsCategory] = useState<Category | null>(null);
+
+    // Add subcategory modal
+    const [showAddSubModal, setShowAddSubModal] = useState(false);
+    const [addSubParentCategory, setAddSubParentCategory] = useState<Category | null>(null);
+
     // Keyword research state
     const [categoryKeywords, setCategoryKeywords] = useState<KeywordData[]>([]);
     const [keywordsLoading, setKeywordsLoading] = useState(false);
@@ -2248,6 +2328,61 @@ export const CategoryWorkspace: React.FC<Props> = ({
         setShowBulkGenerateModal(false);
     };
 
+    // Handle opening category settings modal
+    const handleOpenSettings = (category: Category) => {
+        setSettingsCategory(category);
+        setShowSettingsModal(true);
+    };
+
+    // Handle saving category content settings
+    const handleSaveContentSettings = (categoryId: string, settings: Category['contentSettings']) => {
+        onUpdateCategory(categoryId, { contentSettings: settings });
+    };
+
+    // Handle opening add subcategory modal
+    const handleOpenAddSubcategory = (category: Category) => {
+        setAddSubParentCategory(category);
+        setShowAddSubModal(true);
+    };
+
+    // Handle adding a single subcategory
+    const handleAddSubcategory = (name: string, description: string, targetArticles?: number) => {
+        if (addSubParentCategory) {
+            onAddCategory(name, addSubParentCategory.id, description);
+            // If targetArticles is specified and different from default, update after creation
+            // Note: This would need to be handled in the onAddCategory callback or via a follow-up update
+        }
+    };
+
+    // Handle adding multiple subcategories
+    const handleAddMultipleSubcategories = (subcategories: Array<{ name: string; description: string; targetArticles?: number }>) => {
+        if (addSubParentCategory) {
+            subcategories.forEach(sub => {
+                onAddCategory(sub.name, addSubParentCategory.id, sub.description);
+            });
+        }
+    };
+
+    // Calculate target articles for a category (with rollup)
+    const getCategoryTarget = (category: Category): number => {
+        const projectDefault = project?.settings?.autoGeneration?.stubThreshold ?? 5;
+        return category.contentSettings?.targetArticles ?? projectDefault;
+    };
+
+    // Calculate current article count (with optional rollup from subcategories)
+    const getCategoryArticleCount = (categoryId: string, includeSubcategories: boolean = true): number => {
+        let count = posts.filter(p => p.categoryId === categoryId && p.status === PostStatus.PENDING).length;
+
+        if (includeSubcategories) {
+            const subcategories = categories.filter(c => c.parentId === categoryId);
+            subcategories.forEach(sub => {
+                count += getCategoryArticleCount(sub.id, true);
+            });
+        }
+
+        return count;
+    };
+
     // Handle category reorder
     const handleCategoryReorder = (
         activeId: string,
@@ -2311,7 +2446,7 @@ export const CategoryWorkspace: React.FC<Props> = ({
                     {/* Header */}
                     <div className="p-6 border-b border-slate-800 sticky top-0 z-20 bg-[#020617]">
                         <div className="flex items-center justify-between mb-2">
-                            <h1 className="text-2xl font-bold text-white tracking-tight">Content Areas</h1>
+                            <h1 className="text-2xl font-bold text-white tracking-tight">Content Engine</h1>
                             <button
                                 onClick={() => { setCreatorParentId(null); setIsCreatorOpen(true); }}
                                 className="px-3 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold uppercase tracking-wider flex items-center gap-2 transition-colors group relative"
@@ -2360,11 +2495,18 @@ export const CategoryWorkspace: React.FC<Props> = ({
                             posts={posts}
                             selectedId={selectedCategoryId}
                             checkedIds={checkedCategoryIds}
+                            defaultTargetArticles={project?.settings?.autoGeneration?.stubThreshold ?? 5}
                             onSelect={setSelectedCategoryId}
                             onCheck={handleCategoryCheck}
                             onCheckAll={handleCategoryCheckAll}
-                            onAddSub={(parentId) => { setCreatorParentId(parentId); setIsCreatorOpen(true); }}
+                            onAddSub={(parentId) => {
+                                const parentCat = categories.find(c => c.id === parentId);
+                                if (parentCat) {
+                                    handleOpenAddSubcategory(parentCat);
+                                }
+                            }}
                             onGenerate={(cat) => { setGenCategory(cat); setIsGenModalOpen(true); }}
+                            onOpenSettings={handleOpenSettings}
                             onReorder={handleCategoryReorder}
                         />
                     </div>
@@ -2828,6 +2970,36 @@ Respond with ONLY the description, nothing else.`;
                             // Note: The keywords could be passed to the generation prompt via contextOverride
                         }}
                         isRefreshing={keywordsRefreshing}
+                    />
+                )}
+
+                {/* Category Settings Modal */}
+                {showSettingsModal && settingsCategory && project && (
+                    <CategorySettingsModal
+                        category={settingsCategory}
+                        project={project}
+                        onSave={handleSaveContentSettings}
+                        onClose={() => {
+                            setShowSettingsModal(false);
+                            setSettingsCategory(null);
+                        }}
+                        onQueueResearch={onQueueGoogleDeepResearch}
+                    />
+                )}
+
+                {/* Add Subcategory Modal */}
+                {showAddSubModal && addSubParentCategory && project && organizationId && (
+                    <AddSubcategoryModal
+                        parentCategory={addSubParentCategory}
+                        existingCategories={categories}
+                        project={project}
+                        organizationId={organizationId}
+                        onAddSubcategory={handleAddSubcategory}
+                        onAddMultipleSubcategories={handleAddMultipleSubcategories}
+                        onClose={() => {
+                            setShowAddSubModal(false);
+                            setAddSubParentCategory(null);
+                        }}
                     />
                 )}
             </AnimatePresence>

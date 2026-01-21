@@ -8,10 +8,12 @@ import {
     Loader2,
     Info,
     Globe,
-    Building2
+    Building2,
+    Sparkles
 } from 'lucide-react';
 import { Project, BusinessProfile } from '../types';
 import { analyzeWebsite } from '../services/websiteAnalysisService';
+import { generateAdditionalContext } from '../services/geminiService';
 import { doc, updateDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
@@ -29,26 +31,77 @@ export const ResearchRefreshModal: React.FC<Props> = ({
     onRefreshComplete
 }) => {
     const [additionalText, setAdditionalText] = useState(project.businessProfile?.additionalResearchText || '');
+    const [websiteUrl, setWebsiteUrl] = useState(project.businessProfile?.websiteUrl || project.websiteUrl || '');
     const [isRefreshing, setIsRefreshing] = useState(false);
+    const [isGeneratingContext, setIsGeneratingContext] = useState(false);
     const [progress, setProgress] = useState({ stage: '', percent: 0 });
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState(false);
 
+    // Fix #9: Extract stable primitive values to prevent infinite loops from object reference changes
+    const profileAdditionalText = project.businessProfile?.additionalResearchText || '';
+    const profileWebsiteUrl = project.businessProfile?.websiteUrl || project.websiteUrl || '';
+
     // Reset state when modal opens
     useEffect(() => {
         if (isOpen) {
-            setAdditionalText(project.businessProfile?.additionalResearchText || '');
+            setAdditionalText(profileAdditionalText);
+            setWebsiteUrl(profileWebsiteUrl);
             setError(null);
             setSuccess(false);
             setProgress({ stage: '', percent: 0 });
         }
-    }, [isOpen, project.businessProfile?.additionalResearchText]);
+        // Only depend on isOpen to reset when modal opens, not on the values themselves
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isOpen]);
 
-    const handleRefresh = async () => {
-        if (!project.businessProfile?.websiteUrl) {
-            setError('No website URL found for this project');
+    const handleGenerateContext = async () => {
+        const urlToUse = websiteUrl.trim();
+        if (!urlToUse) {
+            setError('Please enter a website URL first');
             return;
         }
+
+        // Basic URL validation
+        try {
+            new URL(urlToUse.startsWith('http') ? urlToUse : `https://${urlToUse}`);
+        } catch {
+            setError('Please enter a valid website URL');
+            return;
+        }
+
+        const normalizedUrl = urlToUse.startsWith('http') ? urlToUse : `https://${urlToUse}`;
+
+        setIsGeneratingContext(true);
+        setError(null);
+
+        try {
+            const generatedContext = await generateAdditionalContext(normalizedUrl);
+            setAdditionalText(generatedContext);
+        } catch (err: any) {
+            console.error('[ResearchRefresh] Error generating context:', err);
+            setError(err.message || 'Failed to generate context. Please try again.');
+        } finally {
+            setIsGeneratingContext(false);
+        }
+    };
+
+    const handleRefresh = async () => {
+        const urlToUse = websiteUrl.trim();
+        if (!urlToUse) {
+            setError('Please enter a website URL');
+            return;
+        }
+
+        // Basic URL validation
+        try {
+            new URL(urlToUse.startsWith('http') ? urlToUse : `https://${urlToUse}`);
+        } catch {
+            setError('Please enter a valid website URL');
+            return;
+        }
+
+        const normalizedUrl = urlToUse.startsWith('http') ? urlToUse : `https://${urlToUse}`;
 
         setIsRefreshing(true);
         setError(null);
@@ -57,7 +110,7 @@ export const ResearchRefreshModal: React.FC<Props> = ({
         try {
             // Run the analysis with additional text
             const newProfile = await analyzeWebsite(
-                project.businessProfile.websiteUrl,
+                normalizedUrl,
                 (stage, percent) => setProgress({ stage, percent }),
                 additionalText.trim() || undefined
             );
@@ -65,7 +118,8 @@ export const ResearchRefreshModal: React.FC<Props> = ({
             // Preserve existing ID and merge with new profile
             const updatedProfile: BusinessProfile = {
                 ...newProfile,
-                id: project.businessProfile.id,
+                id: project.businessProfile?.id || `profile_${Date.now()}`,
+                websiteUrl: normalizedUrl,
                 additionalResearchText: additionalText.trim() || undefined,
                 lastRefreshedAt: Timestamp.now(),
             };
@@ -95,7 +149,6 @@ export const ResearchRefreshModal: React.FC<Props> = ({
 
     if (!isOpen) return null;
 
-    const websiteUrl = project.businessProfile?.websiteUrl || 'No URL set';
     const lastAnalyzed = project.businessProfile?.lastRefreshedAt?.toDate?.() ||
         project.businessProfile?.analyzedAt?.toDate?.();
 
@@ -124,16 +177,28 @@ export const ResearchRefreshModal: React.FC<Props> = ({
 
                 {/* Content */}
                 <div className="p-6 space-y-6">
-                    {/* Current Website Info */}
+                    {/* Website URL Input */}
                     <div className="bg-slate-950 border border-slate-800 p-4">
                         <div className="flex items-center gap-3 mb-3">
-                            <Globe size={18} className="text-slate-400" />
-                            <span className="text-sm font-medium text-slate-300">Current Website</span>
+                            <Globe size={18} className="text-cyan-400" />
+                            <span className="text-sm font-medium text-slate-300">Website URL</span>
                         </div>
-                        <p className="text-cyan-400 font-mono text-sm truncate">{websiteUrl}</p>
+                        <input
+                            type="url"
+                            value={websiteUrl}
+                            onChange={(e) => setWebsiteUrl(e.target.value)}
+                            disabled={isRefreshing}
+                            placeholder="https://example.com"
+                            className="w-full bg-slate-900 border border-slate-700 py-2.5 px-4 text-cyan-400 font-mono text-sm focus:border-cyan-500 outline-none transition-colors disabled:opacity-50"
+                        />
                         {lastAnalyzed && (
                             <p className="text-xs text-slate-500 mt-2">
                                 Last analyzed: {lastAnalyzed.toLocaleDateString()} at {lastAnalyzed.toLocaleTimeString()}
+                            </p>
+                        )}
+                        {!websiteUrl && (
+                            <p className="text-xs text-amber-400 mt-2">
+                                Enter your website URL to run research
                             </p>
                         )}
                     </div>
@@ -155,23 +220,43 @@ export const ResearchRefreshModal: React.FC<Props> = ({
 
                     {/* Additional Research Text */}
                     <div className="space-y-3">
-                        <div className="flex items-start gap-2">
-                            <FileText size={18} className="text-amber-400 mt-0.5" />
-                            <div>
-                                <label className="block text-sm font-medium text-slate-200">
-                                    Additional Research Context
-                                </label>
-                                <p className="text-xs text-slate-500 mt-1">
-                                    Add extra information about your business that may not be on your website.
-                                    This helps generate more accurate and relevant content categories.
-                                </p>
+                        <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-start gap-2">
+                                <FileText size={18} className="text-amber-400 mt-0.5" />
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-200">
+                                        Additional Research Context
+                                    </label>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Add extra information about your business that may not be on your website.
+                                        This helps generate more accurate and relevant content categories.
+                                    </p>
+                                </div>
                             </div>
+                            <button
+                                onClick={handleGenerateContext}
+                                disabled={isGeneratingContext || isRefreshing || !websiteUrl.trim()}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 hover:border-amber-500/50 text-amber-400 text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                                title="Generate context from website"
+                            >
+                                {isGeneratingContext ? (
+                                    <>
+                                        <Loader2 size={14} className="animate-spin" />
+                                        Generating...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Sparkles size={14} />
+                                        Generate
+                                    </>
+                                )}
+                            </button>
                         </div>
 
                         <textarea
                             value={additionalText}
                             onChange={(e) => setAdditionalText(e.target.value)}
-                            disabled={isRefreshing}
+                            disabled={isRefreshing || isGeneratingContext}
                             rows={8}
                             placeholder="Examples of helpful information:
 
