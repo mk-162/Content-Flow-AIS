@@ -1453,7 +1453,7 @@ export const MainWorkspace: React.FC = () => {
           )}
 
           {currentScreen === Screen.CATEGORIES && (
-            <div className="flex-1 w-full h-full overflow-hidden bg-[#0a0a0f]">
+            <div className="flex-1 w-full h-full overflow-hidden bg-[#0a0a0f] flex flex-col">
               <CategoriesTab
                 categories={categories}
                 posts={posts}
@@ -1475,7 +1475,7 @@ export const MainWorkspace: React.FC = () => {
           )}
 
           {currentScreen === Screen.BRIEFS && (
-            <div className="flex-1 w-full h-full overflow-hidden bg-[#0a0a0f]">
+            <div className="flex-1 w-full h-full overflow-hidden bg-[#0a0a0f] flex flex-col">
               <BriefsTab
                 posts={posts}
                 categories={categories}
@@ -1533,7 +1533,7 @@ export const MainWorkspace: React.FC = () => {
           )}
 
           {currentScreen === Screen.SETTINGS && currentProject && (
-            <div className="flex-1 w-full h-full overflow-hidden">
+            <div className="flex-1 w-full h-full overflow-hidden flex flex-col">
               <ProjectSettings
                 project={currentProject}
                 onUpdate={() => {
