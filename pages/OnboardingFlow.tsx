@@ -374,17 +374,43 @@ const OnboardingContent: React.FC = () => {
       }
 
       console.log('[Onboarding] Initializing with profile for existing user...');
-      // Clear any existing session first, then initialize with existing profile
-      clearSession();
-      // Small delay to ensure session is cleared before reinitializing
-      setTimeout(() => {
-        initializeWithExistingProfile(
-          existingProfile!,
-          currentOrg.id,
-          currentOrg.channelRecommendations || []
-        );
+
+      // Check if returning from login with returnTo=onboarding - preserve session if valid
+      const returnedFromLogin = searchParams.get('returnTo') === 'onboarding';
+      const hasExistingSession = session && session.businessProfile && session.selectedChannel;
+
+      if (returnedFromLogin && hasExistingSession) {
+        // User logged in from onboarding - preserve their session data but update mode
+        console.log('[Onboarding] Preserving session after login, updating mode to existing');
+
+        // Update session mode to 'existing' and set organizationId
+        // This ensures the correct completion handler runs when user finishes onboarding
+        const updatedSession = {
+          ...session,
+          mode: 'existing' as const,
+          organizationId: currentOrg.id,
+        };
+
+        // Save updated session to localStorage
+        try {
+          localStorage.setItem('missioncontent_onboarding_session', JSON.stringify(updatedSession));
+        } catch (error) {
+          console.error('[Onboarding] Failed to update session mode:', error);
+        }
+
         setExistingUserInitialized(true);
-      }, 100);
+      } else {
+        // Fresh existing user flow - clear and initialize
+        clearSession();
+        setTimeout(() => {
+          initializeWithExistingProfile(
+            existingProfile!,
+            currentOrg.id,
+            currentOrg.channelRecommendations || []
+          );
+          setExistingUserInitialized(true);
+        }, 100);
+      }
     }
   }, [isExistingUserMode, isLoadingExistingData, user, currentOrg, projects, existingUserInitialized, initializeWithExistingProfile, clearSession, navigate]);
 

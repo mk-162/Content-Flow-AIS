@@ -20,6 +20,7 @@ import { ProgressHeader, ContentFeed, ContentFeedHandle, StatusFilter, SortOptio
 import { useAuth } from '../contexts/AuthContext';
 import { useOrganization } from '../contexts/OrganizationContext';
 import { useProject } from '../contexts/ProjectContext';
+import { useWorkspaceValidation } from '../hooks/useWorkspaceValidation';
 import {
   Screen,
   Category,
@@ -67,6 +68,7 @@ export const MainWorkspace: React.FC = () => {
   const { user } = useAuth();
   const { currentOrg } = useOrganization();
   const { currentProject } = useProject();
+  const { ensureValid: ensureValidWorkspace } = useWorkspaceValidation();
 
   const [currentScreen, setCurrentScreen] = useState<Screen>(
     (location.state as any)?.initialScreen || Screen.CATEGORIES
@@ -125,11 +127,34 @@ export const MainWorkspace: React.FC = () => {
     }
   }, [autoGen.showMigrationPrompt, loading, categories.length]);
 
-  // Redirect to projects if no project selected
+  // Redirect to projects if no project selected, or if stale localStorage
   useEffect(() => {
     if (!currentOrg || !currentProject) {
+      // Clear stale localStorage to prevent phantom org/project references
+      console.log('[MainWorkspace] No org or project - clearing localStorage');
+      localStorage.removeItem('currentOrganizationId');
+      // Try to clear project ID for any org (we may not know which one)
+      Object.keys(localStorage).forEach(key => {
+        if (key.startsWith('currentProjectId_')) {
+          localStorage.removeItem(key);
+        }
+      });
       navigate('/projects');
     } else {
+      // Validate that currentOrg and currentProject IDs match what's in localStorage
+      const storedOrgId = localStorage.getItem('currentOrganizationId');
+      const storedProjectId = localStorage.getItem(`currentProjectId_${currentOrg.id}`);
+
+      if (storedOrgId !== currentOrg.id || storedProjectId !== currentProject.id) {
+        console.warn('[MainWorkspace] Detected stale localStorage, correcting...', {
+          storedOrgId,
+          actualOrgId: currentOrg.id,
+          storedProjectId,
+          actualProjectId: currentProject.id
+        });
+        localStorage.setItem('currentOrganizationId', currentOrg.id);
+        localStorage.setItem(`currentProjectId_${currentOrg.id}`, currentProject.id);
+      }
       setLoading(false);
     }
   }, [currentOrg, currentProject, navigate]);
@@ -501,18 +526,22 @@ export const MainWorkspace: React.FC = () => {
     setIsAddingCategory(true);
 
     try {
+      // Validate workspace context before writing to Firebase
+      const workspace = ensureValidWorkspace();
+      console.log('[MainWorkspace] Adding category with validated workspace:', workspace.currentWorkspace);
+
       const batch = writeBatch(db);
       const now = Timestamp.now();
 
       // 1. Create category document
       const categoryRef = doc(collection(
         db,
-        `organizations/${currentOrg.id}/projects/${currentProject.id}/categories`
+        `organizations/${workspace.currentWorkspace.orgId}/projects/${workspace.currentWorkspace.projectId}/categories`
       ));
 
       batch.set(categoryRef, {
-        projectId: currentProject.id,
-        organizationId: currentOrg.id,
+        projectId: workspace.currentWorkspace.projectId,
+        organizationId: workspace.currentWorkspace.orgId,
         name: name.trim(),
         description: description?.trim() || '',
         parentId,
@@ -526,7 +555,7 @@ export const MainWorkspace: React.FC = () => {
 
       const categoryPageRef = doc(collection(
         db,
-        `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`
+        `organizations/${workspace.currentWorkspace.orgId}/projects/${workspace.currentWorkspace.projectId}/posts`
       ));
 
       batch.set(categoryPageRef, {
@@ -697,10 +726,14 @@ export const MainWorkspace: React.FC = () => {
     if (!cat) return;
 
     try {
+      // Validate workspace context before writing to Firebase
+      const workspace = ensureValidWorkspace();
+      console.log('[MainWorkspace] Queueing titles with validated workspace:', workspace.currentWorkspace);
+
       await addDoc(collection(db, 'generationQueue'), {
         type: TaskType.GENERATE_TITLES,
-        organizationId: currentOrg.id,
-        projectId: currentProject.id,
+        organizationId: workspace.currentWorkspace.orgId,
+        projectId: workspace.currentWorkspace.projectId,
         categoryId,
         categoryName: cat.name, // Transient hint for AI context only
         status: TaskStatus.QUEUED,
@@ -741,10 +774,14 @@ export const MainWorkspace: React.FC = () => {
     const cat = categories.find((c) => c.id === post.categoryId);
 
     try {
+      // Validate workspace context before writing to Firebase
+      const workspace = ensureValidWorkspace();
+      console.log('[MainWorkspace] Queueing content generation with validated workspace:', workspace.currentWorkspace);
+
       await addDoc(collection(db, 'generationQueue'), {
         type: TaskType.GENERATE_CONTENT,
-        organizationId: currentOrg.id,
-        projectId: currentProject.id,
+        organizationId: workspace.currentWorkspace.orgId,
+        projectId: workspace.currentWorkspace.projectId,
         categoryId: post.categoryId,
         categoryName: cat?.name || 'Unknown',
         targetPostId: post.id,
@@ -756,7 +793,7 @@ export const MainWorkspace: React.FC = () => {
 
       const postRef = doc(
         db,
-        `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`,
+        `organizations/${workspace.currentWorkspace.orgId}/projects/${workspace.currentWorkspace.projectId}/posts`,
         post.id
       );
       await updateDoc(postRef, {
@@ -806,10 +843,14 @@ export const MainWorkspace: React.FC = () => {
     const cat = categories.find((c) => c.id === post.categoryId);
 
     try {
+      // Validate workspace context before writing to Firebase
+      const workspace = ensureValidWorkspace();
+      console.log('[MainWorkspace] Queueing category page regeneration with validated workspace:', workspace.currentWorkspace);
+
       await addDoc(collection(db, 'generationQueue'), {
         type: TaskType.GENERATE_CATEGORY_PAGE,
-        organizationId: currentOrg.id,
-        projectId: currentProject.id,
+        organizationId: workspace.currentWorkspace.orgId,
+        projectId: workspace.currentWorkspace.projectId,
         categoryId: post.categoryId,
         categoryName: cat?.name || 'Unknown',
         targetPostId: post.id,
@@ -821,7 +862,7 @@ export const MainWorkspace: React.FC = () => {
 
       const postRef = doc(
         db,
-        `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`,
+        `organizations/${workspace.currentWorkspace.orgId}/projects/${workspace.currentWorkspace.projectId}/posts`,
         post.id
       );
       await updateDoc(postRef, {
@@ -851,10 +892,14 @@ export const MainWorkspace: React.FC = () => {
     const cat = categories.find((c) => c.id === categoryId);
 
     try {
+      // Validate workspace context before writing to Firebase
+      const workspace = ensureValidWorkspace();
+      console.log('[MainWorkspace] Queueing Google Deep Research with validated workspace:', workspace.currentWorkspace);
+
       // Update category status to show research is running
       const catRef = doc(
         db,
-        `organizations/${currentOrg.id}/projects/${currentProject.id}/categories`,
+        `organizations/${workspace.currentWorkspace.orgId}/projects/${workspace.currentWorkspace.projectId}/categories`,
         categoryId
       );
       await updateDoc(catRef, {
@@ -866,8 +911,8 @@ export const MainWorkspace: React.FC = () => {
       // Queue the research task
       await addDoc(collection(db, 'generationQueue'), {
         type: TaskType.GOOGLE_DEEP_RESEARCH,
-        organizationId: currentOrg.id,
-        projectId: currentProject.id,
+        organizationId: workspace.currentWorkspace.orgId,
+        projectId: workspace.currentWorkspace.projectId,
         categoryId: categoryId,
         categoryName: cat?.name || 'Unknown',
         status: TaskStatus.QUEUED,
@@ -888,9 +933,13 @@ export const MainWorkspace: React.FC = () => {
     if (!currentOrg || !currentProject || !user) return;
 
     try {
+      // Validate workspace context before writing to Firebase
+      const workspace = ensureValidWorkspace();
+      console.log('[MainWorkspace] Creating category page with validated workspace:', workspace.currentWorkspace);
+
       const postsRef = collection(
         db,
-        `organizations/${currentOrg.id}/projects/${currentProject.id}/posts`
+        `organizations/${workspace.currentWorkspace.orgId}/projects/${workspace.currentWorkspace.projectId}/posts`
       );
 
       // Check credits before creating category page
@@ -898,8 +947,8 @@ export const MainWorkspace: React.FC = () => {
       const hasCreditsForCategoryPage = creditBalance >= 1;
 
       const categoryPageRef = await addDoc(postsRef, {
-        projectId: currentProject.id,
-        organizationId: currentOrg.id,
+        projectId: workspace.currentWorkspace.projectId,
+        organizationId: workspace.currentWorkspace.orgId,
         categoryId: categoryId,
         title: categoryName,
         contentType: ContentType.CATEGORY_PAGE,
@@ -918,8 +967,8 @@ export const MainWorkspace: React.FC = () => {
       if (hasCreditsForCategoryPage) {
         await addDoc(collection(db, 'generationQueue'), {
           type: TaskType.GENERATE_CATEGORY_PAGE,
-          organizationId: currentOrg.id,
-          projectId: currentProject.id,
+          organizationId: workspace.currentWorkspace.orgId,
+          projectId: workspace.currentWorkspace.projectId,
           categoryId: categoryId,
           categoryName: categoryName, // Transient hint for AI context
           targetPostId: categoryPageRef.id,

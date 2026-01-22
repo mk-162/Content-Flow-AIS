@@ -100,10 +100,10 @@ export const LoginPage: React.FC = () => {
 
   // Handle post-login navigation
   const handlePostLoginNavigation = () => {
-    // If came from onboarding and has valid session, resume onboarding
+    // If came from onboarding and has valid session, resume onboarding with returnTo marker
     if (returnTo === 'onboarding' && hasValidOnboardingSession()) {
       console.log('[LoginPage] Resuming onboarding session after login');
-      navigate('/onboarding');
+      navigate('/onboarding?returnTo=onboarding'); // Add returnTo param so OnboardingFlow knows to preserve session
     } else {
       navigate('/');
     }

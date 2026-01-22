@@ -7,6 +7,7 @@ import { useImpersonation } from '../../contexts/ImpersonationContext';
 import { UserMenu } from './UserMenu';
 import { AdminPanel } from './AdminPanel';
 import { CreditsButton } from './CreditsButton';
+import { WorkspaceIndicator } from '../ui/WorkspaceIndicator';
 import { GlobalRole } from '../../types';
 // Logo is served from public folder
 const MissionLogo = '/MissionLogo.svg';
@@ -111,6 +112,11 @@ export const TopBar: React.FC<TopBarProps> = ({
               )}
             </div>
           )}
+        </div>
+
+        {/* Center: Workspace Indicator */}
+        <div className="flex-1 flex items-center justify-center px-4">
+          <WorkspaceIndicator />
         </div>
 
         {/* Right: Credits/Admin + User Menu */}

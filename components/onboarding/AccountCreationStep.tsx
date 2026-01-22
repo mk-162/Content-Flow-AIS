@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Check, ChevronRight, Eye, EyeOff, Sparkles } from 'lucide-react';
-import { doc, setDoc, Timestamp, writeBatch } from 'firebase/firestore';
+import { doc, setDoc, Timestamp, writeBatch, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { useOnboarding } from '../../contexts/OnboardingContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -227,9 +227,25 @@ export const AccountCreationStep: React.FC = () => {
         throw new Error('Google sign-in failed');
       }
 
-      await createAccountData(user.id, user.displayName || user.email.split('@')[0]);
+      // Check if this is a NEW user (first-time OAuth) or RETURNING user
+      const membershipsQuery = query(
+        collection(db, 'organizationMembers'),
+        where('userId', '==', user.id)
+      );
+      const membershipsSnapshot = await getDocs(membershipsQuery);
+      const hasOrganization = !membershipsSnapshot.empty;
+
+      if (hasOrganization) {
+        // Returning user - redirect to onboarding with existing mode
+        console.log('[AccountCreation] Returning OAuth user - redirecting to onboarding with org');
+        navigate('/onboarding?returnTo=onboarding&mode=existing');
+      } else {
+        // First-time user - create org and project
+        console.log('[AccountCreation] First-time OAuth user - creating account data');
+        await createAccountData(user.id, user.displayName || user.email.split('@')[0]);
+      }
     } catch (err: any) {
-      console.error('Google sign-up failed:', err);
+      console.error('[AccountCreationStep] Google sign-up failed:', err);
       setError(err.message || 'Failed to sign in with Google. Please try again.');
       setLoading(false);
     }
@@ -267,7 +283,7 @@ export const AccountCreationStep: React.FC = () => {
       await createAccountData(newUser.id, displayName);
 
     } catch (err: any) {
-      console.error('Account creation failed:', err);
+      console.error('[AccountCreationStep] Account creation failed:', err);
 
       // Handle specific Firebase errors
       if (err.code === 'auth/email-already-in-use') {
